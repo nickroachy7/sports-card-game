@@ -15,7 +15,16 @@
     "format": "biome format --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,json,jsonc,css}": [
+      "biome check --write --no-errors-on-unmatched"
+    ]
   },
   "dependencies": {
     "@balldontlie/sdk": "1.2.2",
@@ -56,6 +65,8 @@
     "@vitest/ui": "4.1.4",
     "drizzle-kit": "0.31.10",
     "happy-dom": "20.9.0",
+    "lint-staged": "16.4.0",
+    "simple-git-hooks": "2.13.1",
     "tailwindcss": "4.2.2",
     "typescript": "5.9.3",
     "vitest": "4.1.4"
