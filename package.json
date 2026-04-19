@@ -18,16 +18,46 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@balldontlie/sdk": "1.2.2",
+    "@sentry/nextjs": "10.49.0",
+    "@supabase/ssr": "0.10.2",
+    "@supabase/supabase-js": "2.103.3",
+    "@tanstack/react-query": "5.99.2",
+    "@upstash/ratelimit": "2.0.8",
+    "@upstash/redis": "1.37.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "drizzle-orm": "0.45.2",
+    "lucide-react": "1.8.0",
+    "motion": "12.38.0",
     "next": "15.5.15",
+    "pg": "8.20.0",
+    "posthog-js": "1.369.3",
+    "posthog-node": "5.29.2",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dnd": "16.0.1",
+    "react-dnd-html5-backend": "16.0.1",
+    "react-dom": "19.1.0",
+    "react-hook-form": "7.72.1",
+    "recharts": "3.8.1",
+    "sonner": "2.0.7",
+    "tailwind-merge": "3.5.0",
+    "zod": "4.3.6",
+    "zustand": "5.0.12"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.12",
+    "@playwright/test": "1.59.1",
     "@tailwindcss/postcss": "4.2.2",
     "@types/node": "20.19.39",
+    "@types/pg": "8.20.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "@vitest/ui": "4.1.4",
+    "drizzle-kit": "0.31.10",
+    "happy-dom": "20.9.0",
     "tailwindcss": "4.2.2",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "4.1.4"
   }
 }
