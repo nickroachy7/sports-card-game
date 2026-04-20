@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { assertCronAuth } from "@/lib/auth/cron";
 import { cronError, cronOk } from "@/lib/auth/cron-response";
 import { getDb } from "@/lib/db/client";
+import { asPgArray } from "@/lib/db/sql-helpers";
 import { getMLBProvider } from "@/lib/mlb/provider";
 
 export const dynamic = "force-dynamic";
@@ -33,10 +34,11 @@ export async function GET(req: Request): Promise<Response> {
 
     if (injuredBdlIds.size > 0) {
       const ids = Array.from(injuredBdlIds);
+      const idsArray = asPgArray(ids, "int");
       const res = await db.execute(sql`
         UPDATE public.player
         SET status = 'il'::player_status, updated_at = now()
-        WHERE bdl_player_id = ANY(${ids}::int[])
+        WHERE bdl_player_id = ANY(${idsArray})
           AND status = 'active'
       `);
       marked_il = res.rowCount ?? 0;
@@ -45,7 +47,7 @@ export async function GET(req: Request): Promise<Response> {
         UPDATE public.player
         SET status = 'active'::player_status, updated_at = now()
         WHERE status = 'il'
-          AND bdl_player_id <> ALL(${ids}::int[])
+          AND bdl_player_id <> ALL(${idsArray})
       `);
       cleared_il = cleared.rowCount ?? 0;
     } else {

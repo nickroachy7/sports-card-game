@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { assertCronAuth } from "@/lib/auth/cron";
 import { cronError, cronOk } from "@/lib/auth/cron-response";
 import { getDb } from "@/lib/db/client";
+import { asPgArrayOrNull } from "@/lib/db/sql-helpers";
 import { getMLBProvider } from "@/lib/mlb/provider";
 
 export const dynamic = "force-dynamic";
@@ -51,8 +52,8 @@ export async function GET(req: Request): Promise<Response> {
             ${g.away_team_data?.hits ?? null},
             ${g.home_team_data?.errors ?? null},
             ${g.away_team_data?.errors ?? null},
-            ${g.home_team_data?.inning_scores ?? null}::int[],
-            ${g.away_team_data?.inning_scores ?? null}::int[],
+            ${asPgArrayOrNull(g.home_team_data?.inning_scores ?? null, "int")},
+            ${asPgArrayOrNull(g.away_team_data?.inning_scores ?? null, "int")},
             ${g.attendance ?? null}
           )
           ON CONFLICT (bdl_game_id) DO UPDATE SET
