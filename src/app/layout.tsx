@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { Toaster } from "sonner";
 import { PostHogProvider } from "@/components/observability/posthog-provider";
 import "./globals.css";
 
@@ -29,6 +30,7 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="antialiased">
         <PostHogProvider>{children}</PostHogProvider>
+        <Toaster theme="dark" position="top-center" richColors />
       </body>
     </html>
   );
