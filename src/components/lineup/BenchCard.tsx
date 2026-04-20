@@ -1,0 +1,55 @@
+"use client";
+
+import { useEffect } from "react";
+import { useDrag } from "react-dnd";
+import { getEmptyImage } from "react-dnd-html5-backend";
+
+import { Card } from "@/components/card/Card";
+import type { LineupCardVM } from "@/lib/lineup/types";
+import { cn } from "@/lib/utils";
+
+import { type CardDragItem, DRAG_TYPES } from "./drag-types";
+
+type Props = {
+  card: LineupCardVM;
+  assigned: boolean;
+  disabled: boolean;
+};
+
+export function BenchCard({ card, assigned, disabled }: Props) {
+  const [{ isDragging }, dragRef, preview] = useDrag<CardDragItem, void, { isDragging: boolean }>(
+    () => ({
+      type: DRAG_TYPES.CARD,
+      item: { cardId: card.id, isPitcher: card.isPitcher },
+      canDrag: !disabled,
+      collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    }),
+    [card.id, card.isPitcher, disabled],
+  );
+
+  // Suppress the HTML5 drag ghost — the card itself plus our drop-indicators
+  // communicate drag state more cleanly.
+  useEffect(() => {
+    preview(getEmptyImage(), { captureDraggingState: true });
+  }, [preview]);
+
+  return (
+    <button
+      type="button"
+      ref={(el) => {
+        dragRef(el);
+      }}
+      disabled={disabled}
+      className={cn(
+        "shrink-0 appearance-none border-0 bg-transparent p-0 transition-opacity",
+        isDragging && "opacity-40",
+        assigned && "opacity-60",
+        disabled && "cursor-not-allowed",
+        !disabled && !isDragging && "cursor-grab active:cursor-grabbing",
+      )}
+      aria-label={`${card.playerName}${assigned ? " (in lineup)" : ""}`}
+    >
+      <Card card={card} size="small" />
+    </button>
+  );
+}
