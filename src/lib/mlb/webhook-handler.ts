@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
+import { reconcileGame } from "@/lib/mlb/reconcile";
 
 export type WebhookPayload = {
   event_type?: string;
@@ -106,6 +107,14 @@ async function handleGameEnded(
       SET status = 'final'::game_status, ended_at = now(), updated_at = now()
       WHERE bdl_game_id = ${bdlGameId}
     `);
+    // Pull authoritative box score and overwrite final_fp on every
+    // rostered slot. Best-effort — failures are logged but don't fail
+    // the webhook so the vendor doesn't retry.
+    try {
+      await reconcileGame(bdlGameId);
+    } catch (err) {
+      console.error("[webhook] reconcileGame failed", { bdlGameId }, err);
+    }
     // Flip any live contest_entries to 'final' if ALL their games are done.
     await db.execute(sql`
       SELECT public.mark_contest_entries_on_game_end(
