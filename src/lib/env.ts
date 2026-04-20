@@ -31,7 +31,9 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: requiredString,
   SUPABASE_SERVICE_ROLE_KEY: requiredString,
-  SUPABASE_JWT_SECRET: requiredString,
+  // Only needed if we ever mint our own JWTs (custom claims, impersonation).
+  // Phase 1 doesn't; keeping optional.
+  SUPABASE_JWT_SECRET: optionalString,
   DATABASE_URL: requiredString,
   CRON_SECRET: requiredString,
 
