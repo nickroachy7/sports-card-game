@@ -172,47 +172,67 @@ pnpm e2e --trace on
 ### Test a webhook locally (ngrok)
 
 ```bash
-# 1. Start dev server
+# 1. Install ngrok if you haven't (one-time)
+brew install ngrok
+
+# 2. Start the dev server
 pnpm dev
 
-# 2. In another terminal, expose localhost
+# 3. In another terminal, expose localhost
 ngrok http 3000
+# → copy the forwarding URL (e.g. https://abc123.ngrok-free.app)
 
-# 3. Copy the ngrok URL (e.g. https://abc123.ngrok.io)
+# 4. In the BallDontLie dashboard (dev account):
+#    - Webhooks → New subscription
+#    - URL: <ngrok-url>/api/webhooks/balldontlie/mlb
+#    - Copy the signing secret → paste into BDL_WEBHOOK_SECRET in .env.local
+#    - Restart pnpm dev so the new env var loads
 
-# 4. In BDL dashboard (dev account):
-#    - Go to Webhooks
-#    - Set URL to <ngrok-url>/api/webhooks/balldontlie/mlb
-#    - Copy the signing secret → update BDL_WEBHOOK_SECRET in .env.local
+# 5. Trigger a test event from the BDL dashboard
 
-# 5. Trigger a test webhook from BDL dashboard
-# 6. Confirm: check webhook_delivery table; row should exist with status=processed
+# 6. Verify end-to-end:
+#    - Next.js terminal: "POST /api/webhooks/balldontlie/mlb 200"
+#    - Postgres: SELECT * FROM webhook_delivery ORDER BY received_at DESC LIMIT 1;
+#    - status should be 'processed'
+#    - If 'failed', check webhook_failed.error_message for the reason.
 ```
 
-### Verify the webhook receiver works
+### Verify signature verification (unit)
 
 ```bash
-# Unit test
-pnpm test tests/unit/webhook-verify.test.ts
-
-# Manual replay from a stored failed delivery
-pnpm webhook:replay <delivery-id>
+pnpm test tests/unit/webhook-hmac.test.ts
 ```
 
-### Run a cron manually
+### Run a cron manually (local)
+
+Every cron requires `Authorization: Bearer $CRON_SECRET`. Source env and run with:
 
 ```bash
-# For testing — authenticated with CRON_SECRET
-curl -X GET http://localhost:3000/api/cron/bdl-roster-sync \
-  -H "Authorization: Bearer $CRON_SECRET"
+export CRON_SECRET=$(grep ^CRON_SECRET .env.local | cut -d= -f2- | tr -d '"')
+
+# Daily roster sync (teams + active players)
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/bdl-roster-sync | jq
+
+# Daily games pre-fetch (today's schedule)
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/bdl-games-prefetch | jq
+
+# Daily injuries sync (sets player.status = 'il' / clears it)
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/bdl-injuries-sync | jq
+
+# Photo sync (stubbed until MLBAM join strategy is locked — §8.1)
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/bdl-photo-sync | jq
+
+# Webhook retry (re-dispatches rows in webhook_failed)
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/webhook-retry | jq
 ```
 
-### Seed game events (offline dev)
-
-```bash
-# Generates realistic fake webhook payloads for a test game
-pnpm seed:game-events --game-id=<id> --count=20
-```
+Missing or wrong `Authorization` header → 401 `UNAUTHENTICATED`.
+Missing `BDL_API_KEY` → 500 with "BDL_API_KEY is not set".
 
 ---
 
