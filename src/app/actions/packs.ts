@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { type OpenPackInput, openPackInputSchema, type PackType } from "@/lib/contracts/cards";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
+import { captureServerEvent, wrapAction } from "@/lib/observability/action";
 
 type ActionResult<T> =
   | { ok: true; data: T }
@@ -52,7 +53,7 @@ function mapDbError(err: unknown): { code: string; message: string } {
  * stage the pending pack and expose resolveCapOverflow to let the user
  * pick which card to drop.
  */
-export async function openPack(input: OpenPackInput): Promise<ActionResult<OpenPackResult>> {
+async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPackResult>> {
   const parsed = openPackInputSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -87,20 +88,30 @@ export async function openPack(input: OpenPackInput): Promise<ActionResult<OpenP
     revalidatePath("/shop");
     revalidatePath("/collection");
     revalidatePath("/lineup", "layout");
-    return {
-      ok: true,
-      data: {
-        openingId: raw.opening_id,
-        cardIds: raw.card_ids ?? [],
-        duplicateCount: raw.duplicate_count ?? 0,
-        coinsFromDupes: Number(raw.coins_from_dupes),
-        tokenIds: raw.token_ids ?? [],
-        coinCost: Number(raw.coin_cost),
-        balanceAfter: Number(raw.balance_after),
-        packType: parsed.data.packType,
-      },
+    const data = {
+      openingId: raw.opening_id,
+      cardIds: raw.card_ids ?? [],
+      duplicateCount: raw.duplicate_count ?? 0,
+      coinsFromDupes: Number(raw.coins_from_dupes),
+      tokenIds: raw.token_ids ?? [],
+      coinCost: Number(raw.coin_cost),
+      balanceAfter: Number(raw.balance_after),
+      packType: parsed.data.packType,
     };
+    await captureServerEvent(user.id, "pack_opened", {
+      pack_type: data.packType,
+      cards_granted: data.cardIds.length,
+      duplicates: data.duplicateCount,
+      tokens_granted: data.tokenIds.length,
+      coin_cost: data.coinCost,
+      coins_from_dupes: data.coinsFromDupes,
+      balance_after: data.balanceAfter,
+    });
+    return { ok: true, data };
   } catch (err) {
     return { ok: false, error: mapDbError(err) };
   }
 }
+
+/** Public entrypoint — Sentry-wrapped. */
+export const openPack = wrapAction(openPackImpl, { name: "openPack" });

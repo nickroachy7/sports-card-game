@@ -1,6 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = Number(process.env.PLAYWRIGHT_PORT ?? 3000);
+// Playwright runs its own dev server; default to 3100 so it never
+// collides with the Claude Code preview on 3000. Override with
+// PLAYWRIGHT_PORT.
+const PORT = Number(process.env.PLAYWRIGHT_PORT ?? 3100);
 const baseURL = `http://localhost:${PORT}`;
 
 export default defineConfig({
@@ -22,9 +25,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "pnpm dev",
+    command: `PORT=${PORT} pnpm dev`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    env: {
+      NEXT_PUBLIC_APP_URL: baseURL,
+    },
   },
 });

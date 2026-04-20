@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { type CollectionCard, CollectionGrid } from "@/app/(app)/collection/collection-grid";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { createServerClient } from "@/lib/db/supabase";
+import { captureServerEvent } from "@/lib/observability/action";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +77,14 @@ export default async function CollectionPage() {
   });
 
   const collectionCap = Number(cfg?.collection_cap ?? 100);
+
+  // Fire & forget — server-side page view. PostHog also auto-captures a
+  // client $pageview from the provider, but this gives us a server-side
+  // "collection_viewed" with card-count properties for funnel analysis.
+  await captureServerEvent(user.id, "collection_viewed", {
+    card_count: cards.length,
+    collection_cap: collectionCap,
+  });
 
   return <CollectionGrid cards={cards} collectionCap={collectionCap} />;
 }

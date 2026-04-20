@@ -11,6 +11,7 @@ import {
 } from "@/lib/contracts/cards";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
+import { captureServerEvent, wrapAction } from "@/lib/observability/action";
 
 type ActionResult<T> =
   | { ok: true; data: T }
@@ -49,7 +50,7 @@ function mapDbError(err: unknown): { code: string; message: string } {
 }
 
 /** API spec §3.3 quickSellCard. Wraps public.quick_sell_card(user_id, card_id). */
-export async function quickSellCard(input: QuickSellInput): Promise<ActionResult<QuickSellResult>> {
+async function quickSellCardImpl(input: QuickSellInput): Promise<ActionResult<QuickSellResult>> {
   const parsed = quickSellInputSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -75,21 +76,27 @@ export async function quickSellCard(input: QuickSellInput): Promise<ActionResult
     }
     revalidatePath("/collection");
     revalidatePath("/lineup", "layout");
-    return {
-      ok: true,
-      data: {
-        coinsEarned: Number(raw.coins_earned),
-        balanceAfter: Number(raw.balance_after),
-        tier: raw.tier,
-      },
+    const data: QuickSellResult = {
+      coinsEarned: Number(raw.coins_earned),
+      balanceAfter: Number(raw.balance_after),
+      tier: raw.tier,
     };
+    await captureServerEvent(user.id, "card_quick_sold", {
+      card_id: parsed.data.cardId,
+      tier: data.tier,
+      coins_earned: data.coinsEarned,
+      balance_after: data.balanceAfter,
+    });
+    return { ok: true, data };
   } catch (err) {
     return { ok: false, error: mapDbError(err) };
   }
 }
 
+export const quickSellCard = wrapAction(quickSellCardImpl, { name: "quickSellCard" });
+
 /** API spec §3.3 extendCardContract. Wraps public.extend_card(user_id, card_id, plays). */
-export async function extendCardContract(
+async function extendCardContractImpl(
   input: ExtendContractInput,
 ): Promise<ActionResult<ExtendResult>> {
   const parsed = extendContractInputSchema.safeParse(input);
@@ -124,16 +131,26 @@ export async function extendCardContract(
     }
     revalidatePath("/collection");
     revalidatePath("/lineup", "layout");
-    return {
-      ok: true,
-      data: {
-        newPlaysRemaining: Number(raw.new_plays_remaining),
-        coinCost: Number(raw.coin_cost),
-        extensionNumber: Number(raw.extension_number),
-        balanceAfter: Number(raw.balance_after),
-      },
+    const data: ExtendResult = {
+      newPlaysRemaining: Number(raw.new_plays_remaining),
+      coinCost: Number(raw.coin_cost),
+      extensionNumber: Number(raw.extension_number),
+      balanceAfter: Number(raw.balance_after),
     };
+    await captureServerEvent(user.id, "contract_extended", {
+      card_id: parsed.data.cardId,
+      plays: parsed.data.plays,
+      coin_cost: data.coinCost,
+      extension_number: data.extensionNumber,
+      new_plays_remaining: data.newPlaysRemaining,
+      balance_after: data.balanceAfter,
+    });
+    return { ok: true, data };
   } catch (err) {
     return { ok: false, error: mapDbError(err) };
   }
 }
+
+export const extendCardContract = wrapAction(extendCardContractImpl, {
+  name: "extendCardContract",
+});

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { signInSchema, signUpSchema } from "@/lib/contracts/auth";
 import { createServerClient } from "@/lib/db/supabase";
+import { captureServerEvent } from "@/lib/observability/action";
 
 type ActionResult<T = undefined> =
   | { ok: true; data: T }
@@ -76,6 +77,12 @@ export async function signUpWithPassword(
           "Account created but no session. Check Supabase Auth config (confirmations should be disabled).",
       },
     };
+  }
+
+  if (data.user) {
+    await captureServerEvent(data.user.id, "signed_up", {
+      provider: "email",
+    });
   }
 
   revalidatePath("/", "layout");

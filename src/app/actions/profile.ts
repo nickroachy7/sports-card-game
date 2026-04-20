@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { type OnboardingInput, onboardingSchema } from "@/lib/contracts/profile";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
+import { captureServerEvent, wrapAction } from "@/lib/observability/action";
 
 type ActionResult<T = undefined> =
   | { ok: true; data: T }
@@ -19,7 +20,7 @@ type ActionResult<T = undefined> =
  * Wraps the onboard_user(user_id, team_name, primary, secondary, logo_id)
  * SQL function defined in 0009_functions_onboarding.sql.
  */
-export async function completeOnboarding(input: OnboardingInput): Promise<ActionResult<undefined>> {
+async function completeOnboardingImpl(input: OnboardingInput): Promise<ActionResult<undefined>> {
   const parsed = onboardingSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -70,5 +71,13 @@ export async function completeOnboarding(input: OnboardingInput): Promise<Action
   }
 
   revalidatePath("/", "layout");
+  await captureServerEvent(user.id, "completed_onboarding", {
+    team_name: teamName,
+    logo_id: logoId,
+  });
   return { ok: true, data: undefined };
 }
+
+export const completeOnboarding = wrapAction(completeOnboardingImpl, {
+  name: "completeOnboarding",
+});
