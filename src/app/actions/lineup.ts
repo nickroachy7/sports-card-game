@@ -1,0 +1,206 @@
+"use server";
+
+import { sql } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+
+import {
+  type CreateEntryInput,
+  createEntryInputSchema,
+  type SetAutoSubModeInput,
+  type SubmitLineupInput,
+  setAutoSubModeInputSchema,
+  submitLineupInputSchema,
+  type UpdateSlotInput,
+  updateSlotInputSchema,
+} from "@/lib/contracts/lineup";
+import { getDb } from "@/lib/db/client";
+import { createServerClient } from "@/lib/db/supabase";
+import { captureServerEvent, wrapAction } from "@/lib/observability/action";
+
+type ActionResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string } };
+
+/** Postgres SQLSTATE → API error code mapping per lineup functions. */
+function mapDbError(err: unknown): { code: string; message: string } {
+  const e = err as { code?: string; message?: string };
+  const msg = e.message ?? "Unknown error";
+  if (e.code === "P0002") return { code: "NOT_FOUND", message: msg };
+  if (e.code === "23514") {
+    if (msg.includes("contest locked") || msg.includes("contest not pending")) {
+      return { code: "CONTEST_LOCKED", message: "Lineup lock has passed." };
+    }
+    if (msg.includes("empty slots")) {
+      return { code: "VALIDATION", message: msg.replace(/^.*: /, "") };
+    }
+    if (msg.includes("expired")) {
+      return { code: "CARD_EXPIRED", message: "Card's contract is expired." };
+    }
+    if (msg.includes("vaulted")) {
+      return { code: "CONFLICT", message: "Card is vaulted." };
+    }
+    if (msg.includes("cannot fill")) {
+      return { code: "CARD_INELIGIBLE", message: msg.replace(/^.*: /, "") };
+    }
+    if (msg.includes("insufficient balance")) {
+      return { code: "INSUFFICIENT_COINS", message: "Not enough coins." };
+    }
+    return { code: "CONFLICT", message: msg };
+  }
+  return { code: "INTERNAL", message: msg };
+}
+
+/** Creates or returns the user's entry for a contest. Idempotent. */
+async function createContestEntryImpl(
+  input: CreateEntryInput,
+): Promise<ActionResult<{ entryId: string }>> {
+  const parsed = createEntryInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const res = await getDb().execute<{ create_contest_entry: string }>(sql`
+      SELECT public.create_contest_entry(
+        ${user.id}::uuid, ${parsed.data.contestId}::uuid
+      ) AS create_contest_entry
+    `);
+    const entryId = res.rows[0]?.create_contest_entry;
+    if (!entryId) {
+      return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
+    }
+    revalidatePath("/lineup");
+    return { ok: true, data: { entryId } };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const createContestEntry = wrapAction(createContestEntryImpl, {
+  name: "createContestEntry",
+});
+
+/** Drag-drop handler. Assigns or clears starter_card_id on one slot. */
+async function updateLineupSlotImpl(input: UpdateSlotInput): Promise<ActionResult<undefined>> {
+  const parsed = updateSlotInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    await getDb().execute(sql`
+      SELECT public.update_lineup_slot(
+        ${user.id}::uuid,
+        ${parsed.data.entryId}::uuid,
+        ${parsed.data.position}::text,
+        ${parsed.data.starterCardId ? sql`${parsed.data.starterCardId}::uuid` : sql`NULL::uuid`}
+      )
+    `);
+    revalidatePath("/lineup");
+    return { ok: true, data: undefined };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const updateLineupSlot = wrapAction(updateLineupSlotImpl, {
+  name: "updateLineupSlot",
+});
+
+/** Set auto-sub mode for an entry. */
+async function setAutoSubModeImpl(input: SetAutoSubModeInput): Promise<ActionResult<undefined>> {
+  const parsed = setAutoSubModeInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    await getDb().execute(sql`
+      SELECT public.set_auto_sub_mode(
+        ${user.id}::uuid,
+        ${parsed.data.entryId}::uuid,
+        ${parsed.data.mode}::auto_sub_mode
+      )
+    `);
+    revalidatePath("/lineup");
+    return { ok: true, data: undefined };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const setAutoSubMode = wrapAction(setAutoSubModeImpl, {
+  name: "setAutoSubMode",
+});
+
+/** Validate + lock entry. Fires PostHog `lineup_submitted` on success. */
+async function submitLineupImpl(
+  input: SubmitLineupInput,
+): Promise<ActionResult<{ entryCoinCost: number; balanceAfter: number }>> {
+  const parsed = submitLineupInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const res = await getDb().execute<{
+      submit_lineup: { entry_coin_cost: number | string; balance_after: number | string };
+    }>(sql`
+      SELECT public.submit_lineup(
+        ${user.id}::uuid, ${parsed.data.entryId}::uuid
+      ) AS submit_lineup
+    `);
+    const raw = res.rows[0]?.submit_lineup;
+    if (!raw) {
+      return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
+    }
+    const data = {
+      entryCoinCost: Number(raw.entry_coin_cost),
+      balanceAfter: Number(raw.balance_after),
+    };
+    revalidatePath("/lineup");
+    revalidatePath("/", "layout");
+    await captureServerEvent(user.id, "lineup_submitted", {
+      entry_id: parsed.data.entryId,
+      entry_coin_cost: data.entryCoinCost,
+      balance_after: data.balanceAfter,
+    });
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const submitLineup = wrapAction(submitLineupImpl, { name: "submitLineup" });

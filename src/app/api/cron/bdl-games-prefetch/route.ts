@@ -82,7 +82,24 @@ export async function GET(req: Request): Promise<Response> {
       }
     }
 
-    return cronOk({ date: today.toISOString().slice(0, 10), upserts, skipped });
+    // Auto-create today's daily contest bound to these games.
+    // Idempotent — returns existing contest if already created.
+    let contestId: string | null = null;
+    try {
+      const res = await db.execute<{ create_daily_contest: string }>(sql`
+        SELECT public.create_daily_contest(CURRENT_DATE) AS create_daily_contest
+      `);
+      contestId = res.rows[0]?.create_daily_contest ?? null;
+    } catch (err) {
+      console.error("[bdl-games-prefetch] create_daily_contest failed", err);
+    }
+
+    return cronOk({
+      date: today.toISOString().slice(0, 10),
+      upserts,
+      skipped,
+      contest_id: contestId,
+    });
   } catch (err) {
     return cronError(err);
   }
