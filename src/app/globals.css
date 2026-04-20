@@ -1,26 +1,61 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ────────────────────────────────────────────────────────────────────────
+   Draft Deck design tokens — UI/UX spec §2.
+   Charcoal + cream. Dark-by-default. Tier accents are reserved for card
+   frames / tier-up moments and must never be used in general UI chrome.
+   ──────────────────────────────────────────────────────────────────────── */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-muted: var(--muted);
+
+  --color-tier-bronze: var(--tier-bronze);
+  --color-tier-silver: var(--tier-silver);
+  --color-tier-gold: var(--tier-gold);
+  --color-tier-diamond: var(--tier-diamond);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+
+  --radius-sm: 0.25rem;  /* 4px — chips, inputs */
+  --radius-md: 0.5rem;   /* 8px — buttons, UI cards */
+  --radius-lg: 0.75rem;  /* 12px — panels */
+  --radius-xl: 1.25rem;  /* 20px — pack-shop cards */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root {
+  --bg: #1a1816;
+  --surface: #24211e;
+  --surface-2: #2e2b27;
+  --border: #3a3631;
+  --text: #f5f1e8;
+  --text-2: #c9c3b5;
+  --text-3: #8a8478;
+  --muted: #5e584f;
+
+  --tier-bronze: #a57248;
+  --tier-silver: #c5c0b8;
+  --tier-gold: #d4a647;
+  --tier-diamond: #a8dde2;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    color-scheme: dark;
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+  }
+  * {
+    border-color: var(--border);
+  }
 }
