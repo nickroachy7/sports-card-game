@@ -21,10 +21,10 @@ export const teamMilestoneState = pgTable(
     seasonId: uuid("season_id")
       .notNull()
       .references(() => season.id),
-    hits: bigint("hits", { mode: "bigint" }).notNull().default(0n),
-    homeRuns: bigint("home_runs", { mode: "bigint" }).notNull().default(0n),
-    stolenBases: bigint("stolen_bases", { mode: "bigint" }).notNull().default(0n),
-    pitchingWins: bigint("pitching_wins", { mode: "bigint" }).notNull().default(0n),
+    hits: bigint("hits", { mode: "bigint" }).notNull().default(sql`0`),
+    homeRuns: bigint("home_runs", { mode: "bigint" }).notNull().default(sql`0`),
+    stolenBases: bigint("stolen_bases", { mode: "bigint" }).notNull().default(sql`0`),
+    pitchingWins: bigint("pitching_wins", { mode: "bigint" }).notNull().default(sql`0`),
     hitsTiersHit: integer("hits_tiers_hit").array().notNull().default(sql`'{}'::int[]`),
     homeRunsTiersHit: integer("home_runs_tiers_hit").array().notNull().default(sql`'{}'::int[]`),
     stolenBasesTiersHit: integer("stolen_bases_tiers_hit")
@@ -55,8 +55,8 @@ export const teamMilestoneAward = pgTable(
       .references(() => season.id),
     milestoneKey: text("milestone_key").notNull(),
     tier: integer("tier").notNull(),
-    coinReward: bigint("coin_reward", { mode: "bigint" }).notNull().default(0n),
-    xpReward: bigint("xp_reward", { mode: "bigint" }).notNull().default(0n),
+    coinReward: bigint("coin_reward", { mode: "bigint" }).notNull().default(sql`0`),
+    xpReward: bigint("xp_reward", { mode: "bigint" }).notNull().default(sql`0`),
     tokenRewards: uuid("token_rewards").array().notNull().default(sql`'{}'::uuid[]`),
     awardedAt: timestamp("awarded_at", { withTimezone: true }).notNull().default(sql`now()`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),

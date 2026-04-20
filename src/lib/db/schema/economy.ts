@@ -41,7 +41,7 @@ export const packOpening = pgTable(
     coinCost: bigint("coin_cost", { mode: "bigint" }).notNull(),
     cardsGranted: uuid("cards_granted").array().notNull().default(sql`'{}'::uuid[]`),
     duplicatePlayerIds: uuid("duplicate_player_ids").array().notNull().default(sql`'{}'::uuid[]`),
-    coinsFromDupes: bigint("coins_from_dupes", { mode: "bigint" }).notNull().default(0n),
+    coinsFromDupes: bigint("coins_from_dupes", { mode: "bigint" }).notNull().default(sql`0`),
     tokensGranted: uuid("tokens_granted").array().notNull().default(sql`'{}'::uuid[]`),
     rngSeed: text("rng_seed"),
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().default(sql`now()`),

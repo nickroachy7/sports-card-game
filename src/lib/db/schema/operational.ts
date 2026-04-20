@@ -60,7 +60,7 @@ export const manualGrant = pgTable(
     userId: uuid("user_id").notNull(),
     grantedBy: uuid("granted_by").notNull(),
     reason: text("reason").notNull(),
-    coins: bigint("coins", { mode: "bigint" }).notNull().default(0n),
+    coins: bigint("coins", { mode: "bigint" }).notNull().default(sql`0`),
     cardPlayerIds: uuid("card_player_ids").array().notNull().default(sql`'{}'::uuid[]`),
     tokensGranted: uuid("tokens_granted").array().notNull().default(sql`'{}'::uuid[]`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
