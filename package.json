@@ -16,6 +16,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
+    "db:generate": "node --env-file=.env.local ./node_modules/drizzle-kit/bin.cjs generate",
+    "db:push": "supabase db push --local",
+    "db:reset": "supabase db reset --local",
+    "db:studio": "node --env-file=.env.local ./node_modules/drizzle-kit/bin.cjs studio",
     "prepare": "simple-git-hooks"
   },
   "simple-git-hooks": {
