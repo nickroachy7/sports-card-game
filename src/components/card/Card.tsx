@@ -60,24 +60,26 @@ export function Card({
   const isSmall = size === "small";
   const isLarge = size === "large";
 
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={`${card.playerName}, ${frame.label} tier, ${card.contractPlays}/${card.contractMax} plays`}
-      className={cn(
-        "group relative shrink-0 overflow-hidden text-left transition-all",
-        contract.haloClass,
-        onClick &&
-          "cursor-pointer hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--text)]",
-        className,
-      )}
-      style={{
-        width: sz.width,
-        height: sz.height,
-        borderRadius: sz.radius,
-      }}
-    >
+  // Card is presentational by default (renders a <div>). Upgrade to a
+  // <button> only when `onClick` is supplied. When wrapped in a <Link>,
+  // the <div> branch stays — nested interactive elements block the
+  // outer link's click handler.
+  const rootClass = cn(
+    "group relative block shrink-0 overflow-hidden text-left transition-all hover:-translate-y-0.5 hover:shadow-xl",
+    contract.haloClass,
+    onClick &&
+      "cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--text)]",
+    className,
+  );
+  const rootStyle: React.CSSProperties = {
+    width: sz.width,
+    height: sz.height,
+    borderRadius: sz.radius,
+  };
+  const ariaLabel = `${card.playerName}, ${frame.label} tier, ${card.contractPlays}/${card.contractMax} plays`;
+
+  const body = (
+    <>
       {/* Outer frame material. */}
       <div
         aria-hidden="true"
@@ -202,7 +204,26 @@ export function Card({
           </div>
         )}
       </div>
-    </button>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={ariaLabel}
+        className={rootClass}
+        style={rootStyle}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div role="img" aria-label={ariaLabel} className={rootClass} style={rootStyle}>
+      {body}
+    </div>
   );
 }
 
