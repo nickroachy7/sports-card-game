@@ -12,6 +12,7 @@ const PUBLIC_PATHS = [
   "/api/profile",
   "/api/webhooks",
   "/api/cron",
+  "/api/dev",
 ];
 
 function isPublicPath(pathname: string): boolean {

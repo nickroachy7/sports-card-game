@@ -78,10 +78,17 @@ async function handleGameStarted(
 ): Promise<DispatchResult> {
   const bdlGameId = payload.game?.id;
   if (typeof bdlGameId === "number") {
-    await getDb().execute(sql`
+    const db = getDb();
+    await db.execute(sql`
       UPDATE public.game
       SET status = 'live'::game_status, updated_at = now()
       WHERE bdl_game_id = ${bdlGameId}
+    `);
+    // Flip any submitted contest_entries touching this game to 'live'.
+    await db.execute(sql`
+      SELECT public.mark_contest_entries_on_game_start(
+        (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
+      )
     `);
   }
   return { dispatched: true, eventType: "mlb.game.started", providerEventId: null };
@@ -93,10 +100,17 @@ async function handleGameEnded(
 ): Promise<DispatchResult> {
   const bdlGameId = payload.game?.id;
   if (typeof bdlGameId === "number") {
-    await getDb().execute(sql`
+    const db = getDb();
+    await db.execute(sql`
       UPDATE public.game
       SET status = 'final'::game_status, ended_at = now(), updated_at = now()
       WHERE bdl_game_id = ${bdlGameId}
+    `);
+    // Flip any live contest_entries to 'final' if ALL their games are done.
+    await db.execute(sql`
+      SELECT public.mark_contest_entries_on_game_end(
+        (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
+      )
     `);
   }
   return { dispatched: true, eventType: "mlb.game.ended", providerEventId: null };
