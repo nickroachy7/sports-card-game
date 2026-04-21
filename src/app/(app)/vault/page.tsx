@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import type { CardTier } from "@/lib/contracts/cards";
@@ -98,26 +99,40 @@ export default async function VaultPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/signin");
 
-  const [{ data: vaultRows }, { data: seasonStates }, { data: finalEntries }] = await Promise.all([
-    supabase
-      .from("vault_entry")
-      .select(
-        `id, season_id, final_tier, final_fp, tokens_applied_count, tokens_triggered_count, created_at,
+  const [{ data: vaultRows }, { data: seasonStates }, { data: finalEntries }, { data: offseason }] =
+    await Promise.all([
+      supabase
+        .from("vault_entry")
+        .select(
+          `id, season_id, final_tier, final_fp, tokens_applied_count, tokens_triggered_count, created_at,
          season:season_id (year),
          player:player_id (full_name, positions)`,
-      )
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("user_season_state")
-      .select("season_id, season_fp, season_contests_won")
-      .eq("user_id", user.id),
-    supabase.from("contest_entry").select("season_id").eq("user_id", user.id).eq("status", "final"),
-  ]);
+        )
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("user_season_state")
+        .select("season_id, season_fp, season_contests_won")
+        .eq("user_id", user.id),
+      supabase
+        .from("contest_entry")
+        .select("season_id")
+        .eq("user_id", user.id)
+        .eq("status", "final"),
+      supabase
+        .from("season")
+        .select("id, year, status")
+        .eq("status", "offseason")
+        .order("year", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
   const rows = (vaultRows ?? []) as VaultRow[];
   const states = (seasonStates ?? []) as SeasonState[];
   const finals = (finalEntries ?? []) as EntryCountRow[];
+  const ceremonyOpen =
+    offseason && !rows.some((r) => r.season_id === (offseason as { id: string }).id);
 
   type Group = {
     year: number;
@@ -153,6 +168,28 @@ export default async function VaultPage() {
 
   return (
     <section className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-10">
+      {ceremonyOpen && (
+        <Link
+          href="/vault/ceremony"
+          className="flex items-center justify-between rounded-lg border border-[var(--tier-gold)] bg-[var(--surface)] px-5 py-4 hover:bg-[var(--surface-2)]"
+        >
+          <div className="flex flex-col">
+            <span className="text-xs uppercase tracking-wider text-[var(--tier-gold)]">
+              End of season
+            </span>
+            <span className="text-base font-semibold text-[var(--text)]">
+              Your vault ceremony is ready
+            </span>
+            <span className="text-xs text-[var(--text-2)]">
+              Preserve up to 10 cards before the new season begins.
+            </span>
+          </div>
+          <span className="font-mono text-xs uppercase tracking-wider text-[var(--text-2)]">
+            Enter →
+          </span>
+        </Link>
+      )}
+
       <header className="flex flex-col gap-1">
         <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">
           Keepsake showcase
