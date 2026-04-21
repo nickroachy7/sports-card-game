@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 
 import { commitVaultSelection } from "@/app/actions/vault";
 import { Card, type CardViewModel } from "@/components/card/Card";
+import { DissolveCard } from "@/components/card/DissolveCard";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { VaultCeremonyPreview, VaultEligibleCard } from "@/lib/contracts/vault";
 
@@ -54,33 +55,40 @@ function CardThumb({
   card,
   selected,
   dissolving,
+  dissolveDelay,
   onToggle,
 }: {
   card: VaultEligibleCard;
   selected: boolean;
   dissolving?: boolean;
+  dissolveDelay?: number;
   onToggle?: () => void;
 }) {
   const color = TIER_COLOR[card.current_tier];
+  // Selected cards stay put during the dissolve step (they're heading
+  // to the vault). Unselected cards play the shared dissolve vocab.
+  const willDissolve = !!dissolving && !selected;
   return (
     <button
       type="button"
       onClick={onToggle}
-      disabled={dissolving}
+      disabled={!!dissolving}
       className={`flex flex-col items-center gap-1 rounded-md transition ${
-        dissolving ? "pointer-events-none opacity-0" : "hover:scale-[1.03]"
+        dissolving ? "pointer-events-none" : "hover:scale-[1.03]"
       }`}
-      style={{ transitionDuration: dissolving ? "2500ms" : "180ms" }}
+      style={{ transitionDuration: "180ms" }}
       aria-pressed={selected}
     >
-      <div
-        className="rounded-md"
-        style={{
-          boxShadow: selected ? "0 0 0 3px rgba(245, 241, 232, 0.55)" : undefined,
-        }}
-      >
-        <Card size="small" card={toViewModel(card)} />
-      </div>
+      <DissolveCard active={willDissolve} delay={dissolveDelay ?? 0}>
+        <div
+          className="rounded-md"
+          style={{
+            boxShadow: selected ? "0 0 0 3px rgba(245, 241, 232, 0.55)" : undefined,
+          }}
+        >
+          <Card size="small" card={toViewModel(card)} />
+        </div>
+      </DissolveCard>
       <span
         className="font-mono text-[10px] uppercase tracking-wider"
         style={{ color: selected ? "#f5f1e8" : color }}
@@ -327,14 +335,22 @@ export function VaultCeremony(props: Props) {
             <h2 className="font-sans text-3xl font-bold tracking-tight">Dissolving…</h2>
           </header>
           <div className="flex flex-wrap justify-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-            {eligibleCards.map((card) => (
-              <CardThumb
-                key={card.card_id}
-                card={card}
-                selected={selected.has(card.card_id)}
-                dissolving={!selected.has(card.card_id)}
-              />
-            ))}
+            {eligibleCards
+              .filter((c) => !selected.has(c.card_id))
+              .map((card, idx) => (
+                <CardThumb
+                  key={card.card_id}
+                  card={card}
+                  selected={false}
+                  dissolving
+                  dissolveDelay={idx * 0.04}
+                />
+              ))}
+            {eligibleCards
+              .filter((c) => selected.has(c.card_id))
+              .map((card) => (
+                <CardThumb key={card.card_id} card={card} selected dissolving />
+              ))}
           </div>
         </section>
       )}

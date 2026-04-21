@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { Card, type CardSize, type CardViewModel } from "@/components/card/Card";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 
+import { DissolveDemo } from "./dissolve-demo";
+
 export const metadata: Metadata = {
   title: "Palette · Draft Deck",
   description: "Design-token smoke test for the Draft Deck theme.",
@@ -131,6 +133,17 @@ export default function PalettePage() {
             </div>
           </div>
         ))}
+      </section>
+
+      <section aria-labelledby="dissolve-heading" className="mb-10">
+        <h2 id="dissolve-heading" className="mb-1 text-xl font-semibold">
+          Dissolve physics (polish spec §1 scope #3)
+        </h2>
+        <p className="mb-4 text-sm text-[var(--text-2)]">
+          Shared animation vocabulary used by quick-sell and the vault- ceremony season-end
+          dissolve. ~600ms downward drift + desaturate + fade.
+        </p>
+        <DissolveDemo card={mockCard("gold")} />
       </section>
 
       <section aria-labelledby="type-heading">

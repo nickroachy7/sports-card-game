@@ -1,8 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { Card, type CardViewModel } from "@/components/card/Card";
+import { DissolveCard } from "@/components/card/DissolveCard";
 import { ExtendContractModal } from "@/components/card/ExtendContractModal";
 import { QuickSellModal } from "@/components/card/QuickSellModal";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +28,7 @@ export type CardDetailData = {
 
 export function CardDetailView({ data }: { data: CardDetailData }) {
   const router = useRouter();
+  const [dissolving, setDissolving] = useState(false);
   const { card } = data;
   const frame = TIER_FRAME[card.tier];
   const next = nextTier(card.tier);
@@ -50,7 +53,15 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
     <div className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-8 md:flex-row">
       {/* Hero */}
       <div className="flex flex-col items-center gap-4 md:items-start">
-        <Card card={card} size="large" />
+        <DissolveCard
+          active={dissolving}
+          onComplete={() => {
+            router.push("/collection");
+            router.refresh();
+          }}
+        >
+          <Card card={card} size="large" />
+        </DissolveCard>
       </div>
 
       {/* Info panel */}
@@ -166,8 +177,9 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
                     quickSellValue={card.quickSellValue}
                     hasAppliedToken={card.hasAppliedToken}
                     onSold={() => {
-                      router.push("/collection");
-                      router.refresh();
+                      // Dissolve the Large card, then navigate when the
+                      // animation completes (via DissolveCard.onComplete).
+                      setDissolving(true);
                     }}
                   />
                 </div>
