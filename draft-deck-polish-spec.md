@@ -282,3 +282,389 @@ Flagged so they don't sneak in during the polish pass:
 - Pack-opening full redesign — only its arrival physics gets the
   new language; the carousel + reveal sequence stays.
 - Card face illustrations / artwork — separate art pass.
+
+---
+
+# Phase 7 batch — polish items locked 2026-04-21
+
+The five entries below were locked via interview after Phase 6 shipped.
+Same authoring pattern as §1–§2. These define the Phase 7 (v1.2) feel
+pass.
+
+---
+
+## 5. Applied tokens — circular drag-drop with corner overlay
+
+### Goal
+
+Tokens today are a static list in a tray — users don't know which
+player a conditional modifier was *meant for* until contest time.
+Promote tokens into the same physical vocabulary as cards: circular
+pips that you pick up and drop onto a player. Once applied, the token
+rides on the card's corner so the user sees their commitments at a
+glance.
+
+### Behavior
+
+- **Tray:** each token renders as a circular pip (~44px at rest).
+  Multiple of the same token type surface as separate pips, not a
+  stack (single-token cap per card means stacking isn't useful).
+- **Hover tooltip:** hovering a tray pip OR an applied pip shows a
+  small popup with the conditional rule verbatim ("If this player
+  hits a HR, +5 FP"). Dismisses on mouse-leave. Same tooltip
+  component in both places.
+- **Apply (drag):** pick up a tray pip; while dragged, hovered cards
+  light up using the §1 valid-target treatment. Drop on a card →
+  pip springs into the card's bottom-right corner, overlaid so ~50%
+  of the pip sits outside the tier frame (breaks the border). Tray
+  pip is **consumed** (disappears).
+- **One token per card.** Dropping on an already-tokened card
+  shake-bounces back to the tray (§1 invalid vocabulary).
+- **Remove (click):** click the applied pip → inline "Remove?"
+  confirm → second click destroys the token. **Removal does not
+  return the token to the tray** — consistent with the "consumed on
+  apply" rule. Mistakes are recoverable by re-earning the token.
+  *(Proposed; confirm on review. Softer alternative: remove returns
+  to tray. Destroy is simpler and aligns with the vault destroy-on-
+  remove pattern.)*
+
+### Motion
+
+Reuses the §1 vocabulary:
+- Pick-up: 1.08 scale + spring lift.
+- Drag: cursor-follow with ~80ms lag.
+- Valid drop: pip snaps to corner, ~180ms ease-out, tiny settle.
+- Invalid drop (already tokened, or released in empty space):
+  shake-back to origin.
+- Reduced-motion: instant apply + remove, no tilt, no shake.
+
+### Acceptance
+
+- [ ] Token tray renders circular pips with working hover tooltips.
+- [ ] Dragging a pip onto an un-tokened card applies it; tray pip is
+  consumed.
+- [ ] Dragging onto an already-tokened card shakes back.
+- [ ] Applied pip sits at bottom-right, overlaid outside the tier
+  frame; does not clip the stats footer at Small or Medium.
+- [ ] Hover on applied pip shows the same conditional tooltip.
+- [ ] Click applied pip → confirm → token destroyed; card returns
+  to un-tokened state.
+- [ ] `/palette` gains an "Applied tokens" section (Small + Medium
+  card states, tooltip open state).
+- [ ] Reduced-motion: instant apply, instant remove, no tilt.
+
+### Dependencies
+
+- New `<TokenBadge>` component at `src/components/token/TokenBadge.tsx`
+  — absolute-positioned corner overlay, same anchoring pattern as
+  the existing status pill.
+- Tray rework in `src/components/token/TokenTray.tsx` (or equivalent):
+  circular pip, hover tooltip, `useCardDrag`-compatible pick-up.
+- SQL fns: `apply_token(token_id, card_id)` exists per API spec;
+  add `remove_applied_token(token_application_id)` that destroys the
+  application record (the token row is already consumed). Confirm
+  naming against API spec §.
+- Reuses `CardDragLayer` motion plumbing from Phase 6 (generic per
+  ADR-0011).
+- Tooltip: shadcn `Tooltip` primitive — already in stack.
+
+### Trade-offs
+
+- **1-token cap** trades strategic depth for legibility. If future
+  phases want stacking, the corner slot grows into a row; backwards-
+  compatible.
+- **Destroy-on-remove vs restore-to-tray.** Destroy is simpler and
+  punishes mistakes in a way that's consistent with the vault
+  destroy rule. If retention telemetry shows frequent accidental
+  applies, revisit.
+- **No drag-off-card path.** Click-confirm is the only removal
+  gesture. Symmetric drag-out would be nice but adds UX cost for
+  marginal gain.
+
+---
+
+## 6. Lineup card single-click → shared detail drawer
+
+### Goal
+
+Clicking a card in a lineup slot does nothing today; drag is the only
+interaction. To see a slotted card's stats or act on it, users remove
+it, switch to Collection, find it, click. Add single-click-to-open on
+lineup cards, reusing the Collection detail drawer with a thin
+lineup-context action row appended.
+
+### Behavior
+
+- Single click on any card in a lineup slot OR in the bench drawer
+  opens the shared `<CardDetailDrawer>` (same component Collection
+  uses).
+- **Drag preservation:** 5px mousedown-threshold — pointer movement
+  past 5px cancels the click and starts a drag (react-dnd / motion
+  standard).
+- **Lineup action row** (appended below the existing drawer content
+  when opened from lineup or bench):
+  - Quick-sell (same path as Collection).
+  - Extend contract (same path as Collection).
+  - Remove from slot — sends card to bench, closes drawer, plays
+    the §1 slot → bench motion. (Bench-origin cards hide this
+    action.)
+  - Add to vault — opens the §7 mid-season vault confirm.
+- Closing the drawer returns focus to the card's origin location.
+
+### Acceptance
+
+- [ ] Single click on a slotted card opens the detail drawer.
+- [ ] A drag starting on the same card (>5px of pointer movement)
+  does not fire the click open.
+- [ ] All four lineup actions are callable; each delegates to its
+  existing SQL fn (§7 for vault).
+- [ ] Drawer fits within the §8 no-scroll viewport budget.
+- [ ] Keyboard: tab-focus + Enter opens; Escape closes.
+- [ ] Reduced-motion: drawer opens without slide.
+
+### Dependencies
+
+- Extend `<CardDetailDrawer>` with an optional
+  `lineupContext?: { slotId; onRemove; onAddToVault }` prop. When
+  absent, drawer renders as on Collection.
+- `remove_from_lineup_slot(slot_id)` SQL fn — confirm existing
+  `update_lineup_slot` can take `card_id = NULL`; if not, add the
+  paired fn.
+- Mid-season vault action (§7).
+- Drag-threshold helper — add to `useCardDrag` if not already there.
+
+### Trade-offs
+
+- **Click-vs-drag conflict** is a known pattern risk; 5px is a
+  tested default. Widen to 8px on trackpads if edge cases surface.
+- **Drawer height budget.** Extra action row costs vertical space;
+  must still clear the §8 800px floor.
+
+---
+
+## 7. Mid-season vault
+
+### Goal
+
+The vault is only a season-end moment today — powerful, but it means
+users can't mark a card as "this one's a keepsake" while the season
+is live. Let users pre-vault cards any time. Once vaulted the card is
+**frozen** (can't play) and can't return to Collection. Users can
+destroy a pre-vaulted card for a **small** coin refund — a deliberate
+exit, not a take-back. The end-of-season ceremony becomes a
+confirm / last-chance moment rather than the first-and-only pick.
+
+### Behavior
+
+- **Entry points:**
+  - Collection detail drawer → "Add to Vault".
+  - Lineup detail drawer (§6) → "Add to Vault".
+- **On vault:**
+  - Card is moved out of the playable set **immediately**. It cannot
+    be placed in a lineup. Contract plays lock (no burn, no extend,
+    no refund). Status pill reads "Vaulted"; tier frame gets a muted
+    / ribbon treatment.
+  - Counts toward the season's 10-card vault cap.
+- **Cap guard:** at 10 pre-vaulted, "Add to Vault" is disabled with
+  inline reason ("Vault full — destroy a vaulted card to free a
+  slot").
+- **Locked-lineup guard:** if the card is currently locked into a
+  submitted-but-not-yet-scored lineup, vaulting is blocked. Modal:
+  "This card is in a locked lineup. Vault it after today's contest
+  scores." (Answered: option A — block until scoring completes.)
+- **Remove (destroy):**
+  - From the Vault page, click a pre-vaulted card → confirm
+    ("Destroy this card for N coins? This can't be undone.").
+  - Confirm destroys the card permanently, credits tier-scaled
+    coins, frees a cap slot.
+  - **Refund formula:** ~15% of the card's quick-sell value at its
+    tier (bronze / silver / gold / diamond), much less than quick-
+    sell. Exact coin values computed in the SQL fn from economy
+    config; finalize numeric in the roadmap task.
+- **End-of-season ceremony:**
+  - Review screen shows the pre-vaulted set + remaining collection.
+  - User can **last-chance destroy** pre-vaulted cards (same
+    dialog, same refund) to free cap slots.
+  - If fewer than 10 pre-vaulted, user picks from collection to
+    reach 10 (existing ceremony flow).
+  - Final confirm = hard lock. After lock: no destroy, no add, no
+    swap.
+
+### Acceptance
+
+- [ ] User can vault from Collection detail drawer.
+- [ ] User can vault from lineup detail drawer.
+- [ ] Vaulted card cannot be dragged into a slot, cannot be quick-
+  sold, cannot be extended.
+- [ ] Vault page lists pre-vaulted cards with the muted / ribbon
+  treatment and a destroy action.
+- [ ] Destroy refunds tier-scaled coins (15% of quick-sell rate),
+  removes the card permanently, frees the cap slot.
+- [ ] Cap of 10 is enforced on add; blocked state shows reason.
+- [ ] Submitted-lineup guard prevents vaulting until the contest
+  scores.
+- [ ] Ceremony reuses existing pre-vaulted records; user can destroy
+  during ceremony, cannot exceed 10.
+- [ ] All state changes go through SQL fns (per CLAUDE.md §7).
+- [ ] Append-only audit row on every destroy.
+
+### Dependencies
+
+- **SQL fns:**
+  - `vault_card_midseason(card_id)` — validates cap, not-frozen,
+    not-in-locked-lineup; inserts into vault; marks the card.
+  - `destroy_vaulted_card(card_id)` — destroys the card, credits
+    coins via `spend_coins`-mirror, appends to audit.
+  - `commit_vault_selection(card_ids)` — existing; tighten to
+    ceremony-only (idempotent if cap is already full).
+- **Server Actions** in `app/actions/vault.ts`:
+  `vaultCardMidseason`, `destroyVaultedCard`.
+- **Schema:**
+  - `card.vaulted_at timestamptz null` + `card.vault_source
+    enum('midseason','ceremony') null`. RLS keeps the card visible
+    to its owner but blocks playability via the existing playable-
+    predicate path.
+  - `vault_card_destroy` append-only audit table:
+    `(id, user_id, card_id, tier, refund_coins, created_at)`.
+- **UI:**
+  - Vaulted card face treatment: muted tier frame + corner ribbon /
+    stamp ("VAULTED").
+  - "Add to Vault" action in both detail drawers.
+  - Vault page updated to surface pre-vaulted cards alongside the
+    ceremony CTA (in-season) and the ceremony review (season-end).
+
+### Trade-offs
+
+- **Freeze-on-vault vs play-until-contract-ends.** Freeze is the
+  simplest rule and matches "cosmetic keepsake" framing. Play-
+  through adds lifecycle complexity (vaulted-but-playable states).
+- **15% refund** is generous enough to soften a mistake but small
+  enough to discourage exploiting the vault as a coin sink. If a
+  pack → vault → destroy arbitrage appears, drop to 5% or add a
+  cooldown.
+- **Cap enforced on add** (not rolling at ceremony). Simpler for
+  users; forces a destroy to free slots. Ceremony last-chance-
+  destroy catches the edge where someone wants to swap in a late-
+  season favorite.
+
+---
+
+## 8. Lineup shell — right sidebar + no-scroll bottom strip
+
+### Goal
+
+The lineup page today is a single scrolling column: header → diamond
+→ bench → tokens → auto-sub controls. Even on a 1080p laptop, users
+scroll to reach auto-subs. Refactor into a fixed-viewport shell:
+diamond center, persistent right sidebar, stacked bottom strip. **No
+page scroll at 800px viewport height.**
+
+### Layout
+
+```
+┌────────────────────────────────────────────────────┐
+│  Header (contest countdown, nav)                   │
+├───────────────────────────────────┬────────────────┤
+│                                   │  Sidebar       │
+│                                   │  ─────────     │
+│         Diamond (10 slots)        │  Readiness     │
+│                                   │  Projected FP  │
+│                                   │  Auto-subs     │
+│                                   │  Submit CTA    │
+├───────────────────────────────────┴────────────────┤
+│  Bench (horizontal scroll inside strip)            │
+├────────────────────────────────────────────────────┤
+│  Tokens tray (horizontal scroll inside strip)      │
+└────────────────────────────────────────────────────┘
+```
+
+### Behavior
+
+- **Sidebar:** persistent right column, ~288px (Tailwind `w-72`),
+  visual treatment mirrors the Collection sidebar
+  (`src/app/(app)/collection/collection-grid.tsx` lines 162–254):
+  same uppercase-tracked section headers, mono numeric values,
+  section gap. Contents top-to-bottom:
+  - **Readiness:** `10 / 10 slots filled`; per-slot warnings
+    (missing position, low contract, token conflicts).
+  - **Projected FP:** sum across slotted players, live-updating as
+    cards change.
+  - **Auto-subs:** the toggles relocated from their current below-
+    bench position.
+  - **Submit CTA:** "Submit Lineup" button anchored at the sidebar
+    bottom with the contest-deadline countdown directly above.
+- **Diamond** fills the remaining main-row width (left of sidebar).
+- **Bottom strip — two stacked rows:**
+  - **Bench row:** Small cards, ~160px tall, horizontal scroll
+    inside the row when cards overflow.
+  - **Tokens tray row:** ~72px tall, circular pips (§5), horizontal
+    scroll same-pattern.
+  - Rows have a subtle divider; neither collapses.
+- **Budget at 800px viewport:**
+  - Header ~64px
+  - Main (diamond + sidebar) flex-1, ~504px
+  - Bench row ~160px
+  - Tokens row ~72px
+  - Total ~800px.
+- Below 800px viewport height, page falls back to page scroll (soft
+  degradation, no hard layout break).
+
+### Acceptance
+
+- [ ] On 1280×800 viewport, lineup page fits with no page scroll.
+- [ ] Bench + tokens rows anchored to viewport bottom at any height
+  ≥ 800px.
+- [ ] Sidebar visible on every lineup state (empty / partial / full
+  / submitted).
+- [ ] Auto-sub toggles reproduce current behavior from the sidebar.
+- [ ] Submit CTA lives in the sidebar; no duplicate button elsewhere.
+- [ ] Projected FP updates within 100ms of any slot change.
+- [ ] Below 800px viewport, page degrades to scroll without layout
+  break (spot-checked at 1280×700 and 1280×600).
+
+### Dependencies
+
+- New shell component: `src/components/lineup/LineupShell.tsx`.
+- Lineup route refactor: `src/app/(app)/lineup/page.tsx` delegates
+  layout to the new shell.
+- Extract Collection sidebar treatment into
+  `src/components/layout/SidebarCard.tsx` (shared primitive: section
+  header, mono value, divider) consumed by both pages.
+- Readiness state derived from the existing lineup slot state
+  machine.
+- Projected FP: existing `projectFantasyPoints` helper if present;
+  otherwise simple sum over `card.projected_fp` (confirm field name
+  during roadmap task).
+- Auto-sub component — relocate, do not rewrite.
+
+### Trade-offs
+
+- **Desktop-only.** ≥800px rule is fine because v1 is desktop-only
+  per `draft-deck-ui-ux-spec.md` §1.
+- **Fixed sidebar width** eats horizontal space on narrow laptops
+  (13" @ 1280). 288px sidebar leaves ~992px for diamond — still
+  comfortable.
+- **No sidebar collapse.** Keeps the UI predictable; adds density
+  cost. Collapse is a later polish if needed.
+- **Tokens row always present.** Empty-state ("No tokens yet —
+  earn some from packs") rather than collapsing the row; keeps
+  layout stable.
+
+---
+
+## 9. Not in scope for v1.2
+
+Carries forward §4 entries that remain parked, plus new deferrals:
+
+- **Slot ↔ slot reorder and slot ↔ bench drag** — needs
+  `swap_lineup_slots` SQL fn (ADR-0011 open item #2). §6's "Remove
+  from slot" button covers slot → bench by click for now.
+- **Pack opening reveal redesign** — still parked as its own mini-
+  spec.
+- **Tier foil motion** (silver shine, gold bloom, diamond shimmer).
+- **Onboarding flow pass.**
+- **Live contest view polish.**
+- **Empty + error state sweep.**
+- **Accessibility audit pass** (WCAG 2.1 AA).
+- **Mobile layout.**
+- **Sound design / haptics / artwork.**
