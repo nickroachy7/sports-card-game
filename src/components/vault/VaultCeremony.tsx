@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
 import { commitVaultSelection } from "@/app/actions/vault";
+import { Card, type CardViewModel } from "@/components/card/Card";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { VaultCeremonyPreview, VaultEligibleCard } from "@/lib/contracts/vault";
 
@@ -32,12 +33,21 @@ const MILESTONE_LABELS: Record<string, string> = {
   pitching_wins: "Team Pitching Wins",
 };
 
-function initials(fullName: string): string {
-  return fullName
-    .split(" ")
-    .map((p) => p[0] ?? "")
-    .slice(0, 2)
-    .join("");
+function toViewModel(card: VaultEligibleCard): CardViewModel {
+  return {
+    id: card.card_id,
+    playerName: card.full_name,
+    position: card.positions?.[0] ?? null,
+    teamAbbreviation: card.team_abbreviation,
+    tier: card.current_tier,
+    careerFp: Number(card.career_fp_total),
+    contractPlays: card.contract_plays_remaining,
+    contractMax: 15,
+    playerStatus: "active",
+    isExpired: card.is_expired,
+    hasAppliedToken: false,
+    photoUrl: null,
+  };
 }
 
 function CardThumb({
@@ -52,7 +62,6 @@ function CardThumb({
   onToggle?: () => void;
 }) {
   const color = TIER_COLOR[card.current_tier];
-  const position = card.positions?.[0] ?? "";
   return (
     <button
       type="button"
@@ -62,30 +71,15 @@ function CardThumb({
         dissolving ? "pointer-events-none opacity-0" : "hover:scale-[1.03]"
       }`}
       style={{ transitionDuration: dissolving ? "2500ms" : "180ms" }}
+      aria-pressed={selected}
     >
       <div
-        className="flex flex-col overflow-hidden rounded-md border-2 bg-[var(--surface-2)]"
+        className="rounded-md"
         style={{
-          borderColor: selected ? "#f5f1e8" : color,
-          boxShadow: selected ? "0 0 0 3px rgba(245, 241, 232, 0.3)" : undefined,
-          width: 96,
-          height: 134,
+          boxShadow: selected ? "0 0 0 3px rgba(245, 241, 232, 0.55)" : undefined,
         }}
       >
-        <div className="flex flex-1 items-center justify-center text-[var(--text-3)]">
-          <span className="font-mono text-[10px] uppercase tracking-wider">
-            {initials(card.full_name)}
-          </span>
-        </div>
-        <div className="flex flex-col gap-0.5 bg-[var(--surface)] px-1.5 py-1">
-          <span className="truncate text-[10px] font-semibold leading-tight text-[var(--text)]">
-            {card.full_name}
-          </span>
-          <div className="flex items-center justify-between text-[9px] text-[var(--text-3)]">
-            <span className="font-mono">{position.slice(0, 3).toUpperCase()}</span>
-            <span className="font-mono">{Number(card.career_fp_total).toFixed(0)} FP</span>
-          </div>
-        </div>
+        <Card size="small" card={toViewModel(card)} />
       </div>
       <span
         className="font-mono text-[10px] uppercase tracking-wider"

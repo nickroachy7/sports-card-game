@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 
+import { Card, type CardSize, type CardViewModel } from "@/components/card/Card";
+import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
+
 export const metadata: Metadata = {
   title: "Palette · Draft Deck",
   description: "Design-token smoke test for the Draft Deck theme.",
@@ -28,6 +31,31 @@ const tierSwatches: Swatch[] = [
   { token: "--tier-gold", hex: "#D4A647", role: "Gold frame" },
   { token: "--tier-diamond", hex: "#A8DDE2", role: "Diamond frame" },
 ];
+
+const TIERS: CardTier[] = ["bronze", "silver", "gold", "diamond"];
+const SIZES: CardSize[] = ["small", "medium", "large"];
+
+function mockCard(
+  tier: CardTier,
+  overrides: Partial<CardViewModel> & { longName?: boolean } = {},
+): CardViewModel {
+  const { longName, ...rest } = overrides;
+  return {
+    id: `mock-${tier}-${longName ? "long" : "short"}`,
+    playerName: longName ? "Paul Goldschmidt Jr." : "Jose Caballero",
+    position: "Shortstop",
+    teamAbbreviation: "NYY",
+    tier,
+    careerFp: 1247,
+    contractPlays: 12,
+    contractMax: 15,
+    playerStatus: "active" as PlayerStatus,
+    isExpired: false,
+    hasAppliedToken: false,
+    photoUrl: null,
+    ...rest,
+  };
+}
 
 function SwatchCard({ swatch }: { swatch: Swatch }) {
   return (
@@ -78,6 +106,31 @@ export default function PalettePage() {
             <SwatchCard key={s.token} swatch={s} />
           ))}
         </div>
+      </section>
+
+      <section aria-labelledby="cards-heading" className="mb-10">
+        <h2 id="cards-heading" className="mb-1 text-xl font-semibold">
+          Card state matrix (polish spec §2)
+        </h2>
+        <p className="mb-4 text-sm text-[var(--text-2)]">
+          All three sizes × every tier × status + token permutations. Small should show the same
+          anatomy as Medium (position chip, team chip, name, FP, contract count, token badge) — just
+          scaled.
+        </p>
+
+        {SIZES.map((size) => (
+          <div key={size} className="mb-8">
+            <h3 className="mb-3 text-sm uppercase tracking-wider text-[var(--text-3)]">{size}</h3>
+            <div className="flex flex-wrap items-start gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-6">
+              {TIERS.map((tier) => (
+                <Card key={`${size}-${tier}`} size={size} card={mockCard(tier)} />
+              ))}
+              <Card size={size} card={mockCard("gold", { hasAppliedToken: true })} />
+              <Card size={size} card={mockCard("silver", { playerStatus: "il", longName: true })} />
+              <Card size={size} card={mockCard("bronze", { isExpired: true })} />
+            </div>
+          </div>
+        ))}
       </section>
 
       <section aria-labelledby="type-heading">

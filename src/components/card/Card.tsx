@@ -101,10 +101,11 @@ export function Card({
           backgroundColor: "var(--surface)",
         }}
       >
-        {/* Photo area (top ~60%). Fallback silhouette + number. */}
+        {/* Photo area. Polish spec §2 — matches Medium proportions at
+            every size so Small reads as "Medium anatomy, scaled." */}
         <div
           className="absolute inset-x-0 top-0 flex items-center justify-center text-[var(--text-3)]"
-          style={{ height: isSmall ? "75%" : isLarge ? "62%" : "65%" }}
+          style={{ height: isSmall ? "58%" : isLarge ? "62%" : "60%" }}
         >
           {card.photoUrl ? (
             // biome-ignore lint/performance/noImgElement: BDL CDN off-domain, no next/image loader
@@ -112,7 +113,7 @@ export function Card({
           ) : (
             <span
               className="font-sans font-bold"
-              style={{ fontSize: isSmall ? 22 : isLarge ? 72 : 36 }}
+              style={{ fontSize: isSmall ? 20 : isLarge ? 72 : 36 }}
             >
               {initials || "?"}
             </span>
@@ -120,11 +121,14 @@ export function Card({
         </div>
 
         {/* Position tag — top-left. */}
-        {card.position && !isSmall && (
+        {card.position && (
           <span
-            className="absolute left-2 top-2 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-sans font-semibold uppercase tracking-wider text-[var(--text)]"
+            className="absolute rounded bg-[var(--surface-2)] font-sans font-semibold uppercase tracking-wider text-[var(--text)]"
             style={{
-              fontSize: isLarge ? 12 : 10,
+              left: isSmall ? 4 : 8,
+              top: isSmall ? 4 : 8,
+              padding: isSmall ? "1px 3px" : "2px 6px",
+              fontSize: isSmall ? 8 : isLarge ? 12 : 10,
               border: "1px solid var(--border)",
             }}
           >
@@ -133,11 +137,14 @@ export function Card({
         )}
 
         {/* Team chip — top-right. */}
-        {card.teamAbbreviation && !isSmall && (
+        {card.teamAbbreviation && (
           <span
-            className="absolute right-2 top-2 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono font-semibold uppercase tracking-wider text-[var(--text)]"
+            className="absolute rounded bg-[var(--surface-2)] font-mono font-semibold uppercase tracking-wider text-[var(--text)]"
             style={{
-              fontSize: isLarge ? 11 : 9,
+              right: isSmall ? 4 : 8,
+              top: isSmall ? 4 : 8,
+              padding: isSmall ? "1px 3px" : "2px 6px",
+              fontSize: isSmall ? 8 : isLarge ? 11 : 9,
               border: "1px solid var(--border)",
             }}
           >
@@ -149,12 +156,12 @@ export function Card({
         {pill && (
           <span
             className={cn(
-              "absolute left-1/2 flex -translate-x-1/2 items-center rounded px-2 font-sans font-semibold uppercase tracking-wider",
+              "absolute left-1/2 flex -translate-x-1/2 items-center rounded font-sans font-semibold uppercase tracking-wider",
               isSmall
-                ? "top-1.5 h-3.5 text-[9px]"
+                ? "top-4 h-3.5 px-1 text-[8px]"
                 : isLarge
-                  ? "top-3 h-5 text-[12px]"
-                  : "top-2.5 h-4 text-[10px]",
+                  ? "top-3 h-5 px-2 text-[12px]"
+                  : "top-2.5 h-4 px-2 text-[10px]",
             )}
             style={{ backgroundColor: pill.bg, color: pill.text }}
           >
@@ -162,47 +169,58 @@ export function Card({
           </span>
         )}
 
-        {/* Stats footer (hidden at Small). */}
-        {!isSmall && (
+        {/* Stats footer. Polish spec §2 — now rendered at every size. */}
+        <div
+          className="absolute inset-x-0 bottom-0 flex flex-col border-t border-[var(--border)] bg-[var(--surface-2)]"
+          style={{
+            padding: isSmall ? "3px 5px" : isLarge ? "8px 12px" : "4px 8px",
+            gap: isSmall ? 0 : 2,
+          }}
+        >
           <div
-            className="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 border-t border-[var(--border)] bg-[var(--surface-2)]"
+            className="truncate font-sans font-bold uppercase tracking-wide text-[var(--text)]"
             style={{
-              padding: isLarge ? "8px 12px" : "4px 8px",
+              fontSize: isSmall ? 9 : isLarge ? 18 : 12,
+              letterSpacing: "0.02em",
+              lineHeight: 1.15,
             }}
           >
-            <div
-              className="truncate font-sans font-bold uppercase tracking-wide text-[var(--text)]"
-              style={{ fontSize: isLarge ? 18 : 12, letterSpacing: "0.02em" }}
-            >
-              {card.playerName}
-            </div>
-            <div className="flex items-center justify-between">
-              <span
-                className="font-mono font-bold"
-                style={{
-                  fontSize: isLarge ? 16 : 12,
-                  color: "var(--text)",
-                }}
-              >
-                {Math.round(card.careerFp).toLocaleString()} FP
-              </span>
-              <span
-                className="font-mono"
-                style={{
-                  fontSize: isLarge ? 13 : 11,
-                  color: contract.textColor,
-                }}
-              >
-                {card.contractPlays}/{card.contractMax}
-              </span>
-            </div>
-            {card.hasAppliedToken && (
-              <span className="mt-0.5 inline-block rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text-2)]">
-                + Token
-              </span>
-            )}
+            {card.playerName}
           </div>
-        )}
+          <div className="flex items-center justify-between" style={{ lineHeight: 1.1 }}>
+            <span
+              className="font-mono font-bold"
+              style={{
+                fontSize: isSmall ? 9 : isLarge ? 16 : 12,
+                color: "var(--text)",
+              }}
+            >
+              {Math.round(card.careerFp).toLocaleString()} FP
+            </span>
+            <span
+              className="font-mono"
+              style={{
+                fontSize: isSmall ? 8 : isLarge ? 13 : 11,
+                color: contract.textColor,
+              }}
+            >
+              {card.contractPlays}/{card.contractMax}
+            </span>
+          </div>
+          {card.hasAppliedToken && (
+            <span
+              className="inline-block rounded border border-[var(--border)] bg-[var(--surface)] font-semibold uppercase tracking-wide text-[var(--text-2)]"
+              style={{
+                marginTop: isSmall ? 1 : 2,
+                padding: isSmall ? "0 3px" : "1px 6px",
+                fontSize: isSmall ? 7 : 9,
+                alignSelf: "flex-start",
+              }}
+            >
+              + TOKEN
+            </span>
+          )}
+        </div>
       </div>
     </>
   );
