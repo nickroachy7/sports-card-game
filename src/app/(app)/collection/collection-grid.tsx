@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { Card, type CardViewModel } from "@/components/card/Card";
+import { SidebarRow, SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { type CardTier, type PlayerStatus, TIER_LABEL } from "@/lib/contracts/cards";
-import { cn } from "@/lib/utils";
 
 export type CollectionCard = CardViewModel & {
   positions: string[];
@@ -160,27 +160,15 @@ export function CollectionGrid({
 
       {/* Right rail */}
       <aside className="hidden w-60 shrink-0 flex-col gap-6 md:flex">
-        <section>
-          <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Collection</h2>
-          <p
-            className={cn(
-              "mt-1 font-mono text-2xl font-bold",
-              nearCap ? "text-[#D4A647]" : "text-[var(--text)]",
-            )}
-          >
-            {cards.length} / {collectionCap}
-          </p>
-        </section>
+        <SidebarSection title="Collection">
+          <SidebarStat value={`${cards.length} / ${collectionCap}`} accent={nearCap} />
+        </SidebarSection>
 
-        <section className="flex flex-col gap-1">
-          <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Tiers</h2>
+        <SidebarSection title="Tiers">
           {(["diamond", "gold", "silver", "bronze"] as CardTier[]).map((t) => (
-            <div key={t} className="flex items-center justify-between text-sm text-[var(--text-2)]">
-              <span>{TIER_LABEL[t]}</span>
-              <span className="font-mono text-[var(--text)]">{tierBreakdown[t]}</span>
-            </div>
+            <SidebarRow key={t} label={TIER_LABEL[t]} value={tierBreakdown[t]} />
           ))}
-        </section>
+        </SidebarSection>
 
         <FilterSelect
           label="Position"

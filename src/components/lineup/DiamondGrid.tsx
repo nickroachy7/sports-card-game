@@ -53,7 +53,7 @@ export function DiamondGrid({
 
   return (
     <div
-      className="mx-auto grid w-full max-w-3xl justify-items-center gap-y-6 px-4 py-8"
+      className="mx-auto grid w-full max-w-3xl justify-items-center gap-y-3 px-4 py-4"
       style={{
         gridTemplateColumns: "repeat(5, minmax(96px, 1fr))",
         gridTemplateRows: "repeat(4, auto)",

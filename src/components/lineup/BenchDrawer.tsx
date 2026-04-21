@@ -37,7 +37,7 @@ export function BenchDrawer({ cards, assignedCardIds, locked }: Props) {
   }, [cards, filter, search, assignedCardIds]);
 
   return (
-    <section className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-4">
+    <section className="flex flex-col gap-2 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2">
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Bench</h2>
@@ -67,13 +67,13 @@ export function BenchDrawer({ cards, assignedCardIds, locked }: Props) {
       </header>
 
       {filtered.length === 0 ? (
-        <div className="rounded border border-dashed border-[var(--border)] px-4 py-6 text-center text-xs text-[var(--text-3)]">
+        <div className="flex h-[140px] items-center justify-center rounded border border-dashed border-[var(--border)] px-4 text-center text-xs text-[var(--text-3)]">
           {cards.length === 0
             ? "No cards yet. Open a pack from the Shop to fill your bench."
             : "No bench cards match the filter."}
         </div>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-2">
+        <div className="flex gap-3 overflow-x-auto pb-1">
           {filtered.map((card) => (
             <BenchCard
               key={card.id}

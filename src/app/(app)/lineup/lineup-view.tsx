@@ -12,13 +12,12 @@ import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { DiamondGrid } from "@/components/lineup/DiamondGrid";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
+import { LineupShell } from "@/components/lineup/LineupShell";
+import { LineupSidebar } from "@/components/lineup/LineupSidebar";
 import { TokenTray } from "@/components/lineup/TokenTray";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import type { LineupCardVM, LineupTokenVM, LineupViewProps } from "@/lib/lineup/types";
-import { cn } from "@/lib/utils";
 
 type SlotFill = {
   card: LineupCardVM | null;
@@ -110,7 +109,6 @@ export function LineupView(props: LineupViewProps) {
   }, [optimisticSlots]);
 
   const filledCount = optimisticSlots.filter((s) => s.cardId !== null).length;
-  const tokensApplied = props.tokens.filter((t) => t.appliedToCardId !== null).length;
   const canSubmit = filledCount === 10 && !locked && !submitting;
 
   function handleCardDropped(position: LineupPosition, cardId: string | null) {
@@ -194,32 +192,20 @@ export function LineupView(props: LineupViewProps) {
   return (
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
-      <div className="flex min-h-full flex-col bg-[var(--bg)]">
-        {/* Header strip */}
-        <header className="flex items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
-          <div className="flex flex-col">
-            <h1 className="font-sans text-base font-bold tracking-tight text-[var(--text)]">
-              {props.contestName}
-            </h1>
-            <span className="text-xs text-[var(--text-3)]">
-              {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
-            </span>
-          </div>
-          <div className="flex items-center gap-6 text-xs text-[var(--text-2)]">
-            <span className="font-mono">
-              <span className="text-[var(--text)]">{filledCount}</span> / 10 slots
-            </span>
-            <span className="font-mono">
-              <span className="text-[var(--text)]">{tokensApplied}</span> tokens applied
-            </span>
-            <span className="font-mono uppercase tracking-wider">
-              Auto-sub: <span className="text-[var(--text)]">{modeLabel(mode)}</span>
-            </span>
-          </div>
-        </header>
-
-        {/* Diamond */}
-        <div className="flex-1 overflow-auto">
+      <LineupShell
+        header={
+          <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
+            <div className="flex flex-col">
+              <h1 className="font-sans text-base font-bold tracking-tight text-[var(--text)]">
+                {props.contestName}
+              </h1>
+              <span className="text-xs text-[var(--text-3)]">
+                {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
+              </span>
+            </div>
+          </header>
+        }
+        diamond={
           <DiamondGrid
             slotFills={slotFills}
             locked={locked}
@@ -227,82 +213,26 @@ export function LineupView(props: LineupViewProps) {
             onTokenDropped={handleTokenDropped}
             onRemoveToken={handleRemoveToken}
           />
-        </div>
-
-        {/* Bench */}
-        <BenchDrawer cards={props.cards} assignedCardIds={assignedCardIds} locked={locked} />
-
-        {/* Tokens */}
-        <TokenTray tokens={props.tokens} locked={locked} />
-
-        {/* Auto-sub + Submit */}
-        <div className="flex items-center justify-between gap-4 border-t border-[var(--border)] bg-[var(--surface)] px-6 py-3">
-          <fieldset className="flex items-center gap-4" disabled={locked}>
-            <legend className="sr-only">Auto-sub mode</legend>
-            <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">Auto-sub</span>
-            <ModeRadio
-              label="Smart Auto"
-              value="smart_auto"
-              current={mode}
-              onChange={handleModeChange}
-            />
-            <ModeRadio
-              label="Manual Priority"
-              value="manual_priority"
-              current={mode}
-              onChange={handleModeChange}
-            />
-          </fieldset>
-          <Separator orientation="vertical" className="h-6" />
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
-            {submitting
-              ? "Submitting…"
-              : locked
-                ? "Locked"
-                : filledCount < 10
-                  ? `Fill ${10 - filledCount} more slot${10 - filledCount === 1 ? "" : "s"}`
-                  : "Submit lineup"}
-          </Button>
-        </div>
-      </div>
+        }
+        sidebar={
+          <LineupSidebar
+            slotFills={slotFills}
+            autoSubMode={mode}
+            onAutoSubModeChange={handleModeChange}
+            canSubmit={canSubmit}
+            submitting={submitting}
+            locked={locked}
+            lockCountdown={lockCountdown}
+            onSubmit={handleSubmit}
+          />
+        }
+        bench={
+          <BenchDrawer cards={props.cards} assignedCardIds={assignedCardIds} locked={locked} />
+        }
+        tokens={<TokenTray tokens={props.tokens} locked={locked} />}
+      />
     </DndProvider>
   );
-}
-
-function ModeRadio({
-  label,
-  value,
-  current,
-  onChange,
-}: {
-  label: string;
-  value: AutoSubMode;
-  current: AutoSubMode;
-  onChange: (v: AutoSubMode) => void;
-}) {
-  const active = value === current;
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-2)] transition-colors",
-        active && "text-[var(--text)]",
-      )}
-    >
-      <input
-        type="radio"
-        name="auto-sub-mode"
-        value={value}
-        checked={active}
-        onChange={() => onChange(value)}
-        className="accent-[var(--text)]"
-      />
-      <span>{label}</span>
-    </label>
-  );
-}
-
-function modeLabel(m: AutoSubMode): string {
-  return m === "smart_auto" ? "Smart" : "Manual";
 }
 
 /** Short countdown string to the lock time. 30-second tick granularity
