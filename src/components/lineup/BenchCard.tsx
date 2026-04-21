@@ -5,10 +5,9 @@ import { useDrag } from "react-dnd";
 import { getEmptyImage } from "react-dnd-html5-backend";
 
 import { Card } from "@/components/card/Card";
+import { dragResult } from "@/components/card/drag-layer-state";
 import type { LineupCardVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
-
-import { dragResult } from "./drag-layer-state";
 import { type CardDragItem, DRAG_TYPES } from "./drag-types";
 
 type Props = {

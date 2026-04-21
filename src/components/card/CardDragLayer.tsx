@@ -4,11 +4,9 @@ import { AnimatePresence, type HTMLMotionProps, motion, useSpring } from "motion
 import { useEffect, useRef, useState } from "react";
 import { useDragLayer } from "react-dnd";
 
-import { Card } from "@/components/card/Card";
-import type { LineupCardVM } from "@/lib/lineup/types";
+import { Card, type CardViewModel } from "@/components/card/Card";
 
 import { dragResult } from "./drag-layer-state";
-import { type CardDragItem, DRAG_TYPES } from "./drag-types";
 
 /**
  * Polish spec §1 — physical card motion for any card-movement surface.
@@ -17,25 +15,40 @@ import { type CardDragItem, DRAG_TYPES } from "./drag-types";
  * visuals. When a card-type drag is in flight, we render the real <Card>
  * at the cursor with an iOS-snappy spring (stiffness 400, damping 30)
  * and a 3° max tilt from cursor velocity. The source component
- * (BenchCard / LineupSlot) suppresses the default HTML5 ghost via
- * getEmptyImage, so this layer's render IS the drag ghost.
+ * (BenchCard / LineupSlot / vault CardThumb) suppresses the default
+ * HTML5 ghost via getEmptyImage, so this layer's render IS the drag
+ * ghost.
  *
- * On a cancelled drop (released over empty space or an invalid slot),
+ * On a cancelled drop (released over empty space or an invalid target),
  * the card bounces back to the source origin with a short horizontal
  * shake — §1 Behavior table "Drop on invalid."
+ *
+ * Domain-agnostic: `accepts` is the react-dnd drag-type string (or
+ * array) this instance should react to; `resolveCard` maps the drag
+ * item's cardId to a CardViewModel. Lineup and vault each mount their
+ * own instance inside their own DndProvider tree.
  */
 
+type Accepts = string | string[];
+
+type DragItemShape = { cardId: string };
+
 type Props = {
-  /** Resolver from a cardId to the ViewModel the layer needs to render. */
-  resolveCard: (cardId: string) => LineupCardVM | null;
+  accepts: Accepts;
+  resolveCard: (cardId: string) => CardViewModel | null;
 };
 
 const SPRING = { stiffness: 400, damping: 30, mass: 1 } as const;
 
-export function CardDragLayer({ resolveCard }: Props) {
+function matches(typeHere: string | symbol | null, accepts: Accepts): boolean {
+  if (typeof typeHere !== "string") return false;
+  return Array.isArray(accepts) ? accepts.includes(typeHere) : accepts === typeHere;
+}
+
+export function CardDragLayer({ accepts, resolveCard }: Props) {
   const { isDragging, item, currentOffset, initialSourceOffset } = useDragLayer((monitor) => ({
-    isDragging: monitor.isDragging() && monitor.getItemType() === DRAG_TYPES.CARD,
-    item: monitor.getItem() as CardDragItem | null,
+    isDragging: monitor.isDragging() && matches(monitor.getItemType(), accepts),
+    item: monitor.getItem() as DragItemShape | null,
     currentOffset: monitor.getClientOffset(),
     initialSourceOffset: monitor.getInitialSourceClientOffset(),
   }));
@@ -48,25 +61,20 @@ export function CardDragLayer({ resolveCard }: Props) {
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const prevIsDragging = useRef(false);
   const [bounce, setBounce] = useState<{
-    card: LineupCardVM;
+    card: CardViewModel;
     from: { x: number; y: number };
     to: { x: number; y: number };
     key: number;
   } | null>(null);
 
-  // Enter / exit transitions (side-effects on spring values).
   useEffect(() => {
     if (isDragging && !prevIsDragging.current) {
-      // Pick-up: jump to the card's rest position so the spring doesn't
-      // animate from (0,0), then scale up.
       if (initialSourceOffset) {
         x.jump(initialSourceOffset.x);
         y.jump(initialSourceOffset.y);
       }
       scale.set(1.03);
     } else if (!isDragging && prevIsDragging.current) {
-      // Drop — bounce back if the drop was cancelled and we have both
-      // the last pointer position and a known origin.
       if (!dragResult.lastDropAccepted && lastPointer.current && initialSourceOffset && item) {
         const card = resolveCard(item.cardId);
         if (card) {
@@ -84,8 +92,6 @@ export function CardDragLayer({ resolveCard }: Props) {
     prevIsDragging.current = isDragging;
   }, [isDragging, item, initialSourceOffset, resolveCard, x, y, scale, rotate]);
 
-  // Follow the pointer. Small 0.003 tilt coefficient keeps the tilt
-  // subtle — max ±3° on a fast drag, invisible at rest per spec.
   useEffect(() => {
     if (!currentOffset) return;
     x.set(currentOffset.x);
@@ -95,8 +101,7 @@ export function CardDragLayer({ resolveCard }: Props) {
     lastPointer.current = { x: currentOffset.x, y: currentOffset.y };
   }, [currentOffset, x, y, rotate]);
 
-  const item_ = item;
-  const draggedCard = isDragging && item_ ? resolveCard(item_.cardId) : null;
+  const draggedCard = isDragging && item ? resolveCard(item.cardId) : null;
 
   return (
     <div
@@ -128,7 +133,7 @@ export function CardDragLayer({ resolveCard }: Props) {
 }
 
 type BounceBackProps = {
-  card: LineupCardVM;
+  card: CardViewModel;
   from: { x: number; y: number };
   to: { x: number; y: number };
   onComplete: () => void;

@@ -8,9 +8,10 @@ import { toast } from "sonner";
 
 import { setAutoSubMode, submitLineup, updateLineupSlot } from "@/app/actions/lineup";
 import { applyToken, removeToken } from "@/app/actions/tokens";
+import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
-import { CardDragLayer } from "@/components/lineup/CardDragLayer";
 import { DiamondGrid } from "@/components/lineup/DiamondGrid";
+import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -192,7 +193,7 @@ export function LineupView(props: LineupViewProps) {
 
   return (
     <DndProvider backend={HTML5Backend}>
-      <CardDragLayer resolveCard={resolveCard} />
+      <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
       <div className="flex min-h-full flex-col bg-[var(--bg)]">
         {/* Header strip */}
         <header className="flex items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">

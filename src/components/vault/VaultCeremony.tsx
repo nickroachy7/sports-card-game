@@ -1,13 +1,28 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { DndProvider, useDrag, useDrop } from "react-dnd";
+import { getEmptyImage, HTML5Backend } from "react-dnd-html5-backend";
 
 import { commitVaultSelection } from "@/app/actions/vault";
 import { Card, type CardViewModel } from "@/components/card/Card";
+import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { DissolveCard } from "@/components/card/DissolveCard";
+import { dragResult } from "@/components/card/drag-layer-state";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { VaultCeremonyPreview, VaultEligibleCard } from "@/lib/contracts/vault";
+
+/** Drag type for vault-selection cards. Distinct from lineup's
+ *  "lineup/card" so the lineup drag layer (if ever co-mounted) ignores
+ *  these and vice-versa. */
+const VAULT_DRAG_TYPE = "vault/card";
+
+type VaultDragItem = {
+  cardId: string;
+  /** Where the card is right now: in the grid, or already in the vault. */
+  zone: "grid" | "vault";
+};
 
 const TIER_COLOR: Record<CardTier, string> = {
   bronze: "var(--tier-bronze)",
@@ -56,25 +71,56 @@ function CardThumb({
   selected,
   dissolving,
   dissolveDelay,
+  draggable,
+  zone,
   onToggle,
 }: {
   card: VaultEligibleCard;
   selected: boolean;
   dissolving?: boolean;
   dissolveDelay?: number;
+  /** Enable drag source. Off during dissolve step. */
+  draggable?: boolean;
+  /** Which dropzone contains this card right now. */
+  zone?: "grid" | "vault";
   onToggle?: () => void;
 }) {
   const color = TIER_COLOR[card.current_tier];
-  // Selected cards stay put during the dissolve step (they're heading
-  // to the vault). Unselected cards play the shared dissolve vocab.
   const willDissolve = !!dissolving && !selected;
+  const canDrag = !!draggable && !dissolving;
+
+  const [{ isDragging }, dragRef, preview] = useDrag<VaultDragItem, void, { isDragging: boolean }>(
+    () => ({
+      type: VAULT_DRAG_TYPE,
+      item: () => {
+        dragResult.lastDropAccepted = false;
+        return { cardId: card.card_id, zone: zone ?? "grid" };
+      },
+      canDrag: canDrag,
+      end: (_item, monitor) => {
+        dragResult.lastDropAccepted = monitor.didDrop();
+      },
+      collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    }),
+    [card.card_id, zone, canDrag],
+  );
+
+  useEffect(() => {
+    if (canDrag) preview(getEmptyImage(), { captureDraggingState: true });
+  }, [preview, canDrag]);
+
   return (
     <button
       type="button"
       onClick={onToggle}
       disabled={!!dissolving}
+      ref={(el) => {
+        if (canDrag) dragRef(el);
+      }}
       className={`flex flex-col items-center gap-1 rounded-md transition ${
         dissolving ? "pointer-events-none" : "hover:scale-[1.03]"
+      } ${canDrag && !isDragging ? "cursor-grab active:cursor-grabbing" : ""} ${
+        isDragging ? "opacity-25" : ""
       }`}
       style={{ transitionDuration: "180ms" }}
       aria-pressed={selected}
@@ -99,6 +145,104 @@ function CardThumb({
   );
 }
 
+/** Vault dropzone — drop a grid card here to add it to the preserved
+ *  set. Reject drops when already at 10 or the card is already vaulted. */
+function VaultDropzone({
+  count,
+  onDropCard,
+  onRemoveCard: _onRemoveCard,
+  children,
+}: {
+  count: number;
+  onDropCard: (cardId: string) => void;
+  onRemoveCard: (cardId: string) => void;
+  children: React.ReactNode;
+}) {
+  const full = count >= 10;
+  const [{ isOver, canDrop }, dropRef] = useDrop<
+    VaultDragItem,
+    void,
+    { isOver: boolean; canDrop: boolean }
+  >(
+    () => ({
+      accept: VAULT_DRAG_TYPE,
+      canDrop: (item) => item.zone === "grid" && !full,
+      drop: (item) => {
+        onDropCard(item.cardId);
+      },
+      collect: (monitor) => ({
+        isOver: monitor.isOver(),
+        canDrop: monitor.canDrop(),
+      }),
+    }),
+    [full, onDropCard],
+  );
+
+  const active = isOver && canDrop;
+  const reject = isOver && !canDrop;
+  return (
+    <div
+      ref={(el) => {
+        dropRef(el);
+      }}
+      className={`flex flex-col gap-2 rounded-lg border-2 border-dashed p-4 transition-colors ${
+        active
+          ? "border-[var(--text)] bg-[var(--surface-2)]"
+          : reject
+            ? "border-[#C47262] bg-[var(--surface)]"
+            : "border-[var(--tier-gold,#D4A647)] bg-[var(--surface)]"
+      }`}
+    >
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs uppercase tracking-[0.2em] text-[var(--tier-gold,#D4A647)]">
+          Vault
+        </span>
+        <span className="font-mono text-sm tabular-nums text-[var(--text)]">{count} / 10</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Grid dropzone — release a vaulted card here to un-preserve it. */
+function GridDropzone({
+  onDropCard,
+  children,
+}: {
+  onDropCard: (cardId: string) => void;
+  children: React.ReactNode;
+}) {
+  const [{ isOver, canDrop }, dropRef] = useDrop<
+    VaultDragItem,
+    void,
+    { isOver: boolean; canDrop: boolean }
+  >(
+    () => ({
+      accept: VAULT_DRAG_TYPE,
+      canDrop: (item) => item.zone === "vault",
+      drop: (item) => {
+        onDropCard(item.cardId);
+      },
+      collect: (monitor) => ({
+        isOver: monitor.isOver(),
+        canDrop: monitor.canDrop(),
+      }),
+    }),
+    [onDropCard],
+  );
+  const active = isOver && canDrop;
+  return (
+    <div
+      ref={(el) => {
+        dropRef(el);
+      }}
+      className={`transition-opacity ${active ? "opacity-100" : ""}`}
+    >
+      {children}
+    </div>
+  );
+}
+
 function StatPill({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
@@ -109,6 +253,14 @@ function StatPill({ label, value }: { label: string; value: string | number }) {
 }
 
 export function VaultCeremony(props: Props) {
+  return (
+    <DndProvider backend={HTML5Backend}>
+      <VaultCeremonyInner {...props} />
+    </DndProvider>
+  );
+}
+
+function VaultCeremonyInner(props: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("title");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -119,14 +271,31 @@ export function VaultCeremony(props: Props) {
   const { recap, eligibleCards } = preview;
   const selectedArray = [...selected];
 
-  function toggleCard(id: string) {
+  const cardsById = useMemo(() => {
+    const m = new Map<string, VaultEligibleCard>();
+    for (const c of eligibleCards) m.set(c.card_id, c);
+    return m;
+  }, [eligibleCards]);
+
+  const resolveCard = (id: string): CardViewModel | null => {
+    const c = cardsById.get(id);
+    return c ? toViewModel(c) : null;
+  };
+
+  function selectCard(id: string) {
     setSelected((prev) => {
+      if (prev.has(id) || prev.size >= 10) return prev;
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else if (next.size < 10) {
-        next.add(id);
-      }
+      next.add(id);
+      return next;
+    });
+  }
+
+  function unselectCard(id: string) {
+    setSelected((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
       return next;
     });
   }
@@ -281,7 +450,8 @@ export function VaultCeremony(props: Props) {
                 Preserve up to 10 forever
               </h2>
               <p className="text-sm text-[var(--text-2)]">
-                Tap a card to add or remove it. Unselected cards dissolve when you commit.
+                Drag a card into the vault (or tap to toggle). Unselected cards dissolve when you
+                commit.
               </p>
             </div>
             <div className="flex flex-col items-end gap-2">
@@ -303,21 +473,58 @@ export function VaultCeremony(props: Props) {
               {error}
             </div>
           )}
-          <div className="flex flex-wrap gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-            {eligibleCards.map((card) => (
-              <CardThumb
-                key={card.card_id}
-                card={card}
-                selected={selected.has(card.card_id)}
-                onToggle={() => toggleCard(card.card_id)}
-              />
-            ))}
-            {eligibleCards.length === 0 && (
-              <p className="w-full py-8 text-center text-sm text-[var(--text-3)]">
-                No cards to vault or dissolve.
-              </p>
-            )}
-          </div>
+
+          <CardDragLayer accepts={VAULT_DRAG_TYPE} resolveCard={resolveCard} />
+
+          {/* Vault dropzone — drop cards in here to preserve them. */}
+          <VaultDropzone count={selected.size} onDropCard={selectCard} onRemoveCard={unselectCard}>
+            <div className="flex min-h-[150px] flex-wrap items-center gap-3">
+              {selectedArray.length === 0 && (
+                <p className="w-full py-4 text-center text-sm text-[var(--text-3)]">
+                  Drag or tap cards to preserve up to 10.
+                </p>
+              )}
+              {selectedArray.map((id) => {
+                const card = cardsById.get(id);
+                if (!card) return null;
+                return (
+                  <CardThumb
+                    key={id}
+                    card={card}
+                    selected
+                    draggable
+                    zone="vault"
+                    onToggle={() => unselectCard(id)}
+                  />
+                );
+              })}
+            </div>
+          </VaultDropzone>
+
+          {/* Grid dropzone — eligible but-not-yet-preserved cards. Also
+              accepts drags FROM the vault so you can pull cards back
+              out by dragging them here. */}
+          <GridDropzone onDropCard={unselectCard}>
+            <div className="flex flex-wrap gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+              {eligibleCards
+                .filter((c) => !selected.has(c.card_id))
+                .map((card) => (
+                  <CardThumb
+                    key={card.card_id}
+                    card={card}
+                    selected={false}
+                    draggable
+                    zone="grid"
+                    onToggle={() => selectCard(card.card_id)}
+                  />
+                ))}
+              {eligibleCards.length === 0 && (
+                <p className="w-full py-8 text-center text-sm text-[var(--text-3)]">
+                  No cards to vault or dissolve.
+                </p>
+              )}
+            </div>
+          </GridDropzone>
           <button
             type="button"
             onClick={() => setStep("recap")}
