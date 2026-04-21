@@ -12,6 +12,7 @@ import {
   type VaultCeremonyPreview,
 } from "@/lib/contracts/vault";
 import { getDb } from "@/lib/db/client";
+import { asPgArray } from "@/lib/db/sql-helpers";
 import { createServerClient } from "@/lib/db/supabase";
 import { captureServerEvent, wrapAction } from "@/lib/observability/action";
 
@@ -105,7 +106,7 @@ async function commitVaultSelectionImpl(
       SELECT public.commit_vault_selection(
         ${user.id}::uuid,
         ${parsed.data.seasonId}::uuid,
-        ${parsed.data.cardIds}::uuid[]
+        ${asPgArray(parsed.data.cardIds, "uuid")}
       ) AS commit_vault_selection
     `);
     const raw = res.rows[0]?.commit_vault_selection;
