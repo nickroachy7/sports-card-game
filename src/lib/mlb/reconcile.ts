@@ -73,6 +73,7 @@ export async function reconcileGame(bdlGameId: number): Promise<{
   game_id: string | null;
   slots_updated: number;
   qs_tokens_triggered: number;
+  wins_emitted: number;
 }> {
   const db = getDb();
   const provider = getMLBProvider();
@@ -81,7 +82,7 @@ export async function reconcileGame(bdlGameId: number): Promise<{
     provider.fetchGameStats(bdlGameId),
   )) as unknown as BdlStats[];
   if (stats.length === 0) {
-    return { game_id: null, slots_updated: 0, qs_tokens_triggered: 0 };
+    return { game_id: null, slots_updated: 0, qs_tokens_triggered: 0, wins_emitted: 0 };
   }
 
   type GameRow = { id: string };
@@ -90,7 +91,7 @@ export async function reconcileGame(bdlGameId: number): Promise<{
   `);
   const gameId = gameRow.rows[0]?.id ?? null;
   if (!gameId) {
-    return { game_id: null, slots_updated: 0, qs_tokens_triggered: 0 };
+    return { game_id: null, slots_updated: 0, qs_tokens_triggered: 0, wins_emitted: 0 };
   }
 
   let slotsUpdated = 0;
@@ -172,5 +173,69 @@ export async function reconcileGame(bdlGameId: number): Promise<{
       AND ce.status IN ('live', 'final')
   `);
 
-  return { game_id: gameId, slots_updated: slotsUpdated, qs_tokens_triggered: qsTokensTriggered };
+  // Winning pitcher attribution — BDL doesn't expose decisions, so we
+  // use a "most IP on the winning team" heuristic (≈accurate in ~90%
+  // of games; lead-change attribution for edge cases is out of scope
+  // for launch). Emits a synthetic 'mlb.game.pitcher_win' event so the
+  // existing _finalize_contest_entry milestone counter query picks it
+  // up. Idempotent via the game_event.provider_event_id unique index.
+  const winnerPick = await db.execute<{
+    home_team_id: string | null;
+    away_team_id: string | null;
+    home_runs: number | null;
+    away_runs: number | null;
+  }>(sql`
+    SELECT home_team_id, away_team_id, home_runs, away_runs
+    FROM public.game WHERE id = ${gameId}::uuid
+  `);
+  const g = winnerPick.rows[0];
+  let winsEmitted = 0;
+  if (g && g.home_runs != null && g.away_runs != null && g.home_runs !== g.away_runs) {
+    const winningTeamId = g.home_runs > g.away_runs ? g.home_team_id : g.away_team_id;
+    if (winningTeamId) {
+      // Pick the pitcher with the most IP on the winning team who
+      // appeared in this game.
+      let topBdlId: number | null = null;
+      let topIp = 0;
+      for (const s of stats) {
+        if (typeof s.player?.id !== "number") continue;
+        if (s.ip <= topIp) continue;
+        // Is this player on the winning team? Check via player.team_id.
+        const teamRow = await db.execute<{ team_id: string | null }>(sql`
+          SELECT team_id FROM public.player WHERE bdl_player_id = ${s.player.id} LIMIT 1
+        `);
+        if (teamRow.rows[0]?.team_id !== winningTeamId) continue;
+        topBdlId = s.player.id;
+        topIp = s.ip;
+      }
+      if (topBdlId !== null && topIp >= 3) {
+        const pitcherRow = await db.execute<{ id: string }>(sql`
+          SELECT id FROM public.player WHERE bdl_player_id = ${topBdlId} LIMIT 1
+        `);
+        const pitcherId = pitcherRow.rows[0]?.id ?? null;
+        if (pitcherId) {
+          await db.execute(sql`
+            INSERT INTO public.game_event
+              (game_id, provider_event_id, event_type, source, pitcher_player_id)
+            VALUES (
+              ${gameId}::uuid,
+              'reconcile:pwin:' || ${bdlGameId}::text,
+              'mlb.game.pitcher_win',
+              'reconcile',
+              ${pitcherId}::uuid
+            )
+            ON CONFLICT (provider_event_id) DO NOTHING
+          `);
+          winsEmitted = 1;
+        }
+      }
+    }
+  }
+
+  return {
+    game_id: gameId,
+    slots_updated: slotsUpdated,
+    qs_tokens_triggered: qsTokensTriggered,
+    wins_emitted: winsEmitted,
+  };
 }
