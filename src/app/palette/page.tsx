@@ -4,6 +4,7 @@ import { Card, type CardSize, type CardViewModel } from "@/components/card/Card"
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 
 import { DissolveDemo } from "./dissolve-demo";
+import { TokenPaletteDemo } from "./token-demo";
 
 export const metadata: Metadata = {
   title: "Palette · Draft Deck",
@@ -133,6 +134,24 @@ export default function PalettePage() {
             </div>
           </div>
         ))}
+      </section>
+
+      <section aria-labelledby="tokens-heading" className="mb-10">
+        <h2 id="tokens-heading" className="mb-1 text-xl font-semibold">
+          Applied tokens (polish spec §5)
+        </h2>
+        <p className="mb-4 text-sm text-[var(--text-2)]">
+          Circular pips with hover tooltip. Tray variant is 44px (draggable in the lineup); applied
+          variant is 32px and sits on the card's bottom-right corner, overlaid outside the tier
+          frame. Click the applied pip to enter the two-step remove confirm.
+        </p>
+
+        <TokenPaletteDemo
+          tierCards={(["bronze", "silver", "gold", "diamond"] as CardTier[]).map((tier) => ({
+            tier,
+            card: mockCard(tier),
+          }))}
+        />
       </section>
 
       <section aria-labelledby="dissolve-heading" className="mb-10">

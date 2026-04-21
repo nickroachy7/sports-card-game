@@ -1,9 +1,10 @@
 "use client";
 
-import { X } from "lucide-react";
 import { useDrop } from "react-dnd";
 
 import { Card } from "@/components/card/Card";
+import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
+import type { TokenType } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
 import { isPitcherSlot } from "@/lib/contracts/lineup";
 import type { LineupCardVM } from "@/lib/lineup/types";
@@ -122,25 +123,20 @@ export function LineupSlot({
       <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--text-3)]">
         {position}
       </span>
-      <Card card={card} size="small" />
-      {appliedToken && (
-        <div className="flex items-center gap-1 rounded-full border border-[var(--tier-gold,#D4A647)] bg-[var(--surface)] px-2 py-0.5 font-sans text-[9px] font-semibold uppercase tracking-wider text-[var(--tier-gold,#D4A647)]">
-          <span>{formatTokenLabel(appliedToken.type)}</span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemoveToken(appliedToken.applicationId);
-            }}
-            disabled={locked}
-            aria-label="Remove token"
-            className="flex h-3 w-3 items-center justify-center rounded-full hover:bg-[var(--surface-2)] disabled:opacity-50"
-          >
-            <X className="size-2.5" aria-hidden="true" />
-          </button>
-        </div>
-      )}
-      {!appliedToken && !locked && (
+      <div className="relative">
+        <Card card={card} size="small" />
+        {appliedToken && (
+          <div className="absolute -bottom-2 -right-2 z-10">
+            <AppliedTokenBadge
+              tokenType={appliedToken.type as TokenType}
+              bonusFp={appliedToken.bonusFp}
+              onRemove={() => onRemoveToken(appliedToken.applicationId)}
+              disabled={locked}
+            />
+          </div>
+        )}
+      </div>
+      {!locked && (
         <button
           type="button"
           onClick={() => onCardDropped(null)}
@@ -153,22 +149,3 @@ export function LineupSlot({
     </section>
   );
 }
-
-function formatTokenLabel(tokenType: string): string {
-  switch (tokenType) {
-    case "hr_bonus":
-      return "HR";
-    case "multi_hit_bonus":
-      return "2H";
-    case "sb_bonus":
-      return "SB";
-    case "strikeout_bonus":
-      return "K8+";
-    case "quality_start_bonus":
-      return "QS";
-    default:
-      return tokenType;
-  }
-}
-
-export { formatTokenLabel };

@@ -207,19 +207,6 @@ export function Card({
               {card.contractPlays}/{card.contractMax}
             </span>
           </div>
-          {card.hasAppliedToken && (
-            <span
-              className="inline-block rounded border border-[var(--border)] bg-[var(--surface)] font-semibold uppercase tracking-wide text-[var(--text-2)]"
-              style={{
-                marginTop: isSmall ? 1 : 2,
-                padding: isSmall ? "0 3px" : "1px 6px",
-                fontSize: isSmall ? 7 : 9,
-                alignSelf: "flex-start",
-              }}
-            >
-              + TOKEN
-            </span>
-          )}
         </div>
       </div>
     </>

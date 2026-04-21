@@ -1,8 +1,7 @@
 "use client";
 
+import { TrayTokenPip } from "@/components/token/TrayTokenPip";
 import type { LineupTokenVM } from "@/lib/lineup/types";
-
-import { TokenChip } from "./TokenChip";
 
 type Props = {
   tokens: LineupTokenVM[];
@@ -10,32 +9,30 @@ type Props = {
 };
 
 export function TokenTray({ tokens, locked }: Props) {
-  if (tokens.length === 0) {
-    return (
-      <section className="border-t border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Tokens</h2>
-          <span className="text-xs text-[var(--text-3)]">
-            No tokens yet — pull from Premium packs to earn some.
-          </span>
-        </div>
-      </section>
-    );
-  }
+  const availableCount = tokens.filter((t) => t.appliedToCardId === null).length;
 
   return (
-    <section className="border-t border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-      <div className="flex items-center gap-3">
+    <section className="flex flex-col gap-2 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2">
+      <header className="flex items-center gap-3">
         <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Tokens</h2>
-        <span className="font-mono text-xs text-[var(--text-2)]">
-          {tokens.filter((t) => t.appliedToCardId === null).length} / {tokens.length} available
-        </span>
-      </div>
-      <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-        {tokens.map((token) => (
-          <TokenChip key={token.id} token={token} disabled={locked} />
-        ))}
-      </div>
+        {tokens.length === 0 ? (
+          <span className="text-xs text-[var(--text-3)]">
+            No tokens yet — earn some from Premium packs.
+          </span>
+        ) : (
+          <span className="font-mono text-xs text-[var(--text-2)]">
+            {availableCount} / {tokens.length} available
+          </span>
+        )}
+      </header>
+
+      {tokens.length > 0 && (
+        <div className="flex items-center gap-3 overflow-x-auto py-1">
+          {tokens.map((token) => (
+            <TrayTokenPip key={token.id} token={token} disabled={locked} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

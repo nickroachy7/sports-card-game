@@ -15,9 +15,17 @@ import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupShell } from "@/components/lineup/LineupShell";
 import { LineupSidebar } from "@/components/lineup/LineupSidebar";
 import { TokenTray } from "@/components/lineup/TokenTray";
+import { TokenDragLayer } from "@/components/token/TokenDragLayer";
+import type { TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import type { LineupCardVM, LineupTokenVM, LineupViewProps } from "@/lib/lineup/types";
+
+export type AppliedTokenInfo = {
+  tokenType: TokenType;
+  bonusFp: number;
+  applicationId: string;
+};
 
 type SlotFill = {
   card: LineupCardVM | null;
@@ -189,9 +197,30 @@ export function LineupView(props: LineupViewProps) {
 
   const resolveCard = (cardId: string) => cardsById.get(cardId) ?? null;
 
+  const appliedTokenByCardId = useMemo(() => {
+    const map = new Map<string, AppliedTokenInfo>();
+    for (const [cardId, app] of tokenApps.entries()) {
+      const tok = tokensById.get(app.tokenId);
+      if (!tok) continue;
+      map.set(cardId, {
+        tokenType: tok.tokenType,
+        bonusFp: Number(tok.bonusFp),
+        applicationId: app.id,
+      });
+    }
+    return map;
+  }, [tokenApps, tokensById]);
+
+  const resolveToken = (tokenId: string) => {
+    const tok = tokensById.get(tokenId);
+    if (!tok) return null;
+    return { tokenType: tok.tokenType, bonusFp: Number(tok.bonusFp) };
+  };
+
   return (
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
+      <TokenDragLayer resolveToken={resolveToken} />
       <LineupShell
         header={
           <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
@@ -227,7 +256,13 @@ export function LineupView(props: LineupViewProps) {
           />
         }
         bench={
-          <BenchDrawer cards={props.cards} assignedCardIds={assignedCardIds} locked={locked} />
+          <BenchDrawer
+            cards={props.cards}
+            assignedCardIds={assignedCardIds}
+            appliedTokenByCardId={appliedTokenByCardId}
+            onRemoveToken={handleRemoveToken}
+            locked={locked}
+          />
         }
         tokens={<TokenTray tokens={props.tokens} locked={locked} />}
       />

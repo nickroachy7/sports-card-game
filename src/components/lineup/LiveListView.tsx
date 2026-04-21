@@ -3,11 +3,16 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
-import { formatTokenLabel } from "@/components/lineup/LineupSlot";
+import type { TokenType } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import type { LineupCardVM } from "@/lib/lineup/types";
+import { TOKEN_SHORT_LABEL } from "@/lib/token/display";
 import { cn } from "@/lib/utils";
+
+function formatTokenLabel(tokenType: string): string {
+  return TOKEN_SHORT_LABEL[tokenType as TokenType] ?? tokenType;
+}
 
 type SlotLive = {
   position: LineupPosition;

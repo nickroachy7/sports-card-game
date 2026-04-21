@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+
+import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
 import { Input } from "@/components/ui/input";
 import type { LineupCardVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
@@ -11,10 +13,18 @@ type PositionFilter = "all" | "hitters" | "pitchers";
 type Props = {
   cards: LineupCardVM[];
   assignedCardIds: Set<string>;
+  appliedTokenByCardId: Map<string, AppliedTokenInfo>;
+  onRemoveToken: (applicationId: string) => void;
   locked: boolean;
 };
 
-export function BenchDrawer({ cards, assignedCardIds, locked }: Props) {
+export function BenchDrawer({
+  cards,
+  assignedCardIds,
+  appliedTokenByCardId,
+  onRemoveToken,
+  locked,
+}: Props) {
   const [filter, setFilter] = useState<PositionFilter>("all");
   const [search, setSearch] = useState("");
 
@@ -79,7 +89,10 @@ export function BenchDrawer({ cards, assignedCardIds, locked }: Props) {
               key={card.id}
               card={card}
               assigned={assignedCardIds.has(card.id)}
+              appliedToken={appliedTokenByCardId.get(card.id)}
+              onRemoveToken={onRemoveToken}
               disabled={locked || assignedCardIds.has(card.id) || card.isExpired}
+              locked={locked}
             />
           ))}
         </div>
