@@ -1,6 +1,12 @@
 "use client";
 
-import { AnimatePresence, type HTMLMotionProps, motion, useSpring } from "motion/react";
+import {
+  AnimatePresence,
+  type HTMLMotionProps,
+  motion,
+  useReducedMotion,
+  useSpring,
+} from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useDragLayer } from "react-dnd";
 
@@ -39,6 +45,9 @@ type Props = {
 };
 
 const SPRING = { stiffness: 400, damping: 30, mass: 1 } as const;
+// Reduced-motion: stiffer, damped-critical spring jumps to the target
+// essentially instantly — no trailing, no tilt, no shake.
+const REDUCED_SPRING = { stiffness: 10000, damping: 200, mass: 1 } as const;
 
 function matches(typeHere: string | symbol | null, accepts: Accepts): boolean {
   if (typeof typeHere !== "string") return false;
@@ -46,6 +55,9 @@ function matches(typeHere: string | symbol | null, accepts: Accepts): boolean {
 }
 
 export function CardDragLayer({ accepts, resolveCard }: Props) {
+  const reduced = useReducedMotion();
+  const spring = reduced ? REDUCED_SPRING : SPRING;
+
   const { isDragging, item, currentOffset, initialSourceOffset } = useDragLayer((monitor) => ({
     isDragging: monitor.isDragging() && matches(monitor.getItemType(), accepts),
     item: monitor.getItem() as DragItemShape | null,
@@ -53,10 +65,10 @@ export function CardDragLayer({ accepts, resolveCard }: Props) {
     initialSourceOffset: monitor.getInitialSourceClientOffset(),
   }));
 
-  const x = useSpring(0, SPRING);
-  const y = useSpring(0, SPRING);
-  const scale = useSpring(1, SPRING);
-  const rotate = useSpring(0, SPRING);
+  const x = useSpring(0, spring);
+  const y = useSpring(0, spring);
+  const scale = useSpring(1, spring);
+  const rotate = useSpring(0, spring);
 
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const prevIsDragging = useRef(false);
@@ -73,7 +85,7 @@ export function CardDragLayer({ accepts, resolveCard }: Props) {
         x.jump(initialSourceOffset.x);
         y.jump(initialSourceOffset.y);
       }
-      scale.set(1.03);
+      scale.set(reduced ? 1 : 1.03);
     } else if (!isDragging && prevIsDragging.current) {
       if (!dragResult.lastDropAccepted && lastPointer.current && initialSourceOffset && item) {
         const card = resolveCard(item.cardId);
@@ -90,16 +102,18 @@ export function CardDragLayer({ accepts, resolveCard }: Props) {
       rotate.set(0);
     }
     prevIsDragging.current = isDragging;
-  }, [isDragging, item, initialSourceOffset, resolveCard, x, y, scale, rotate]);
+  }, [isDragging, item, initialSourceOffset, resolveCard, reduced, x, y, scale, rotate]);
 
   useEffect(() => {
     if (!currentOffset) return;
     x.set(currentOffset.x);
     y.set(currentOffset.y);
-    const vx = x.getVelocity();
-    rotate.set(Math.max(-3, Math.min(3, vx * 0.003)));
+    if (!reduced) {
+      const vx = x.getVelocity();
+      rotate.set(Math.max(-3, Math.min(3, vx * 0.003)));
+    }
     lastPointer.current = { x: currentOffset.x, y: currentOffset.y };
-  }, [currentOffset, x, y, rotate]);
+  }, [currentOffset, reduced, x, y, rotate]);
 
   const draggedCard = isDragging && item ? resolveCard(item.cardId) : null;
 
@@ -118,7 +132,7 @@ export function CardDragLayer({ accepts, resolveCard }: Props) {
       )}
 
       <AnimatePresence>
-        {bounce && (
+        {bounce && !reduced && (
           <BounceBack
             key={bounce.key}
             card={bounce.card}

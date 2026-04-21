@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 
 /**
@@ -28,17 +28,22 @@ export function DissolveCard({
   children: ReactNode;
   delay?: number;
 }) {
+  const reduced = useReducedMotion();
   return (
     <motion.div
       initial={false}
       animate={
         active
           ? {
-              y: 40,
+              y: reduced ? 0 : 40,
               opacity: 0,
-              filter: "saturate(0.15) blur(2px)",
-              scale: 0.96,
-              transition: { duration: 0.6, delay, ease: [0.4, 0, 0.9, 0.3] },
+              filter: reduced ? "saturate(1) blur(0px)" : "saturate(0.15) blur(2px)",
+              scale: reduced ? 1 : 0.96,
+              transition: {
+                duration: reduced ? 0 : 0.6,
+                delay: reduced ? 0 : delay,
+                ease: [0.4, 0, 0.9, 0.3],
+              },
             }
           : {
               y: 0,
