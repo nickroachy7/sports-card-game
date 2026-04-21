@@ -8,6 +8,7 @@ import { Card } from "@/components/card/Card";
 import type { LineupCardVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
+import { dragResult } from "./drag-layer-state";
 import { type CardDragItem, DRAG_TYPES } from "./drag-types";
 
 type Props = {
@@ -20,8 +21,14 @@ export function BenchCard({ card, assigned, disabled }: Props) {
   const [{ isDragging }, dragRef, preview] = useDrag<CardDragItem, void, { isDragging: boolean }>(
     () => ({
       type: DRAG_TYPES.CARD,
-      item: { cardId: card.id, isPitcher: card.isPitcher },
+      item: () => {
+        dragResult.lastDropAccepted = false;
+        return { cardId: card.id, isPitcher: card.isPitcher };
+      },
       canDrag: !disabled,
+      end: (_item, monitor) => {
+        dragResult.lastDropAccepted = monitor.didDrop();
+      },
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
     [card.id, card.isPitcher, disabled],
