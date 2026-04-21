@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { type CardDetailData, CardDetailView } from "@/components/card/CardDetailView";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
@@ -28,7 +28,11 @@ export default async function CardDetailPage({ params }: { params: Promise<{ car
     .eq("is_vaulted", false)
     .maybeSingle();
 
-  if (error || !cardRow) notFound();
+  // Missing card → silently route back to the collection. Covers the
+  // mid-quick-sell race where revalidatePath refreshes this segment
+  // after the card row is already deleted (P6.3 dissolve flow keeps
+  // the user on the detail page for ~600ms before router.push fires).
+  if (error || !cardRow) redirect("/collection");
 
   // Economy config for extension cost + quick-sell values + tier thresholds.
   type EconCfg = {
