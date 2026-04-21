@@ -24,6 +24,10 @@
     {
       "path": "/api/cron/login-streak-eval",
       "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/cron/season-close",
+      "schedule": "0 10 * * *"
     }
   ]
 }
