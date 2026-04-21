@@ -24,7 +24,7 @@ technically involved (motion seam).
 |-----|-----------------------------------------|--------|---------|
 | P6.1 | Rich Small card redesign                | 1 day | Small cards on lineup + bench + vault-selection show tier, position, team, contract pips, dual FP, token indicator, status pill, name. No motion changes. |
 | P6.2 | Motion foundation + lineup drag physics | 1.5 days | `useCardDrag` hook wraps motion + react-dnd. Lineup pick-up / drag / drop / invalid-bounce language lives. Bench ↔ slot, slot ↔ slot, slot ↔ bench. |
-| P6.3 | Pack arrival + dissolve physics         | 1 day | Pack opening reveal uses the new spring language (no more flat flip). Quick-sell + season-end dissolve upgraded to a coherent motion vocabulary. |
+| P6.3 | Dissolve physics                        | 0.5 day | Quick-sell + season-end dissolve upgraded to a coherent motion vocabulary. (Pack reveal deferred — gets its own slice; see end of this doc.) |
 | P6.4 | Vault selection drag                    | 0.5 day | Vault ceremony drag-into-dropzone replaces tap-toggle (tap stays as fallback). |
 | P6.5 | Reduced-motion, E2E, ADR                | 1 day | `prefers-reduced-motion` swap. Playwright scenario for lineup build + drag-drop-settle. ADR-0011 retro. |
 
@@ -32,42 +32,40 @@ technically involved (motion seam).
 
 ## P6.1 — Rich Small card redesign (Day 1)
 
-### T6.1.1 Extend `CardViewModel` for season FP
-- **What:** Add `seasonFp` field to `src/lib/contracts/cards.ts`
-  `CardViewModel`, fed from the card's per-season aggregate. Derive
-  from `card.career_fp_total - snapshot_at_season_start`; snapshot
-  can live in `economy_config` or be computed on the fly.
-- **Acceptance:** `seasonFp` surfaces on every call site that builds
-  a `CardViewModel` (Collection, Lineup, Bench, Vault selection).
-- **Spec refs:** polish spec §2 "Dual FP."
-
-### T6.1.2 Redesign `<Card size="small">` face
-- **What:** Rework `src/components/card/Card.tsx` Small branch per
-  polish spec §2 layout. Preserve Medium + Large exactly as they are.
-- **Pieces:**
-  - Position chip (top-left)
-  - Team abbreviation (top-right)
-  - Photo / initials fallback (middle)
-  - Status pill overlay for IL / DFA / expired
-  - 15-dot contract pip row
-  - Dual FP (season / career)
-  - Token slot indicator
-  - Last-name-only with graceful fallback
+### T6.1.1 Unhide Medium anatomy at Small size
+- **What:** In `src/components/card/Card.tsx`, drop the `!isSmall`
+  guards on:
+  - position tag (line 123)
+  - team chip (line 136)
+  - stats footer (line 166) — includes name, FP, contract count,
+    `+ Token` badge
+- **Tune for 96×134:** extend the ternaries (`isLarge ? X : Y`)
+  across the component to handle three sizes, adjusting font sizes,
+  padding, and photo-area height so Medium-tuned values don't leak
+  into Small verbatim.
 - **Acceptance:**
-  - Storybook / palette page renders a full 8-state matrix (tier ×
-    status × token-applied) at 96×134 and everything fits.
-  - No layout regression on Collection (uses Medium) or Card Detail
-    (uses Large).
+  - `/palette` page renders a full state matrix at Small: every
+    tier × status × token-applied combo fits at 96×134.
+  - No layout regression on Collection (Medium) or Card Detail
+    (Large).
   - `pnpm typecheck` + `pnpm lint` clean.
 - **Spec refs:** polish spec §2; UI/UX spec §4.11.1.
 
-### T6.1.3 Port to bench drawer + vault selection
-- **What:** `src/components/lineup/BenchCard.tsx` and
-  `src/components/vault/VaultCeremony.tsx` `CardThumb` swap to the
-  shared Rich Small card. Remove their bespoke initials-only
-  renderers.
-- **Acceptance:** Visual parity across diamond, bench, and vault
-  selection — same card, same density.
+### T6.1.2 Sacrifice list if density is too high
+- **What:** After T6.1.1 lands, eyeball at 96×134. If it reads as
+  noise, apply the three-step sacrifice list from polish spec §2:
+  `+ TOKEN` → icon, long names → truncate ~12 chars, team chip →
+  8px.
+- **Acceptance:** Readable from 18 inches without squinting on a
+  2020-era laptop display.
+
+### T6.1.3 Port vault selection to shared Card
+- **What:** `src/components/vault/VaultCeremony.tsx` `CardThumb` —
+  swap bespoke initials-only renderer for `<Card size="small">`.
+  Bench drawer and lineup slot already consume `<Card size="small">`,
+  so no call-site changes there.
+- **Acceptance:** Visual parity across diamond, bench, vault
+  selection, and Collection.
 
 ---
 
@@ -110,17 +108,9 @@ technically involved (motion seam).
 
 ---
 
-## P6.3 — Pack arrival + dissolve physics (Day 4)
+## P6.3 — Dissolve physics (Day 4)
 
-### T6.3.1 Pack opening reveal
-- **What:** `src/components/pack/PackOpenerModal.tsx` replaces its
-  current flip with the spring-land language. Cards arrive from a
-  shared "pack center" position with staggered springs.
-- **Acceptance:** Each card settles with perceivable weight. Duplicate
-  quick-sell stamp still plays after the settle. Star-pull
-  celebration (§4.13.4) unchanged.
-
-### T6.3.2 Quick-sell dissolve
+### T6.3.1 Quick-sell dissolve
 - **What:** `src/components/card/QuickSellModal.tsx` — replace the
   current opacity fade with a downward drift + desaturate + fade.
   Short (~600ms).
@@ -128,10 +118,14 @@ technically involved (motion seam).
   language; coin counter in the header still ticks up at the right
   moment.
 
-### T6.3.3 Season-end dissolve upgrade
+### T6.3.2 Season-end dissolve upgrade
 - **What:** `VaultCeremony` step 4 uses the same dissolve treatment
   as quick-sell, staggered ~40ms per card.
 - **Acceptance:** Scales for 0..20 cards without framerate drop.
+
+> **Deferred:** pack opening reveal. The current carousel + flip
+> needs its own redesign — a motion refresh alone won't fix it.
+> Parked as a standalone polish slice (see "After Phase 6").
 
 ---
 
@@ -214,6 +208,10 @@ the motion primitives that P6.3 and P6.4 reuse. P6.5 closes.
 
 Next polish batches (proposed, not locked):
 
+- **Pack opening reveal redesign.** Not just motion — the carousel,
+  the reveal sequence, the tier-reveal flash, the dupe-sell stamp,
+  the star-pull celebration (§4.13.4). Full pass. Deferred here
+  explicitly — its own mini-spec when we get to it.
 - **Tier foil motion pass** — the §4.5 silver/gold/diamond treatments.
 - **Onboarding flow pass** — animations + copy polish + welcome
   warmth.
