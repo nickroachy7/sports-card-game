@@ -19,6 +19,7 @@ type Props = {
   onCardDropped: (position: LineupPosition, cardId: string | null) => void;
   onTokenDropped: (position: LineupPosition, tokenId: string) => void;
   onRemoveToken: (applicationId: string) => void;
+  onOpenDetail: (cardId: string) => void;
 };
 
 /**
@@ -35,6 +36,7 @@ export function DiamondGrid({
   onCardDropped,
   onTokenDropped,
   onRemoveToken,
+  onOpenDetail,
 }: Props) {
   function slot(position: LineupPosition) {
     const fill = slotFills[position];
@@ -47,6 +49,7 @@ export function DiamondGrid({
         onCardDropped={(cardId) => onCardDropped(position, cardId)}
         onTokenDropped={(tokenId) => onTokenDropped(position, tokenId)}
         onRemoveToken={onRemoveToken}
+        onOpenDetail={onOpenDetail}
       />
     );
   }

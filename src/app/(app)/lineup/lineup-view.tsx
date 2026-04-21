@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { setAutoSubMode, submitLineup, updateLineupSlot } from "@/app/actions/lineup";
 import { applyToken, removeToken } from "@/app/actions/tokens";
+import { CardDetailDrawer } from "@/components/card/CardDetailDrawer";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { DiamondGrid } from "@/components/lineup/DiamondGrid";
@@ -41,6 +42,7 @@ export function LineupView(props: LineupViewProps) {
   const [, startTransition] = useTransition();
   const [submitting, startSubmit] = useTransition();
   const [mode, setMode] = useState<AutoSubMode>(props.autoSubMode);
+  const [detailCardId, setDetailCardId] = useState<string | null>(null);
 
   const locked = props.entryStatus !== "building";
 
@@ -217,6 +219,31 @@ export function LineupView(props: LineupViewProps) {
     return { tokenType: tok.tokenType, bonusFp: Number(tok.bonusFp) };
   };
 
+  function handleOpenDetail(cardId: string) {
+    setDetailCardId(cardId);
+  }
+
+  // Which slot (if any) holds the currently-opened card. Drives the
+  // drawer's Remove-from-slot action visibility.
+  const detailSlotPosition = detailCardId
+    ? (optimisticSlots.find((s) => s.cardId === detailCardId)?.position ?? null)
+    : null;
+
+  async function handleRemoveFromSlot() {
+    if (!detailSlotPosition) return;
+    applyOptimisticPatch({ position: detailSlotPosition, cardId: null });
+    const result = await updateLineupSlot({
+      entryId: props.entryId,
+      position: detailSlotPosition,
+      starterCardId: null,
+    });
+    if (!result.ok) {
+      toast.error(result.error.message);
+      return;
+    }
+    router.refresh();
+  }
+
   return (
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
@@ -241,6 +268,7 @@ export function LineupView(props: LineupViewProps) {
             onCardDropped={handleCardDropped}
             onTokenDropped={handleTokenDropped}
             onRemoveToken={handleRemoveToken}
+            onOpenDetail={handleOpenDetail}
           />
         }
         sidebar={
@@ -261,10 +289,22 @@ export function LineupView(props: LineupViewProps) {
             assignedCardIds={assignedCardIds}
             appliedTokenByCardId={appliedTokenByCardId}
             onRemoveToken={handleRemoveToken}
+            onOpenDetail={handleOpenDetail}
             locked={locked}
           />
         }
         tokens={<TokenTray tokens={props.tokens} locked={locked} />}
+      />
+      <CardDetailDrawer
+        cardId={detailCardId}
+        open={detailCardId !== null}
+        onOpenChange={(next) => {
+          if (!next) setDetailCardId(null);
+        }}
+        lineupContext={{
+          slotted: detailSlotPosition !== null,
+          onRemoveFromSlot: handleRemoveFromSlot,
+        }}
       />
     </DndProvider>
   );

@@ -15,6 +15,7 @@ type Props = {
   assignedCardIds: Set<string>;
   appliedTokenByCardId: Map<string, AppliedTokenInfo>;
   onRemoveToken: (applicationId: string) => void;
+  onOpenDetail: (cardId: string) => void;
   locked: boolean;
 };
 
@@ -23,6 +24,7 @@ export function BenchDrawer({
   assignedCardIds,
   appliedTokenByCardId,
   onRemoveToken,
+  onOpenDetail,
   locked,
 }: Props) {
   const [filter, setFilter] = useState<PositionFilter>("all");
@@ -91,6 +93,7 @@ export function BenchDrawer({
               assigned={assignedCardIds.has(card.id)}
               appliedToken={appliedTokenByCardId.get(card.id)}
               onRemoveToken={onRemoveToken}
+              onOpenDetail={onOpenDetail}
               disabled={locked || assignedCardIds.has(card.id) || card.isExpired}
               locked={locked}
             />

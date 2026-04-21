@@ -18,6 +18,7 @@ type Props = {
   assigned: boolean;
   appliedToken?: AppliedTokenInfo;
   onRemoveToken: (applicationId: string) => void;
+  onOpenDetail: (cardId: string) => void;
   disabled: boolean;
   locked: boolean;
 };
@@ -27,6 +28,7 @@ export function BenchCard({
   assigned,
   appliedToken,
   onRemoveToken,
+  onOpenDetail,
   disabled,
   locked,
 }: Props) {
@@ -59,7 +61,7 @@ export function BenchCard({
         ref={(el) => {
           dragRef(el);
         }}
-        disabled={disabled}
+        onClick={() => onOpenDetail(card.id)}
         className={cn(
           "appearance-none border-0 bg-transparent p-0 transition-opacity",
           isDragging && "opacity-40",
@@ -67,7 +69,7 @@ export function BenchCard({
           disabled && "cursor-not-allowed",
           !disabled && !isDragging && "cursor-grab active:cursor-grabbing",
         )}
-        aria-label={`${card.playerName}${assigned ? " (in lineup)" : ""}`}
+        aria-label={`${card.playerName}${assigned ? " (in lineup)" : ""} — click for detail`}
       >
         <Card card={card} size="small" />
       </button>

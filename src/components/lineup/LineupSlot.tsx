@@ -24,6 +24,7 @@ type Props = {
   onCardDropped: (cardId: string | null) => void;
   onTokenDropped: (tokenId: string) => void;
   onRemoveToken: (applicationId: string) => void;
+  onOpenDetail: (cardId: string) => void;
 };
 
 export function LineupSlot({
@@ -34,6 +35,7 @@ export function LineupSlot({
   onCardDropped,
   onTokenDropped,
   onRemoveToken,
+  onOpenDetail,
 }: Props) {
   const isPitcher = isPitcherSlot(position);
 
@@ -124,7 +126,7 @@ export function LineupSlot({
         {position}
       </span>
       <div className="relative">
-        <Card card={card} size="small" />
+        <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
         {appliedToken && (
           <div className="absolute -bottom-2 -right-2 z-10">
             <AppliedTokenBadge
