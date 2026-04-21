@@ -32,6 +32,10 @@
     {
       "path": "/api/cron/vault-auto-dissolve",
       "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/opening-day",
+      "schedule": "30 10 * * *"
     }
   ]
 }
