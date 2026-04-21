@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
@@ -54,12 +54,33 @@ export function LineupView(props: LineupViewProps) {
     return byCardId;
   }, [props.tokenApplications]);
 
+  // Optimistic slot overlay. A pending bench→slot drop immediately
+  // writes the cardId here so the UI doesn't wait for the server
+  // round-trip to show the card in the slot. React's useOptimistic
+  // rebases on `props.slots` — once the transition settles and the
+  // router refresh delivers new props, the overlay is discarded.
+  type OptimisticSlot = { position: LineupPosition; cardId: string | null };
+  const baseSlots = useMemo<OptimisticSlot[]>(
+    () =>
+      LINEUP_POSITIONS.map((pos) => {
+        const s = props.slots.find((x) => x.position === pos);
+        return { position: pos, cardId: s?.starterCardId ?? null };
+      }),
+    [props.slots],
+  );
+  const [optimisticSlots, applyOptimisticPatch] = useOptimistic<OptimisticSlot[], OptimisticSlot>(
+    baseSlots,
+    (state, patch) => state.map((s) => (s.position === patch.position ? patch : s)),
+  );
+
   // Build slotFills: for each canonical position, what's there?
   const slotFills = useMemo(() => {
     const fills = {} as Record<LineupPosition, SlotFill>;
+    const byPos = new Map<LineupPosition, string | null>();
+    for (const s of optimisticSlots) byPos.set(s.position, s.cardId);
     for (const pos of LINEUP_POSITIONS) {
-      const slot = props.slots.find((s) => s.position === pos);
-      const card = slot?.starterCardId ? (cardsById.get(slot.starterCardId) ?? null) : null;
+      const effectiveId = byPos.get(pos) ?? null;
+      const card = effectiveId ? (cardsById.get(effectiveId) ?? null) : null;
       let appliedToken: SlotFill["appliedToken"] = null;
       if (card) {
         const app = tokenApps.get(card.id);
@@ -77,22 +98,26 @@ export function LineupView(props: LineupViewProps) {
       fills[pos] = { card, appliedToken };
     }
     return fills;
-  }, [props.slots, cardsById, tokensById, tokenApps]);
+  }, [optimisticSlots, cardsById, tokensById, tokenApps]);
 
   const assignedCardIds = useMemo(() => {
     const set = new Set<string>();
-    for (const slot of props.slots) {
-      if (slot.starterCardId) set.add(slot.starterCardId);
+    for (const slot of optimisticSlots) {
+      if (slot.cardId) set.add(slot.cardId);
     }
     return set;
-  }, [props.slots]);
+  }, [optimisticSlots]);
 
-  const filledCount = props.slots.filter((s) => s.starterCardId !== null).length;
+  const filledCount = optimisticSlots.filter((s) => s.cardId !== null).length;
   const tokensApplied = props.tokens.filter((t) => t.appliedToCardId !== null).length;
   const canSubmit = filledCount === 10 && !locked && !submitting;
 
   function handleCardDropped(position: LineupPosition, cardId: string | null) {
     startTransition(async () => {
+      // Optimistic overlay: show the card in the slot instantly. The
+      // useOptimistic state is discarded when this transition settles,
+      // at which point props.slots carries the real committed state.
+      applyOptimisticPatch({ position, cardId });
       const result = await updateLineupSlot({
         entryId: props.entryId,
         position,
