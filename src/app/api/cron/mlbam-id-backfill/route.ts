@@ -3,36 +3,44 @@ import { sql } from "drizzle-orm";
 import { assertCronAuth } from "@/lib/auth/cron";
 import { cronError, cronOk } from "@/lib/auth/cron-response";
 import { getDb } from "@/lib/db/client";
+import { levenshtein, normalizeName } from "@/lib/mlb/name-match";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * MLBAM id backfill — polish spec §26.
+ * MLBAM id backfill — polish spec §26, improved §28.
  *
  * BDL doesn't expose MLBAM ids. This endpoint iterates active 40-man
  * `player` rows with `mlbam_id IS NULL`, queries MLB Stats API's
  * public search endpoint for each name, and writes the matched id
- * back to `public.player.mlbam_id`. Card rendering derives the photo
- * URL from `mlbam_id` via `mlbamHeadshotUrl()` — no separate CDN
- * fetch needed at display time.
+ * back to `public.player.mlbam_id`.
  *
- * Manual trigger only (no schedule). Re-run after roster syncs pick
- * up new players. Idempotent — marks every attempted row with
- * `photo_synced_at = now()` (even on miss) so re-runs only touch
- * genuinely-unseen players. To retry previously-failed rows, run
- * `UPDATE public.player SET photo_synced_at = NULL WHERE mlbam_id
- * IS NULL;` first.
+ * Match strategy (in order, first hit wins):
+ *   1. `exact` — literal first+last equality
+ *   2. `stripped` — after NFD-decompose + strip diacritics + strip
+ *      Jr./Sr./II-V suffix
+ *   3. `fuzzy` — Levenshtein ≤ 2 on both first AND last (normalized),
+ *      single-candidate only
+ *   4. `team_disambiguated` — multiple name matches, team-abbr
+ *      matches via MLB Stats `hydrate=currentTeam`
+ *
+ * Idempotent — marks every attempted row with `photo_synced_at =
+ * now()` so re-runs only touch un-seen players. Use
+ * `?retry_failed=true` to bypass that filter and re-try every
+ * unmatched row with the current matcher.
  *
  * Query params:
- *   ?limit=N              Cap on how many players to attempt this run.
- *                          Default 50, max 500. Keeps each invocation
- *                          under the Vercel serverless timeout while
- *                          letting you resume where it left off via
- *                          re-runs.
+ *   ?limit=N                 Cap per invocation. Default 50, max 500.
+ *   ?retry_failed=true       Ignore the skip-attempted filter so the
+ *                             current matcher retries previously-
+ *                             failed rows. Combine with `?limit=`
+ *                             to paginate.
  *
  * Response:
- *   { matched: N, ambiguous: N, unmatched: N, remaining: N }
+ *   { attempted, matched, ambiguous, unmatched,
+ *     unseen_remaining, unmatched_total, strategies }
+ *   strategies: { exact, stripped, fuzzy, team_disambiguated }
  */
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -41,6 +49,7 @@ export async function GET(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const rawLimit = url.searchParams.get("limit");
     const limit = Math.min(Math.max(Number.parseInt(rawLimit ?? "50", 10) || 50, 1), 500);
+    const retryFailed = url.searchParams.get("retry_failed") === "true";
 
     const db = getDb();
 
@@ -51,17 +60,17 @@ export async function GET(req: Request): Promise<Response> {
       full_name: string;
       team_abbr: string | null;
     };
-    // Skip rows we've already attempted (photo_synced_at IS NOT NULL)
-    // so re-runs chew through un-tried players first. Set the
-    // timestamp on both hit and miss below — treats it as "lookup
-    // attempted" rather than strictly "photo synced".
+    // Skip rows we've already attempted unless `?retry_failed=true`
+    // — the hardened matcher in Phase 14 is worth one more shot at
+    // the residuals Phase 13 couldn't resolve.
+    const skipAttemptedClause = retryFailed ? sql`` : sql`AND p.photo_synced_at IS NULL`;
     const rows = await db.execute<Row>(sql`
       SELECT p.id, p.first_name, p.last_name, p.full_name, t.abbreviation AS team_abbr
       FROM public.player p
       LEFT JOIN public.team t ON t.id = p.team_id
       WHERE p.mlbam_id IS NULL
-        AND p.photo_synced_at IS NULL
         AND p.is_active_40_man = true
+        ${skipAttemptedClause}
       ORDER BY p.last_name ASC, p.first_name ASC
       LIMIT ${limit}
     `);
@@ -69,43 +78,43 @@ export async function GET(req: Request): Promise<Response> {
     let matched = 0;
     let ambiguous = 0;
     let unmatched = 0;
+    const strategies: Record<MatchStrategy, number> = {
+      exact: 0,
+      stripped: 0,
+      fuzzy: 0,
+      team_disambiguated: 0,
+    };
 
     for (const player of rows.rows) {
-      let result: number | "ambiguous" | null = null;
+      let outcome: MatchOutcome = { kind: "unmatched" };
       try {
-        result = await resolveMlbamId(player);
+        outcome = await resolveMlbamId(player);
       } catch {
-        // Network / parse error: mark attempted so we skip next
-        // run; subsequent runs can retry by resetting photo_synced_at.
+        // Network / parse error: count as unmatched + mark attempted.
       }
 
-      if (typeof result === "number") {
+      if (outcome.kind === "match") {
         await db.execute(sql`
           UPDATE public.player
-          SET mlbam_id = ${result}::int,
+          SET mlbam_id = ${outcome.mlbamId}::int,
               photo_synced_at = now()
           WHERE id = ${player.id}::uuid
         `);
         matched += 1;
+        strategies[outcome.strategy] += 1;
       } else {
-        // Unmatched or ambiguous — mark attempted so re-runs skip.
         await db.execute(sql`
           UPDATE public.player
           SET photo_synced_at = now()
           WHERE id = ${player.id}::uuid
         `);
-        if (result === "ambiguous") ambiguous += 1;
+        if (outcome.kind === "ambiguous") ambiguous += 1;
         else unmatched += 1;
       }
 
-      // Polite delay between calls — MLB Stats API is free +
-      // generous, but no reason to hammer it.
       await sleep(200);
     }
 
-    // How many active rows still need an attempt (genuinely unseen).
-    // Separate count for total-without-mlbam so we can see the gap
-    // between "tried but failed" and "not yet touched."
     const remainingRes = await db.execute<{
       unseen: string | number;
       unmatched_total: string | number;
@@ -126,92 +135,136 @@ export async function GET(req: Request): Promise<Response> {
       unmatched,
       unseen_remaining: unseen,
       unmatched_total: unmatchedTotal,
+      strategies,
     });
   } catch (err) {
     return cronError(err);
   }
 }
 
+type MlbStatsPerson = {
+  id?: number;
+  firstName?: string;
+  lastName?: string;
+  currentTeam?: { abbreviation?: string };
+  active?: boolean;
+};
 type MlbStatsSearchResponse = {
-  people?: Array<{
-    id?: number;
-    firstName?: string;
-    lastName?: string;
-    currentTeam?: { abbreviation?: string };
-    active?: boolean;
-  }>;
+  people?: MlbStatsPerson[];
 };
 
+type MatchStrategy = "exact" | "stripped" | "fuzzy" | "team_disambiguated";
+type MatchOutcome =
+  | { kind: "match"; mlbamId: number; strategy: MatchStrategy }
+  | { kind: "ambiguous" }
+  | { kind: "unmatched" };
+
 /**
- * Search MLB Stats API by full name; disambiguate by first+last exact
- * match + team abbreviation when provided. Returns:
- *   - the mlbam id on clean match
- *   - 'ambiguous' when multiple candidates match the name but team
- *     can't disambiguate
- *   - null when no candidates match
+ * Try progressively looser strategies until one match. See function
+ * header for the order. `hydrate=currentTeam` populates `currentTeam`
+ * on every candidate so team-based disambiguation uses MLB's source
+ * of truth rather than our cached BDL team (stale after mid-season
+ * trades).
  */
 async function resolveMlbamId(player: {
   first_name: string;
   last_name: string;
   full_name: string;
   team_abbr: string | null;
-}): Promise<number | "ambiguous" | null> {
+}): Promise<MatchOutcome> {
   const q = encodeURIComponent(player.full_name);
-  const resp = await fetch(`https://statsapi.mlb.com/api/v1/people/search?names=${q}`, {
-    // Static export + serverless; no revalidation.
-    cache: "no-store",
-  });
-  if (!resp.ok) return null;
+  const resp = await fetch(
+    `https://statsapi.mlb.com/api/v1/people/search?names=${q}&hydrate=currentTeam`,
+    { cache: "no-store" },
+  );
+  if (!resp.ok) return { kind: "unmatched" };
   const json = (await resp.json()) as MlbStatsSearchResponse;
   const people = json.people ?? [];
-  if (people.length === 0) return null;
+  if (people.length === 0) return { kind: "unmatched" };
 
-  // Normalize both sides before comparing. BDL strips accents while
-  // MLB Stats keeps them ("Acuna" vs "Acuña"). BDL also includes
-  // suffixes in last_name ("Acuna Jr.") while MLB Stats splits them
-  // out ("Acuña"). Normalize to strip diacritics + suffixes + lower.
-  const first = normalize(player.first_name);
-  const last = normalize(player.last_name);
-  const nameMatches = people.filter(
-    (p) => normalize(p.firstName ?? "") === first && normalize(p.lastName ?? "") === last,
+  // 1) Exact literal match.
+  const firstRaw = player.first_name.trim().toLowerCase();
+  const lastRaw = player.last_name.trim().toLowerCase();
+  const exact = people.filter(
+    (p) =>
+      (p.firstName ?? "").trim().toLowerCase() === firstRaw &&
+      (p.lastName ?? "").trim().toLowerCase() === lastRaw,
   );
+  const exactResolved = resolveCandidates(exact, player.team_abbr, "exact");
+  if (exactResolved.kind !== "unmatched") return exactResolved;
 
-  if (nameMatches.length === 0) return null;
-  if (nameMatches.length === 1) {
-    return nameMatches[0]?.id ?? null;
+  // 2) Stripped match (diacritics + suffix stripped).
+  const firstNorm = normalizeName(player.first_name);
+  const lastNorm = normalizeName(player.last_name);
+  const stripped = people.filter(
+    (p) =>
+      normalizeName(p.firstName ?? "") === firstNorm &&
+      normalizeName(p.lastName ?? "") === lastNorm,
+  );
+  const strippedResolved = resolveCandidates(stripped, player.team_abbr, "stripped");
+  if (strippedResolved.kind !== "unmatched") return strippedResolved;
+
+  // 3) Fuzzy match — sum of Levenshtein(first) + Levenshtein(last) ≤ 2.
+  //    Accept only single-candidate matches to minimize false positives
+  //    on short names.
+  const fuzzy = people.filter((p) => {
+    const fDist = levenshtein(normalizeName(p.firstName ?? ""), firstNorm);
+    const lDist = levenshtein(normalizeName(p.lastName ?? ""), lastNorm);
+    return fDist + lDist <= 2;
+  });
+  if (fuzzy.length === 1 && typeof fuzzy[0]?.id === "number") {
+    return { kind: "match", mlbamId: fuzzy[0].id, strategy: "fuzzy" };
+  }
+  if (fuzzy.length > 1) {
+    // Fuzzy found multiple; try team disambiguation.
+    const teamResolved = resolveCandidates(fuzzy, player.team_abbr, "team_disambiguated");
+    if (teamResolved.kind !== "unmatched") return teamResolved;
+    return { kind: "ambiguous" };
   }
 
-  // Multiple people share the name — disambiguate by team.
-  if (player.team_abbr) {
-    const teamMatch = nameMatches.find(
-      (p) => p.currentTeam?.abbreviation?.toLowerCase() === player.team_abbr?.toLowerCase(),
+  return { kind: "unmatched" };
+}
+
+/**
+ * Given a pre-filtered candidate list, return a clean match if one
+ * survives, or `ambiguous`/`unmatched` otherwise. Handles the
+ * single-candidate, team-disambiguation, and active-fallback paths.
+ * `strategy` reports where the match came from — if it's the
+ * single-candidate path, we inherit the caller's strategy; team
+ * disambiguation always reports `team_disambiguated` regardless of
+ * the caller.
+ */
+function resolveCandidates(
+  candidates: MlbStatsPerson[],
+  teamAbbr: string | null,
+  strategy: MatchStrategy,
+): MatchOutcome {
+  if (candidates.length === 0) return { kind: "unmatched" };
+  if (candidates.length === 1) {
+    const id = candidates[0]?.id;
+    return typeof id === "number"
+      ? { kind: "match", mlbamId: id, strategy }
+      : { kind: "unmatched" };
+  }
+  // Multiple candidates — try team abbr.
+  if (teamAbbr) {
+    const byTeam = candidates.find(
+      (p) => p.currentTeam?.abbreviation?.toLowerCase() === teamAbbr.toLowerCase(),
     );
-    if (teamMatch?.id) return teamMatch.id;
+    if (byTeam?.id) {
+      return { kind: "match", mlbamId: byTeam.id, strategy: "team_disambiguated" };
+    }
   }
-
-  // Fallback: pick the active one (if exactly one).
-  const active = nameMatches.filter((p) => p.active === true);
-  if (active.length === 1 && active[0]?.id) return active[0].id;
-
-  return "ambiguous";
+  // Fallback: one active, rest inactive → take the active.
+  const active = candidates.filter((p) => p.active === true);
+  if (active.length === 1 && active[0]?.id) {
+    return { kind: "match", mlbamId: active[0].id, strategy };
+  }
+  return { kind: "ambiguous" };
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-/**
- * Strip accents + trailing suffixes (Jr./Sr./II/III/IV/V) + lower-
- * case. BDL/our DB and MLB Stats API disagree on both conventions;
- * normalize before comparing first/last names.
- */
-function normalize(s: string): string {
-  // NFD decomposes "ñ" into "n" + combining tilde; strip the combining
-  // marks (Unicode category Mn) to collapse back to ASCII.
-  const withoutAccents = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  // Strip common suffixes from the tail.
-  const withoutSuffix = withoutAccents.replace(/\s+(jr\.?|sr\.?|ii+|iv|v)$/i, "");
-  return withoutSuffix.trim().toLowerCase();
 }

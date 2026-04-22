@@ -286,10 +286,25 @@ curl -s -H "Authorization: Bearer $CRON_SECRET" \
 ```
 
 Response shape: `{ attempted, matched, ambiguous, unmatched,
-remaining }`. Re-run as long as `remaining > 0`. Ambiguous
-rows (two players with the same name + unresolvable team)
-stay null — they'll render with silhouette fallback. For
-manual fix-ups, look them up in MLB Stats API and
+unseen_remaining, unmatched_total, strategies }`. The
+`strategies` object breaks down matches by path
+(`exact` / `stripped` / `fuzzy` / `team_disambiguated`) —
+useful for tuning.
+
+Re-run as long as `unseen_remaining > 0`. After that, use
+`?retry_failed=true` to re-try previously-skipped rows with
+the current matcher (Phase 14 added accent + suffix +
+fuzzy-Levenshtein + hydrate=currentTeam improvements; the
+flag re-processes rows tried before those landed):
+
+```bash
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  "https://draftdeck.com/api/cron/mlbam-id-backfill?retry_failed=true&limit=40" | jq
+```
+
+Truly-unmatched rows (residual after all strategies) stay
+null and render with silhouette fallback. For manual fix-
+ups, look them up in MLB Stats API and
 `UPDATE public.player SET mlbam_id = N WHERE id = '...';`.
 
 ---
