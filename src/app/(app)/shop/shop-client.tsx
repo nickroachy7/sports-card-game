@@ -5,8 +5,7 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { type OpenPackResult, openPack } from "@/app/actions/packs";
-import { fetchRevealedCards } from "@/app/actions/packs-reveal";
-import type { CardViewModel } from "@/components/card/Card";
+import { fetchRevealedCards, type RevealedCard } from "@/app/actions/packs-reveal";
 import { PackOpenerModal } from "@/components/pack/PackOpenerModal";
 import { Button } from "@/components/ui/button";
 import type { PackType } from "@/lib/contracts/cards";
@@ -39,7 +38,8 @@ export function ShopClient({ coinBalance, dailyReadyAtMs, packs }: Props) {
   const [pending, startTransition] = useTransition();
   const [pendingType, setPendingType] = useState<PackType | null>(null);
   const [result, setResult] = useState<OpenPackResult | null>(null);
-  const [revealedCards, setRevealedCards] = useState<CardViewModel[]>([]);
+  const [revealedCards, setRevealedCards] = useState<RevealedCard[]>([]);
+  const [existingByCardId, setExistingByCardId] = useState<Map<string, RevealedCard>>(new Map());
   const [open, setOpen] = useState(false);
 
   const dailyReady = dailyReadyAtMs === null || dailyReadyAtMs <= Date.now();
@@ -59,9 +59,26 @@ export function ShopClient({ coinBalance, dailyReadyAtMs, packs }: Props) {
         setPendingType(null);
         return;
       }
-      const cards = await fetchRevealedCards(r.data.cardIds);
+      // Fetch new cards + existing-instance dupe counterparts in one
+      // call. Union of IDs is deduped server-side. Existing cards are
+      // mapped by their own cardId so the modal can look them up per
+      // dupe resolution.
+      const existingIds = r.data.cardResults
+        .map((c) => c.existingCardId)
+        .filter((id): id is string => !!id);
+      const allIds = Array.from(new Set([...r.data.cardIds, ...existingIds]));
+      const all = await fetchRevealedCards(allIds);
+      const newCardIds = new Set(r.data.cardIds);
+      const newCards = r.data.cardIds
+        .map((id) => all.find((c) => c.id === id))
+        .filter((c): c is RevealedCard => !!c);
+      const existingMap = new Map<string, RevealedCard>();
+      for (const c of all) {
+        if (!newCardIds.has(c.id)) existingMap.set(c.id, c);
+      }
       setResult(r.data);
-      setRevealedCards(cards);
+      setRevealedCards(newCards);
+      setExistingByCardId(existingMap);
       setOpen(true);
       setPendingType(null);
     });
@@ -71,6 +88,7 @@ export function ShopClient({ coinBalance, dailyReadyAtMs, packs }: Props) {
     setOpen(false);
     setResult(null);
     setRevealedCards([]);
+    setExistingByCardId(new Map());
     router.refresh();
   }
 
@@ -124,7 +142,8 @@ export function ShopClient({ coinBalance, dailyReadyAtMs, packs }: Props) {
 
         <p className="text-xs text-[var(--text-3)]">
           Pack weighting, pack sizes, and coin costs come from the active economy config. Duplicate
-          pulls auto-quick-sell at Bronze (10 coins each). Tokens drop at per-pack rates.
+          pulls let you keep either instance at reveal — sell the new or the existing one. Tokens
+          drop at per-pack rates.
         </p>
       </section>
 
@@ -133,6 +152,7 @@ export function ShopClient({ coinBalance, dailyReadyAtMs, packs }: Props) {
         onOpenChange={setOpen}
         result={result}
         cards={revealedCards}
+        existingByCardId={existingByCardId}
         onClosed={handleClose}
       />
     </>

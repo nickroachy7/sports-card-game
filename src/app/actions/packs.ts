@@ -12,9 +12,23 @@ type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
 
+export type PackCardResult = {
+  cardId: string;
+  /** True when the pulled player was already owned (pool exhaustion
+   *  fallback). The reveal modal shows the keep-new vs keep-existing
+   *  panel; user picks which instance to quick-sell. */
+  isDupe: boolean;
+  /** When isDupe is true, the user's lowest-FP existing instance of
+   *  this player. Server default for the "Sell existing" CTA. Users
+   *  with multiple instances of the same player can override from the
+   *  reveal's picker (optional; scope'd out for the first slice). */
+  existingCardId: string | null;
+};
+
 export type OpenPackResult = {
   openingId: string;
   cardIds: string[];
+  cardResults: PackCardResult[];
   duplicateCount: number;
   coinsFromDupes: number;
   tokenIds: string[];
@@ -71,10 +85,16 @@ async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPack
     const res = await getDb().execute<{ open_pack: unknown }>(sql`
       SELECT public.open_pack(${user.id}::uuid, ${parsed.data.packType}::pack_type) AS open_pack
     `);
+    type RawCardResult = {
+      card_id: string;
+      is_dupe: boolean;
+      existing_card_id: string | null;
+    };
     const raw = res.rows[0]?.open_pack as
       | {
           opening_id: string;
           card_ids: string[];
+          card_results: RawCardResult[] | null;
           duplicate_count: number | null;
           coins_from_dupes: number | string;
           token_ids: string[];
@@ -88,9 +108,14 @@ async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPack
     revalidatePath("/shop");
     revalidatePath("/collection");
     revalidatePath("/lineup", "layout");
-    const data = {
+    const data: OpenPackResult = {
       openingId: raw.opening_id,
       cardIds: raw.card_ids ?? [],
+      cardResults: (raw.card_results ?? []).map((r) => ({
+        cardId: r.card_id,
+        isDupe: r.is_dupe,
+        existingCardId: r.existing_card_id,
+      })),
       duplicateCount: raw.duplicate_count ?? 0,
       coinsFromDupes: Number(raw.coins_from_dupes),
       tokenIds: raw.token_ids ?? [],

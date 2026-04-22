@@ -7,11 +7,27 @@ import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
 
+export type PlayerValueTier = "star" | "starter" | "role" | "prospect";
+
+/**
+ * Revealed card carries CardViewModel + reveal-only metadata:
+ *   - `playerValueTier`: drives the star-pull celebration variant.
+ *   - `quickSellValue`: dollar value shown on the dupe panel CTAs.
+ */
+export type RevealedCard = CardViewModel & {
+  playerValueTier: PlayerValueTier;
+  quickSellValue: number;
+};
+
 /**
  * Return view-model rows for a set of just-opened cards so the pack
  * reveal modal can render them. Scoped to the caller's own cards.
+ * When the reveal needs to display a dupe's existing-instance
+ * counterpart, pass both the new card ids AND the existing ids in
+ * one call — both come back as RevealedCard rows, paired up by the
+ * caller from the pack's cardResults list.
  */
-export async function fetchRevealedCards(cardIds: string[]): Promise<CardViewModel[]> {
+export async function fetchRevealedCards(cardIds: string[]): Promise<RevealedCard[]> {
   if (cardIds.length === 0) return [];
   const supabase = await createServerClient();
   const {
@@ -30,28 +46,38 @@ export async function fetchRevealedCards(cardIds: string[]): Promise<CardViewMod
     position: string | null;
     status: PlayerStatus;
     team_abbreviation: string | null;
+    player_value_tier: PlayerValueTier | null;
   };
   const db = getDb();
-  const res = await db.execute<Row>(sql`
-    SELECT c.id,
-           c.current_tier,
-           c.career_fp_total,
-           c.contract_plays_remaining,
-           c.is_expired,
-           c.applied_token_id,
-           p.full_name AS player_name,
-           (p.positions)[1] AS position,
-           p.status,
-           t.abbreviation AS team_abbreviation
-    FROM public.card c
-    JOIN public.player p ON p.id = c.player_id
-    LEFT JOIN public.team t ON t.id = p.team_id
-    WHERE c.user_id = ${user.id}::uuid
-      AND c.id = ANY(${sql`ARRAY[${sql.join(
-        cardIds.map((id) => sql`${id}::uuid`),
-        sql`, `,
-      )}]::uuid[]`})
-  `);
+  const [res, cfgRes] = await Promise.all([
+    db.execute<Row>(sql`
+      SELECT c.id,
+             c.current_tier,
+             c.career_fp_total,
+             c.contract_plays_remaining,
+             c.is_expired,
+             c.applied_token_id,
+             p.full_name AS player_name,
+             (p.positions)[1] AS position,
+             p.status,
+             p.designated_value_tier AS player_value_tier,
+             t.abbreviation AS team_abbreviation
+      FROM public.card c
+      JOIN public.player p ON p.id = c.player_id
+      LEFT JOIN public.team t ON t.id = p.team_id
+      WHERE c.user_id = ${user.id}::uuid
+        AND c.id = ANY(${sql`ARRAY[${sql.join(
+          cardIds.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )}]::uuid[]`})
+    `),
+    supabase.rpc("get_active_economy_config").single(),
+  ]);
+
+  const cfg = (cfgRes.data ?? null) as {
+    quick_sell_values?: Record<CardTier, number>;
+  } | null;
+  const qsValues = (cfg?.quick_sell_values ?? {}) as Record<CardTier, number>;
 
   // Preserve request order so the reveal sequence matches open_pack output.
   const byId = new Map<string, Row>();
@@ -72,5 +98,7 @@ export async function fetchRevealedCards(cardIds: string[]): Promise<CardViewMod
       isExpired: r.is_expired,
       hasAppliedToken: r.applied_token_id !== null,
       photoUrl: null,
+      playerValueTier: (r.player_value_tier ?? "role") as PlayerValueTier,
+      quickSellValue: qsValues[r.current_tier] ?? 0,
     }));
 }

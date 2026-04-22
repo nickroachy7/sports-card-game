@@ -4,6 +4,7 @@ import { Card, type CardSize, type CardViewModel } from "@/components/card/Card"
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 
 import { DissolveDemo } from "./dissolve-demo";
+import { PackRevealDemo } from "./pack-reveal-demo";
 import { TokenPaletteDemo } from "./token-demo";
 
 export const metadata: Metadata = {
@@ -153,6 +154,19 @@ export default function PalettePage() {
             card: mockCard(tier),
           }))}
         />
+      </section>
+
+      <section aria-labelledby="pack-reveal-heading" className="mb-10">
+        <h2 id="pack-reveal-heading" className="mb-1 text-xl font-semibold">
+          Pack reveal (polish spec §10)
+        </h2>
+        <p className="mb-4 text-sm text-[var(--text-2)]">
+          Tap a face-down card to flip it. Role / Prospect pulls play a plain flip; Starter triggers
+          a gold glow pulse; Star fires the full celebration (hero scale + radial particles +
+          screen-darken backdrop). Below, the dupe panel — user picks which instance to sell when
+          they pull a player they already own.
+        </p>
+        <PackRevealDemo />
       </section>
 
       <section aria-labelledby="dissolve-heading" className="mb-10">
