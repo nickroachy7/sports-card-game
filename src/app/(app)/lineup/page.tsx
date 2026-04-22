@@ -2,7 +2,6 @@ import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { LineupView } from "@/app/(app)/lineup/lineup-view";
-import { LiveListView } from "@/components/lineup/LiveListView";
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
@@ -181,112 +180,31 @@ export default async function LineupPage() {
     bonusFpAwarded: Number(r.bonus_fp_awarded ?? 0),
   }));
 
-  // Building state → drag-drop diamond + bench + tokens + submit.
-  if (entry.status === "building") {
-    return (
-      <LineupView
-        contestId={contest.id}
-        contestName={contest.name}
-        lineupLocksAt={contest.lineup_locks_at}
-        entryId={entry.id}
-        entryStatus={entry.status}
-        autoSubMode={entry.auto_sub_mode}
-        slots={slots}
-        cards={cards}
-        tokens={tokens}
-        tokenApplications={tokenApplications.map((a) => ({
-          id: a.id,
-          tokenId: a.tokenId,
-          cardId: a.cardId,
-        }))}
-      />
-    );
-  }
-
-  // Submitted / Live / Final → list view with per-slot scores + token status.
-  const cardsById = new Map(cards.map((c) => [c.id, c] as const));
-  const liveStatus: "submitted" | "live" | "final" =
-    entry.status === "live" || entry.status === "final" ? entry.status : "submitted";
-
-  type EventRow = {
-    id: string;
-    event_at: string;
-    event_type: string;
-    play_text: string | null;
-    play_type: string | null;
-    score_value: number | null;
-    batter_player_id: string | null;
-    pitcher_player_id: string | null;
-  };
-  // Last 50 events across the games this contest covers, newest first.
-  const eventsRes = await db.execute<EventRow>(sql`
-    SELECT ge.id, ge.event_at, ge.event_type, ge.play_text, ge.play_type,
-           ge.score_value, ge.batter_player_id, ge.pitcher_player_id
-    FROM public.game_event ge
-    JOIN public.contest c ON ge.game_id = ANY(c.included_game_ids)
-    WHERE c.id = ${contest.id}::uuid
-    ORDER BY ge.event_at DESC
-    LIMIT 50
-  `);
-
-  // Filter to events involving the user's rostered players, then enrich.
-  const rosteredPlayerIds = new Set<string>();
-  for (const slot of slots) {
-    const card = slot.starterCardId ? cardsById.get(slot.starterCardId) : null;
-    if (card) rosteredPlayerIds.add(card.playerId);
-  }
-  const recentEvents = eventsRes.rows
-    .filter(
-      (e) =>
-        (e.batter_player_id && rosteredPlayerIds.has(e.batter_player_id)) ||
-        (e.pitcher_player_id && rosteredPlayerIds.has(e.pitcher_player_id)),
-    )
-    .slice(0, 15)
-    .map((e) => ({
-      id: e.id,
-      ts: e.event_at,
-      text: e.play_text ?? prettyEventType(e.event_type),
-      fp: null as number | null,
-    }));
-
-  const slotsLive = LINEUP_POSITIONS.map((pos) => {
-    const slot = slots.find((s) => s.position === pos);
-    const slotRow = slotsRes.rows.find((r) => r.position === pos);
-    const card = slot?.starterCardId ? (cardsById.get(slot.starterCardId) ?? null) : null;
-    const app = slot?.tokenApplicationId
-      ? tokenApplications.find((a) => a.id === slot.tokenApplicationId)
-      : undefined;
-    const tokVm = app ? tokens.find((t) => t.id === app.tokenId) : undefined;
-    return {
-      position: pos,
-      card,
-      liveFp: Number(slotRow?.live_fp ?? 0),
-      finalFp: Number(slotRow?.final_fp ?? 0),
-      appliedToken: app
-        ? {
-            type: tokVm?.tokenType ?? "hr_bonus",
-            bonusFp: Number(tokVm?.bonusFp ?? 0),
-            triggered: app.triggered,
-            bonusFpAwarded: app.bonusFpAwarded,
-          }
-        : null,
-    };
-  });
-
+  // Unified rendering across building / submitted / live / final.
+  // The view itself switches chrome per spec §16 — sidebar morphs from
+  // Readiness/Projected/Auto-sub/Submit to Live Score/Box Score/Event
+  // Feed/Status chip when entry.status !== 'building'. Bench + tokens
+  // stay visible but become non-interactive once locked.
   return (
-    <LiveListView
+    <LineupView
+      contestId={contest.id}
       contestName={contest.name}
-      status={liveStatus}
+      lineupLocksAt={contest.lineup_locks_at}
+      entryId={entry.id}
+      entryStatus={entry.status}
+      autoSubMode={entry.auto_sub_mode}
       liveScore={Number(entry.live_score)}
       finalScore={Number(entry.final_score)}
-      slots={slotsLive}
-      recentEvents={recentEvents}
+      slots={slots}
+      cards={cards}
+      tokens={tokens}
+      tokenApplications={tokenApplications.map((a) => ({
+        id: a.id,
+        tokenId: a.tokenId,
+        cardId: a.cardId,
+      }))}
     />
   );
-}
-
-function prettyEventType(t: string): string {
-  return t.replace(/^mlb\./, "").replace(/_/g, " ");
 }
 
 function EmptyLineupState({ message }: { message: string }) {

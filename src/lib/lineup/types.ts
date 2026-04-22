@@ -47,6 +47,12 @@ export type LineupViewProps = {
   entryId: string;
   entryStatus: "building" | "submitted" | "locked" | "live" | "final";
   autoSubMode: AutoSubMode;
+  /** Sum of live_fp across slots (live during games). Included so the
+   *  unified view can render the Live Score big number in submitted/
+   *  live/final states without an extra round-trip. Zero when building. */
+  liveScore: number;
+  /** Sum of final_fp across slots (settles after all games reconcile). */
+  finalScore: number;
   slots: LineupSlotVM[];
   cards: LineupCardVM[];
   tokens: LineupTokenVM[];
