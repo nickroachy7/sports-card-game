@@ -13,8 +13,8 @@ export const runtime = "nodejs";
  * MLBAM id backfill — polish spec §36 (Phase 15).
  *
  * Primary strategy: fetch each team's 40-man roster from MLB Stats
- * API at `/api/v1/sports/1/roster/40Man?teamId=N&hydrate=person` —
- * one call per team, 30 calls total. The roster endpoint returns
+ * API at `/api/v1/teams/{N}/roster?rosterType=40Man&hydrate=person`
+ * — one call per team, 30 calls total. The roster endpoint returns
  * every 40-man player with their MLBAM id, including callups and
  * on-the-60-day-IL players that `/people/search` filters out. This
  * was the Phase 14 bottleneck (~23% of our 40-man couldn't be
@@ -285,7 +285,7 @@ type Roster40ManResponse = {
 
 async function fetchRoster40Man(teamId: number): Promise<RosterEntry[]> {
   const resp = await fetch(
-    `https://statsapi.mlb.com/api/v1/sports/1/roster/40Man?teamId=${teamId}&hydrate=person`,
+    `https://statsapi.mlb.com/api/v1/teams/${teamId}/roster?rosterType=40Man&hydrate=person`,
     { cache: "no-store" },
   );
   if (!resp.ok) return [];
