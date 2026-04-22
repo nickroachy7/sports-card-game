@@ -271,38 +271,50 @@ Missing `BDL_API_KEY` → 500 with "BDL_API_KEY is not set".
 
 Card photos are derived at render time from `player.mlbam_id`.
 BDL doesn't expose MLBAM ids, so a one-time backfill hits MLB
-Stats API's public name-search endpoint and writes the match
-back. Manual trigger only (no schedule — Vercel Hobby cron
-budget is one/day). Re-run after roster syncs pick up new
-players.
+Stats API and writes the match back. Manual trigger only (no
+schedule — Vercel Hobby cron budget is one/day). Re-run after
+roster syncs pick up new players.
+
+**Primary strategy (Phase 15):** `/api/v1/sports/1/roster/40Man?teamId=N`
+— one call per team, 30 teams. Returns the full 40-man
+including callups + 60-day-IL players that the search endpoint
+filters out.
+
+**Fallback strategy:** `/api/v1/people/search?names=...` for
+residuals not in any team's 40-man (released / retired in-
+season). Phase 14's fuzzy + team_disambiguated strategies
+intact.
 
 ```bash
 export CRON_SECRET=$(grep ^CRON_SECRET .env.local | cut -d= -f2- | tr -d '"')
 
-# Default: 50 players per invocation. Override with ?limit=N
-# (max 500) to chew through a larger backlog in one shot.
+# First run after Phase 15 — use retry_failed=true to pick up
+# the ~180 players Phase 14's matcher couldn't reach.
 curl -s -H "Authorization: Bearer $CRON_SECRET" \
-  "https://draftdeck.com/api/cron/mlbam-id-backfill?limit=100" | jq
+  "https://draftdeck.com/api/cron/mlbam-id-backfill?retry_failed=true&limit=200" | jq
+
+# Subsequent re-runs after new roster syncs:
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  "https://draftdeck.com/api/cron/mlbam-id-backfill?limit=50" | jq
 ```
 
-Response shape: `{ attempted, matched, ambiguous, unmatched,
-unseen_remaining, unmatched_total, strategies }`. The
-`strategies` object breaks down matches by path
-(`exact` / `stripped` / `fuzzy` / `team_disambiguated`) —
-useful for tuning.
+Response shape: `{ teams_processed, roster_matched,
+fallback_matched, ambiguous, unmatched, unseen_remaining,
+unmatched_total, strategies }`. Strategies break down the
+match path: `roster_exact` / `roster_fuzzy` (40-man hit) vs.
+`exact` / `stripped` / `fuzzy` / `team_disambiguated` (search
+fallback).
 
-Re-run as long as `unseen_remaining > 0`. After that, use
-`?retry_failed=true` to re-try previously-skipped rows with
-the current matcher (Phase 14 added accent + suffix +
-fuzzy-Levenshtein + hydrate=currentTeam improvements; the
-flag re-processes rows tried before those landed):
+Query flags:
+- `?retry_failed=true` — bypass the `photo_synced_at IS NOT NULL`
+  skip filter. Use after matcher changes.
+- `?skip_roster=true` — skip the 40-man pass, run only the
+  search fallback. Useful for iterating on the search
+  matcher without re-hitting every team.
+- `?limit=N` — caps the SEARCH-fallback count (default 50,
+  max 500). Roster pass is always all 30 teams.
 
-```bash
-curl -s -H "Authorization: Bearer $CRON_SECRET" \
-  "https://draftdeck.com/api/cron/mlbam-id-backfill?retry_failed=true&limit=40" | jq
-```
-
-Truly-unmatched rows (residual after all strategies) stay
+Truly-unmatched residuals (e.g., non-40-man players) stay
 null and render with silhouette fallback. For manual fix-
 ups, look them up in MLB Stats API and
 `UPDATE public.player SET mlbam_id = N WHERE id = '...';`.
