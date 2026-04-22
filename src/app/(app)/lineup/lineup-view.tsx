@@ -17,6 +17,7 @@ import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
 import { SidebarFadeSwap } from "@/components/layout/SidebarFadeSwap";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
+import { CardContractEventsProvider } from "@/components/lineup/CardContractEventsProvider";
 import { DiamondGrid } from "@/components/lineup/DiamondGrid";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupShell } from "@/components/lineup/LineupShell";
@@ -156,6 +157,17 @@ export function LineupView(props: LineupViewProps) {
     for (const pos of LINEUP_POSITIONS) {
       const card = slotFills[pos].card;
       if (card) out.push({ playerId: card.playerId, displayName: shortName(card.playerName) });
+    }
+    return out;
+  }, [slotFills]);
+
+  // Rostered card ids — input to <CardContractEventsProvider> for the
+  // per-slot contract-depletion glow (polish spec §30).
+  const rosteredCardIds = useMemo<string[]>(() => {
+    const out: string[] = [];
+    for (const pos of LINEUP_POSITIONS) {
+      const card = slotFills[pos].card;
+      if (card) out.push(card.id);
     }
     return out;
   }, [slotFills]);
@@ -390,7 +402,9 @@ export function LineupView(props: LineupViewProps) {
       <TokenDragLayer resolveToken={resolveToken} />
       {isPostSubmit ? (
         <LiveEventsProvider lineupPlayers={lineupPlayers} contestGameIds={props.contestGameIds}>
-          {shell}
+          <CardContractEventsProvider rosteredCardIds={rosteredCardIds}>
+            {shell}
+          </CardContractEventsProvider>
         </LiveEventsProvider>
       ) : (
         shell

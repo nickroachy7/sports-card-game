@@ -6,6 +6,8 @@ import { getEmptyImage } from "react-dnd-html5-backend";
 
 import { Card } from "@/components/card/Card";
 import { dragResult } from "@/components/card/drag-layer-state";
+import { useCardDepleteEvent } from "@/components/lineup/CardContractEventsProvider";
+import { SlotContractGlow } from "@/components/lineup/SlotContractGlow";
 import { SlotFpGlow } from "@/components/lineup/SlotFpGlow";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import type { TokenType } from "@/lib/contracts/cards";
@@ -37,7 +39,15 @@ type Props = {
   onOpenDetail: (cardId: string) => void;
 };
 
-export function LineupSlot({
+export function LineupSlot(props: Props) {
+  // useCardDepleteEvent needs to run unconditionally (hook rules) —
+  // call here, pass to <SlotContractGlow> below. Safe-null outside
+  // the provider so building-state renders don't throw.
+  const depleteEvent = useCardDepleteEvent(props.card?.id);
+  return <LineupSlotInner {...props} depleteEvent={depleteEvent} />;
+}
+
+function LineupSlotInner({
   position,
   card,
   appliedToken,
@@ -46,7 +56,8 @@ export function LineupSlot({
   onTokenDropped,
   onRemoveToken,
   onOpenDetail,
-}: Props) {
+  depleteEvent,
+}: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
   const isPitcher = isPitcherSlot(position);
 
   // Card drop target — accepts any hitter card for hitter slots, any pitcher for SP slots.
@@ -179,6 +190,8 @@ export function LineupSlot({
         <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
         {/* Per-slot FP glow — post-submit only. Polish spec §21. */}
         <SlotFpGlow playerId={card.playerId} enabled={locked} />
+        {/* Per-slot contract-depletion glow — post-submit only. Polish spec §30. */}
+        <SlotContractGlow depleteEvent={depleteEvent} enabled={locked} />
         {appliedToken && (
           <div className="absolute -bottom-2 -right-2 z-10">
             <AppliedTokenBadge
