@@ -143,13 +143,14 @@ async function resolveMlbamId(player: {
   const people = json.people ?? [];
   if (people.length === 0) return null;
 
-  // Filter to exact first+last matches (case-insensitive, trimmed).
-  const first = player.first_name.trim().toLowerCase();
-  const last = player.last_name.trim().toLowerCase();
+  // Normalize both sides before comparing. BDL strips accents while
+  // MLB Stats keeps them ("Acuna" vs "Acuña"). BDL also includes
+  // suffixes in last_name ("Acuna Jr.") while MLB Stats splits them
+  // out ("Acuña"). Normalize to strip diacritics + suffixes + lower.
+  const first = normalize(player.first_name);
+  const last = normalize(player.last_name);
   const nameMatches = people.filter(
-    (p) =>
-      (p.firstName ?? "").trim().toLowerCase() === first &&
-      (p.lastName ?? "").trim().toLowerCase() === last,
+    (p) => normalize(p.firstName ?? "") === first && normalize(p.lastName ?? "") === last,
   );
 
   if (nameMatches.length === 0) return null;
@@ -176,4 +177,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/**
+ * Strip accents + trailing suffixes (Jr./Sr./II/III/IV/V) + lower-
+ * case. BDL/our DB and MLB Stats API disagree on both conventions;
+ * normalize before comparing first/last names.
+ */
+function normalize(s: string): string {
+  // NFD decomposes "ñ" into "n" + combining tilde; strip the combining
+  // marks (Unicode category Mn) to collapse back to ASCII.
+  const withoutAccents = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  // Strip common suffixes from the tail.
+  const withoutSuffix = withoutAccents.replace(/\s+(jr\.?|sr\.?|ii+|iv|v)$/i, "");
+  return withoutSuffix.trim().toLowerCase();
 }
