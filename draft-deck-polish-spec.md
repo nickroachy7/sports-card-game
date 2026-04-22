@@ -2823,3 +2823,177 @@ one-button fix before re-running the mlbam backfill.
 - Auto-creation of player rows missed by BDL sync.
 - Scheduled roster-audit cron.
 - Card detail URL sync on lineup page.
+
+---
+
+# Phase 17 batch — locked 2026-04-22
+
+Feel Pass v1.10.1. One theme: close the 653-player data gap
+identified by Phase 16's audit. Two deliverables:
+
+1. Rewrite `bdl-roster-sync` to use BDL's `getPlayers` endpoint
+   (no "active" filter) iterated per team. BDL's
+   `getActivePlayers` — what the sync has always used — is
+   narrower than MLB's 40-man; it filters out 60-day IL and
+   recently-optioned players. `getPlayers({ team_ids: [N] })`
+   returns everyone BDL knows on a given team.
+2. Chain the P16 MLB-roster-audit into the same daily cron so
+   `is_active_40_man` stays in sync automatically, not just
+   when someone manually curls the audit endpoint.
+
+---
+
+## 41. Roster sync — use `getPlayers` per team
+
+### Goal
+
+Our `player` table under-populates MLB's active 40-man by
+~653 rows (P16 audit). Root cause: `bdl.mlb.getActivePlayers`
+filters to players "actively playing MLB games right now"
+which excludes the 60-day IL + recently-optioned players
+that ARE on the 40-man.
+
+### Scope
+
+- **New provider method** `fetchPlayersByTeam(teamBdlId)` on
+  `MLBDataProvider`. Wraps `bdl.mlb.getPlayers({ team_ids:
+  [N], per_page: 100, cursor })` via the existing
+  `paginate` helper.
+- **Rewrite `/api/cron/bdl-roster-sync`** to iterate teams
+  (reference data upserted as today) and call the new
+  per-team fetch. Upsert logic stays the same; existing
+  `bdl_player_id`-keyed ON CONFLICT handles dedup.
+- **Keep `fetchActivePlayers`** on the provider — other
+  code paths may still want the narrower set (none today,
+  but keeps the interface stable).
+- **Response shape gains** `teams_processed` +
+  `bdl_players_seen` counters alongside the existing
+  `players_upserted` / `players_skipped`.
+
+### Behavior
+
+- Sync runs 30 `getPlayers` calls (one per team).
+- Each call paginates until BDL's cursor is exhausted (the
+  `paginate` helper handles this).
+- Each player is upserted against our existing
+  `bdl_player_id` unique index — so a player traded
+  mid-season appears in BOTH team lists during the
+  crossover window, but the second upsert just updates
+  their team_id to the current one. Fine.
+- Expected: ~1100–1300 `players_upserted` (matches or
+  exceeds MLB's 1285 40-man count, since BDL may include
+  minor leaguers too).
+- Polite 200ms sleep between team fetches — ~6s added
+  runtime.
+
+### Acceptance
+
+- [ ] Post-run, `player` row count grows by ~653 from the
+  Phase 16 baseline.
+- [ ] P16 audit's `missing_from_our_db` drops from 653 to
+  near zero.
+- [ ] `mlbam-id-backfill` post-run catches any newly-added
+  players.
+- [ ] No regression to existing webhook handlers,
+  reconcile, or lineup queries.
+
+### Dependencies
+
+- BDL's `getPlayers` endpoint is documented in the SDK's
+  MLBClient (reference/balldontlie-sdk-mlb-methods.d.ts
+  line 8).
+- `paginate` helper already supports cursor-based pagination.
+
+### Trade-offs
+
+- **30 HTTP calls vs. 1 streaming call.** `getActivePlayers`
+  returned everything in one cursor-paginated stream; the
+  new path is per-team. Net effect: modest runtime increase
+  (~6s added) for a complete data set.
+- **BDL minor leaguers show up too.** `getPlayers` returns
+  everyone on the team, not just 40-man. Harmless —
+  `is_active_40_man` flag is set from BDL's `active` field
+  during upsert, which won't be true for minor leaguers.
+  Extra rows cost ~2MB of DB storage; not a concern.
+- **Still no 100% guarantee.** If a player is genuinely
+  absent from BDL (edge case — someone MLB just added to a
+  40-man and BDL hasn't caught yet), they remain missing.
+  `mlb-roster-audit` surfaces this via
+  `missing_from_our_db`. Soft gap per spec guidance.
+
+---
+
+## 42. Chain roster audit into daily cron
+
+### Goal
+
+P16 shipped the `mlb-roster-audit` endpoint as a manual
+tool. Running it once closed the current drift, but future
+drift accumulates until someone re-runs it. Chain it into
+the daily sync so flag/team corrections happen
+automatically.
+
+### Scope
+
+- Inside `/api/cron/bdl-roster-sync`, after the player-upsert
+  loop finishes, call the same logic
+  `mlb-roster-audit` uses (extracted to a shared helper).
+  Fetches MLB Stats rosters, reconciles flags, refreshes
+  teams, counts missing-from-our-db.
+- Extract the roster-audit core logic to
+  `src/lib/mlb/roster-audit.ts` so both the standalone
+  endpoint AND the daily cron call the same code path.
+- Response shape of `bdl-roster-sync` gains an `audit`
+  sub-object with the P16 audit's counts.
+- Standalone `/api/cron/mlb-roster-audit` endpoint stays
+  (keeps the on-demand manual path).
+
+### Behavior
+
+- Daily sync now takes ~45s total (30 BDL team calls +
+  30 MLB Stats team calls + player UPDATEs). Still well
+  under the 60s Vercel limit.
+- Order: BDL sync first → then audit. Audit runs AFTER
+  new rows land so it sees them.
+- If the audit step fails, the sync still succeeds;
+  failure is logged + returned in response but doesn't
+  tear down the whole cron.
+
+### Acceptance
+
+- [ ] After one daily run, `missing_from_our_db` is stable
+  (no regression).
+- [ ] Audit's `flagged_off` + `flagged_on` stabilize near
+  zero on subsequent daily runs (steady state).
+- [ ] Manual `mlb-roster-audit` endpoint still works.
+
+### Trade-offs
+
+- **Longer cron runtime.** ~45s vs. ~20s today. Fits the
+  budget; not a concern.
+- **Single point of failure — but audit step is optional.**
+  Wrapped in try/catch so a bad MLB Stats response
+  doesn't kill the BDL sync. We take the sync progress +
+  skip the audit on that run.
+- **Cron fire-and-forget — no alert on drift yet.** If
+  `missing_from_our_db` trends up between runs, nothing
+  alerts. Future observability work; not this phase.
+
+---
+
+## 43. Not in scope for v1.10.1
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability dashboard.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Auto-creation of MLB-only rows (schema relax) — deferred
+  until we see how often BDL genuinely misses 40-man.
+- Alerting on drift (`missing_from_our_db` threshold).
+- `retry_failed=true` offset pagination.
