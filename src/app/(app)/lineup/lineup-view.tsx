@@ -28,7 +28,12 @@ import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
-import type { LineupCardVM, LineupTokenVM, LineupViewProps } from "@/lib/lineup/types";
+import type {
+  LineupCardVM,
+  LineupTokenVM,
+  LineupViewProps,
+  SlotGameInfo,
+} from "@/lib/lineup/types";
 
 export type AppliedTokenInfo = {
   tokenType: TokenType;
@@ -48,6 +53,11 @@ type SlotFill = {
   /** Authoritative FP after game reconcile. Zero until the starter's
    *  game finalizes. */
   finalFp: number;
+  /** Polish spec §44 — true when the slot is locked (building-state
+   *  lock rules OR per-slot lock from the starter's game having started). */
+  locked: boolean;
+  /** Polish spec §45 — today's game for this slot's starter, if any. */
+  gameInfo: SlotGameInfo | null;
 };
 
 export function LineupView(props: LineupViewProps) {
@@ -57,7 +67,16 @@ export function LineupView(props: LineupViewProps) {
   const [mode, setMode] = useState<AutoSubMode>(props.autoSubMode);
   const [detailCardId, setDetailCardId] = useState<string | null>(null);
 
-  const locked = props.entryStatus !== "building";
+  // Polish spec §44 — per-slot lock semantics. Bench + tokens remain
+  // draggable in submitted/live states (so the user can edit un-started
+  // slots); individual LineupSlots reject drops when their own game
+  // has started. `locked=true` here only when the contest is fully
+  // final — nothing can be modified.
+  const locked = props.entryStatus === "final";
+  // Legacy entry-status indicator for sidebar + bench chrome — shows
+  // "locked" vibes once the user has submitted, even if individual
+  // slots are still editable.
+  const submitted = props.entryStatus !== "building";
 
   const cardsById = useMemo(() => {
     const map = new Map<string, LineupCardVM>();
@@ -108,6 +127,10 @@ export function LineupView(props: LineupViewProps) {
   }, [props.slots]);
 
   // Build slotFills: for each canonical position, what's there?
+  // Polish spec §44 — per-slot lock derived from game info. Pre-submit
+  // (building) state: all slots unlocked (user is drafting). Post-submit:
+  // slot is locked when the starter's game has started.
+  const isBuilding = props.entryStatus === "building";
   const slotFills = useMemo(() => {
     const fills = {} as Record<LineupPosition, SlotFill>;
     const byPos = new Map<LineupPosition, string | null>();
@@ -130,15 +153,44 @@ export function LineupView(props: LineupViewProps) {
         }
       }
       const fp = slotFpByPosition.get(pos);
+      const gameInfo = card ? (props.slotGameByCardId[card.id] ?? null) : null;
+      const slotLocked =
+        !isBuilding &&
+        gameInfo !== null &&
+        (gameInfo.status === "live" ||
+          gameInfo.status === "final" ||
+          (gameInfo.scheduledStart !== null &&
+            new Date(gameInfo.scheduledStart).getTime() <= Date.now()));
+
+      // Polish spec §46 — post-submit, the card footer shows contest FP
+      // instead of career FP. Compute here so the Card component stays
+      // oblivious to lineup concerns.
+      const liveFp = fp?.liveFp ?? 0;
+      const finalFp = fp?.finalFp ?? 0;
+      const contestFp = liveFp + finalFp;
+      const contestFpLabel: "LIVE" | "FINAL" = gameInfo?.status === "final" ? "FINAL" : "LIVE";
+      const enhancedCard: LineupCardVM | null =
+        card && !isBuilding ? { ...card, contestFp, contestFpLabel } : card;
+
       fills[pos] = {
-        card,
+        card: enhancedCard,
         appliedToken,
-        liveFp: fp?.liveFp ?? 0,
-        finalFp: fp?.finalFp ?? 0,
+        liveFp,
+        finalFp,
+        locked: slotLocked,
+        gameInfo,
       };
     }
     return fills;
-  }, [optimisticSlots, cardsById, tokensById, tokenApps, slotFpByPosition]);
+  }, [
+    optimisticSlots,
+    cardsById,
+    tokensById,
+    tokenApps,
+    slotFpByPosition,
+    props.slotGameByCardId,
+    isBuilding,
+  ]);
 
   const assignedCardIds = useMemo(() => {
     const set = new Set<string>();
@@ -173,7 +225,8 @@ export function LineupView(props: LineupViewProps) {
   }, [slotFills]);
 
   const filledCount = optimisticSlots.filter((s) => s.cardId !== null).length;
-  const canSubmit = filledCount === 10 && !locked && !submitting;
+  // Submit is a one-time entry step; only meaningful in building state.
+  const canSubmit = filledCount === 10 && !submitted && !submitting;
 
   function handleCardDropped(
     position: LineupPosition,
@@ -337,7 +390,13 @@ export function LineupView(props: LineupViewProps) {
               {props.contestName}
             </h1>
             <span className="text-xs text-[var(--text-3)]">
-              {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
+              {submitted ? (
+                <>
+                  {props.entryStatus === "final" ? "Final" : "Submitted"} · slots lock at game time
+                </>
+              ) : (
+                <>Locks in {lockCountdown}</>
+              )}
             </span>
           </div>
         </header>
@@ -345,7 +404,6 @@ export function LineupView(props: LineupViewProps) {
       diamond={
         <DiamondGrid
           slotFills={slotFills}
-          locked={locked}
           onCardDropped={handleCardDropped}
           onTokenDropped={handleTokenDropped}
           onRemoveToken={handleRemoveToken}

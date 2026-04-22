@@ -1,7 +1,7 @@
 "use client";
 
 import type { LineupPosition } from "@/lib/contracts/lineup";
-import type { LineupCardVM } from "@/lib/lineup/types";
+import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { LineupSlot } from "./LineupSlot";
 
 type SlotFill = {
@@ -11,11 +11,14 @@ type SlotFill = {
     bonusFp: number;
     applicationId: string;
   } | null;
+  /** Polish spec §44 — per-slot lock derived from gameInfo + building state. */
+  locked: boolean;
+  /** Polish spec §45 — game info for this slot (if any). */
+  gameInfo: SlotGameInfo | null;
 };
 
 type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
-  locked: boolean;
   onCardDropped: (
     position: LineupPosition,
     cardId: string | null,
@@ -36,7 +39,6 @@ type Props = {
  */
 export function DiamondGrid({
   slotFills,
-  locked,
   onCardDropped,
   onTokenDropped,
   onRemoveToken,
@@ -49,7 +51,8 @@ export function DiamondGrid({
         position={position}
         card={fill.card}
         appliedToken={fill.appliedToken}
-        locked={locked}
+        locked={fill.locked}
+        gameInfo={fill.gameInfo}
         onCardDropped={(cardId, fromPosition) => onCardDropped(position, cardId, fromPosition)}
         onTokenDropped={(tokenId) => onTokenDropped(position, tokenId)}
         onRemoveToken={onRemoveToken}

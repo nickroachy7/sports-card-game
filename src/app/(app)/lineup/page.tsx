@@ -7,7 +7,7 @@ import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
-import type { LineupCardVM, LineupSlotVM, LineupTokenVM } from "@/lib/lineup/types";
+import type { LineupCardVM, LineupSlotVM, LineupTokenVM, SlotGameInfo } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
 export const dynamic = "force-dynamic";
@@ -87,6 +87,7 @@ export default async function LineupPage() {
     player_id: string;
     player_name: string;
     positions: string[] | null;
+    team_id: string | null;
     team_abbreviation: string | null;
     status: PlayerStatus;
     is_pitcher: boolean;
@@ -102,6 +103,7 @@ export default async function LineupPage() {
       c.id, c.player_id,
       p.full_name AS player_name,
       p.positions, p.status, p.is_pitcher, p.mlbam_id,
+      p.team_id,
       t.abbreviation AS team_abbreviation,
       c.current_tier, c.career_fp_total, c.contract_plays_remaining,
       c.is_expired, c.applied_token_id
@@ -156,6 +158,7 @@ export default async function LineupPage() {
     playerName: r.player_name,
     position: r.positions && r.positions.length > 0 ? (r.positions[0] ?? null) : null,
     positions: r.positions ?? [],
+    teamId: r.team_id,
     teamAbbreviation: r.team_abbreviation,
     tier: r.current_tier,
     careerFp: Number(r.career_fp_total ?? 0),
@@ -168,6 +171,63 @@ export default async function LineupPage() {
     appliedTokenId: r.applied_token_id,
     photoUrl: r.mlbam_id ? mlbamHeadshotUrl(r.mlbam_id, "small") : null,
   }));
+
+  // Polish spec §45 — per-card today's game info. One game per team
+  // per date; we join contest.included_game_ids to narrow to the
+  // contest's slate. Empty if no contest games fall on today.
+  const slotGameByCardId: Record<string, SlotGameInfo> = {};
+  const cardTeamIds = new Set(cards.map((c) => c.teamId).filter((id): id is string => !!id));
+  if (cardTeamIds.size > 0 && (contest.included_game_ids?.length ?? 0) > 0) {
+    type GameRow = {
+      id: string;
+      home_team_id: string;
+      away_team_id: string;
+      home_abbr: string | null;
+      away_abbr: string | null;
+      scheduled_start: string | null;
+      status: SlotGameInfo["status"];
+      home_runs: number | null;
+      away_runs: number | null;
+    };
+    const gamesRes = await db.execute<GameRow>(sql`
+      SELECT
+        g.id,
+        g.home_team_id, g.away_team_id,
+        ht.abbreviation AS home_abbr,
+        at.abbreviation AS away_abbr,
+        g.scheduled_start, g.status, g.home_runs, g.away_runs
+      FROM public.game g
+      LEFT JOIN public.team ht ON ht.id = g.home_team_id
+      LEFT JOIN public.team at ON at.id = g.away_team_id
+      WHERE g.id = ANY(${sql`ARRAY[${sql.join(
+        (contest.included_game_ids ?? []).map((id) => sql`${id}::uuid`),
+        sql`, `,
+      )}]::uuid[]`})
+    `);
+    // Build team_id → game info. A team can only appear in one game
+    // per contest slate (one game per day per team).
+    const gameByTeamId = new Map<string, GameRow>();
+    for (const g of gamesRes.rows) {
+      gameByTeamId.set(g.home_team_id, g);
+      gameByTeamId.set(g.away_team_id, g);
+    }
+    for (const card of cards) {
+      if (!card.teamId) continue;
+      const game = gameByTeamId.get(card.teamId);
+      if (!game) continue;
+      const isHome = game.home_team_id === card.teamId;
+      slotGameByCardId[card.id] = {
+        gameId: game.id,
+        playerTeamId: card.teamId,
+        opponentAbbr: (isHome ? game.away_abbr : game.home_abbr) ?? "???",
+        isHome,
+        scheduledStart: game.scheduled_start,
+        status: game.status,
+        homeRuns: game.home_runs,
+        awayRuns: game.away_runs,
+      };
+    }
+  }
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({
     id: r.id,
@@ -210,6 +270,7 @@ export default async function LineupPage() {
         tokenId: a.tokenId,
         cardId: a.cardId,
       }))}
+      slotGameByCardId={slotGameByCardId}
     />
   );
 }

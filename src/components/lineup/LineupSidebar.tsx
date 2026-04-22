@@ -3,12 +3,13 @@
 import { SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
+import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { useGamesActive } from "@/components/lineup/useGamesActive";
 import { Button } from "@/components/ui/button";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { type InningInfo, liveLabel } from "@/lib/lineup/status-chip-label";
-import type { LineupCardVM } from "@/lib/lineup/types";
+import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
 type SlotFill = {
@@ -16,6 +17,9 @@ type SlotFill = {
   appliedToken: { bonusFp: number } | null;
   liveFp: number;
   finalFp: number;
+  /** Polish spec §48 — per-slot game state drives the Box Score
+   *  row chip the same way it drives the slot footer. */
+  gameInfo?: SlotGameInfo | null;
 };
 
 type EntryStatus = "building" | "submitted" | "locked" | "live" | "final";
@@ -185,7 +189,7 @@ function BoxScoreSection({
           return (
             <li
               key={pos}
-              className="grid grid-cols-[2rem_1fr_3rem] items-baseline gap-1 text-[11px]"
+              className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 text-[11px]"
             >
               <span className="font-mono text-[var(--text-3)]">{pos}</span>
               <span
@@ -196,6 +200,12 @@ function BoxScoreSection({
               >
                 {playerLabel}
               </span>
+              {/* Polish spec §48 — state chip in Box Score row. */}
+              <SlotGameState
+                info={fill.gameInfo ?? null}
+                variant="chip"
+                className="font-mono text-[9px]"
+              />
               <span
                 className={cn(
                   "text-right font-mono tabular-nums",

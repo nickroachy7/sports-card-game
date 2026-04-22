@@ -1,5 +1,6 @@
 "use client";
 
+import { Lock } from "lucide-react";
 import { useEffect } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { getEmptyImage } from "react-dnd-html5-backend";
@@ -9,11 +10,12 @@ import { dragResult } from "@/components/card/drag-layer-state";
 import { useCardDepleteEvent } from "@/components/lineup/CardContractEventsProvider";
 import { SlotContractGlow } from "@/components/lineup/SlotContractGlow";
 import { SlotFpGlow } from "@/components/lineup/SlotFpGlow";
+import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
 import { isPitcherSlot } from "@/lib/contracts/lineup";
-import type { LineupCardVM } from "@/lib/lineup/types";
+import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
 import { type CardDragItem, DRAG_TYPES, type TokenDragItem } from "./drag-types";
@@ -26,7 +28,16 @@ type Props = {
     bonusFp: number;
     applicationId: string;
   } | null;
+  /**
+   * Per-slot lock (polish spec §44). True when the slot's player's
+   * game has started and edits are rejected server-side. Also true
+   * for any slot while the contest is in building → submitted edit-
+   * gating paths that pre-date Phase 18. Falsy = fully editable.
+   */
   locked: boolean;
+  /** Today's game info for this slot, if any. Drives the game-state
+   *  footer line (polish spec §45). */
+  gameInfo: SlotGameInfo | null;
   /**
    * Called when a card is dropped on this slot. `fromPosition` is the
    * origin slot when the drag started from another lineup slot (used
@@ -52,6 +63,7 @@ function LineupSlotInner({
   card,
   appliedToken,
   locked,
+  gameInfo,
   onCardDropped,
   onTokenDropped,
   onRemoveToken,
@@ -193,7 +205,7 @@ function LineupSlotInner({
         {/* Per-slot contract-depletion glow — post-submit only. Polish spec §30. */}
         <SlotContractGlow depleteEvent={depleteEvent} enabled={locked} />
         {appliedToken && (
-          <div className="absolute -bottom-2 -right-2 z-10">
+          <div className="absolute -right-2 -bottom-2 z-10">
             <AppliedTokenBadge
               tokenType={appliedToken.type as TokenType}
               bonusFp={appliedToken.bonusFp}
@@ -202,7 +214,16 @@ function LineupSlotInner({
             />
           </div>
         )}
+        {/* Per-slot lock glyph — polish spec §44. Shows when the
+            slot is gated because its player's game has started. */}
+        {locked && (
+          <div className="absolute top-1 right-1 z-10 rounded-full bg-black/60 p-0.5 text-[var(--text-2)]">
+            <Lock className="size-2.5" aria-hidden="true" />
+          </div>
+        )}
       </div>
+      {/* Game-state footer — polish spec §45. */}
+      <SlotGameState info={gameInfo} />
       {!locked && (
         <button
           type="button"

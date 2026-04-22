@@ -22,6 +22,16 @@ export type CardViewModel = {
    *  ribbon stamp. Non-playable; drag sources must gate via canDrag. */
   isVaulted?: boolean;
   photoUrl?: string | null;
+  /**
+   * Polish spec §46 (Phase 18). When set, the card's footer shows the
+   * contest-scoped FP instead of careerFp. Lineup page populates this
+   * post-submit with slot.liveFp + slot.finalFp; other contexts leave
+   * it undefined and the card renders career FP as usual.
+   */
+  contestFp?: number | null;
+  /** Distinguishes the label for contestFp. "LIVE" while the slot's
+   *  game is in progress; "FINAL" once it finalizes. */
+  contestFpLabel?: "LIVE" | "FINAL";
 };
 
 const SIZE_STYLES: Record<
@@ -189,15 +199,33 @@ export function Card({
             {card.playerName}
           </div>
           <div className="flex items-center justify-between" style={{ lineHeight: 1.1 }}>
-            <span
-              className="font-mono font-bold"
-              style={{
-                fontSize: isSmall ? 9 : isLarge ? 16 : 12,
-                color: "var(--text)",
-              }}
-            >
-              {Math.round(card.careerFp).toLocaleString()} FP
-            </span>
+            {/* Polish spec §46 — if this card is rostered in a
+                submitted/live/final contest, show the contest FP here
+                with a LIVE / FINAL label. Else career FP. */}
+            {card.contestFp !== null && card.contestFp !== undefined ? (
+              <span
+                className="flex items-baseline gap-1 font-mono font-bold"
+                style={{
+                  fontSize: isSmall ? 9 : isLarge ? 16 : 12,
+                  color: card.contestFpLabel === "LIVE" ? "rgb(52, 211, 153)" : "var(--text)",
+                }}
+              >
+                <span>{card.contestFp.toFixed(1)}</span>
+                <span style={{ fontSize: isSmall ? 7 : isLarge ? 10 : 8, opacity: 0.8 }}>
+                  {card.contestFpLabel ?? "FP"}
+                </span>
+              </span>
+            ) : (
+              <span
+                className="font-bold font-mono"
+                style={{
+                  fontSize: isSmall ? 9 : isLarge ? 16 : 12,
+                  color: "var(--text)",
+                }}
+              >
+                {Math.round(card.careerFp).toLocaleString()} FP
+              </span>
+            )}
             <span
               className="font-mono"
               style={{
