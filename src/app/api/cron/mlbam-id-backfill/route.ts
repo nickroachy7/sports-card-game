@@ -78,11 +78,22 @@ export async function GET(req: Request): Promise<Response> {
     };
 
     // ── 1) 40-man roster pass — the Phase 15 primary strategy. ───
+    // Build a global index of all 30 rosters first, then match ALL
+    // our mlbam_id-less players against the union. Scoping by
+    // team_id was too strict: players traded mid-season have a
+    // stale team_id in our DB + the roster endpoint knows them by
+    // their current team, so the scoped match missed them. Match
+    // globally by name + disambiguate by team_id when multiple
+    // candidates share a name.
     if (!skipRoster) {
       type TeamRow = { id: string; abbreviation: string };
       const teamsRes = await db.execute<TeamRow>(sql`
         SELECT id, abbreviation FROM public.team ORDER BY abbreviation ASC
       `);
+
+      // roster entries keyed by "firstNorm|lastNorm". One name may
+      // map to multiple entries across teams (Jose Ramirez etc.).
+      const rosterByName = new Map<string, Array<RosterEntry & { teamAbbr: string }>>();
 
       for (const team of teamsRes.rows) {
         const mlbId = mlbStatsTeamId(team.abbreviation);
@@ -90,69 +101,94 @@ export async function GET(req: Request): Promise<Response> {
         try {
           const roster = await fetchRoster40Man(mlbId);
           if (roster.length === 0) continue;
-
-          // Pull our player rows on this team that still need an id.
-          // photo_synced_at filter respects the retry_failed flag.
-          const skipClause = retryFailed ? sql`` : sql`AND photo_synced_at IS NULL`;
-          type PlayerRow = {
-            id: string;
-            first_name: string;
-            last_name: string;
-          };
-          const ourPlayers = await db.execute<PlayerRow>(sql`
-            SELECT id, first_name, last_name FROM public.player
-            WHERE team_id = ${team.id}::uuid
-              AND mlbam_id IS NULL
-              ${skipClause}
-          `);
-          if (ourPlayers.rows.length === 0) continue;
-
-          for (const p of ourPlayers.rows) {
-            const firstNorm = normalizeName(p.first_name);
-            const lastNorm = normalizeName(p.last_name);
-
-            // Exact-normalized match against this team's 40-man.
-            let match = roster.find(
-              (r) =>
-                normalizeName(r.firstName) === firstNorm && normalizeName(r.lastName) === lastNorm,
-            );
-            let strategy: MatchStrategy = "roster_exact";
-
-            // Fuzzy fallback within the team (≤ 2 combined). Single-
-            // candidate only to minimize false positives.
-            if (!match) {
-              const fuzzy = roster.filter(
-                (r) =>
-                  levenshtein(normalizeName(r.firstName), firstNorm) +
-                    levenshtein(normalizeName(r.lastName), lastNorm) <=
-                  2,
-              );
-              if (fuzzy.length === 1) {
-                match = fuzzy[0];
-                strategy = "roster_fuzzy";
-              }
-            }
-
-            if (match) {
-              await db.execute(sql`
-                UPDATE public.player
-                SET mlbam_id = ${match.mlbamId}::int,
-                    photo_synced_at = now()
-                WHERE id = ${p.id}::uuid
-              `);
-              rosterMatched += 1;
-              strategies[strategy] += 1;
-            }
-            // Unmatched-against-this-team players just stay in the
-            // pool; they'll get the search fallback below.
+          for (const r of roster) {
+            const key = `${normalizeName(r.firstName)}|${normalizeName(r.lastName)}`;
+            const list = rosterByName.get(key) ?? [];
+            list.push({ ...r, teamAbbr: team.abbreviation });
+            rosterByName.set(key, list);
           }
-
           teamsProcessed += 1;
-          // Polite delay between team fetches.
-          await sleep(500);
+          await sleep(500); // Polite delay.
         } catch {
-          // Ignore this team on error; next team.
+          // Skip on error.
         }
+      }
+
+      // Pull every player row that still needs an id. photo_synced_at
+      // filter respects the retry_failed flag.
+      const skipClause = retryFailed ? sql`` : sql`AND p.photo_synced_at IS NULL`;
+      type PlayerRow = {
+        id: string;
+        first_name: string;
+        last_name: string;
+        team_abbr: string | null;
+      };
+      const ourPlayers = await db.execute<PlayerRow>(sql`
+        SELECT p.id, p.first_name, p.last_name, t.abbreviation AS team_abbr
+        FROM public.player p
+        LEFT JOIN public.team t ON t.id = p.team_id
+        WHERE p.mlbam_id IS NULL
+          AND p.is_active_40_man = true
+          ${skipClause}
+      `);
+
+      for (const p of ourPlayers.rows) {
+        const firstNorm = normalizeName(p.first_name);
+        const lastNorm = normalizeName(p.last_name);
+        const key = `${firstNorm}|${lastNorm}`;
+        const candidates = rosterByName.get(key) ?? [];
+        let strategy: MatchStrategy = "roster_exact";
+
+        // Fuzzy pass if no exact-normalized hit. Union all roster
+        // entries across teams, pick those within Levenshtein ≤ 2.
+        if (candidates.length === 0) {
+          for (const [k, entries] of rosterByName.entries()) {
+            const [rFirst, rLast] = k.split("|");
+            if (typeof rFirst !== "string" || typeof rLast !== "string") continue;
+            if (levenshtein(rFirst, firstNorm) + levenshtein(rLast, lastNorm) <= 2) {
+              candidates.push(...entries);
+            }
+          }
+          if (candidates.length > 0) strategy = "roster_fuzzy";
+        }
+
+        if (candidates.length === 0) continue; // Fall to search.
+
+        // One candidate: accept.
+        if (candidates.length === 1) {
+          const match = candidates[0];
+          if (match) {
+            await db.execute(sql`
+              UPDATE public.player
+              SET mlbam_id = ${match.mlbamId}::int,
+                  photo_synced_at = now()
+              WHERE id = ${p.id}::uuid
+            `);
+            rosterMatched += 1;
+            strategies[strategy] += 1;
+          }
+          continue;
+        }
+
+        // Multiple candidates (same normalized name on different
+        // teams): disambiguate by our cached team_abbr. If none
+        // match, skip — let the search fallback try later.
+        if (p.team_abbr) {
+          const byTeam = candidates.find(
+            (c) => c.teamAbbr.toLowerCase() === p.team_abbr?.toLowerCase(),
+          );
+          if (byTeam) {
+            await db.execute(sql`
+              UPDATE public.player
+              SET mlbam_id = ${byTeam.mlbamId}::int,
+                  photo_synced_at = now()
+              WHERE id = ${p.id}::uuid
+            `);
+            rosterMatched += 1;
+            strategies.team_disambiguated += 1;
+          }
+        }
+        // Ambiguous: no team match either → skip, search fallback.
       }
     }
 
