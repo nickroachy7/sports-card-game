@@ -11,13 +11,16 @@ export const runtime = "nodejs";
  *
  * Lets us fire synthetic `mlb.game.started` / `mlb.game.ended` /
  * `mlb.batter.*` events against our own webhook processor without
- * needing BDL to register a real webhook URL. Useful for:
- *   - local Phase 3 development against the local Supabase stack
- *   - end-to-end smoke testing of scoring + token triggers on prod
- *     before BDL webhooks are registered
+ * needing BDL to register a real webhook URL. Useful for local
+ * development and for pre-registration smoke tests against a
+ * preview deployment.
  *
- * Auth: requires `Authorization: Bearer ${CRON_SECRET}` — same gate as
- * our cron endpoints. Never enabled for unauthenticated traffic.
+ * Gating (polish spec §12.1):
+ *   - 404 when NODE_ENV === 'production' so the route does not exist
+ *     at all on prod — real BDL webhooks hit /api/webhooks/balldontlie/mlb
+ *     with HMAC verification.
+ *   - Otherwise: requires `Authorization: Bearer ${CRON_SECRET}` —
+ *     same gate as cron endpoints.
  *
  * POST body:
  * ```json
@@ -31,11 +34,17 @@ export const runtime = "nodejs";
  * ```
  *
  * The handler inserts into `game_event`, which triggers the scoring
- * reducer — same write path as a real BDL webhook. Source column will
- * show `webhook` per existing handler behavior; callers can tell this
- * is a simulated event by the `dev-sim:` prefix on the delivery id.
+ * reducer — same write path as a real BDL webhook. Callers can tell
+ * this is a simulated event by the `dev-sim:` prefix on the delivery
+ * id in `webhook_delivery`.
  */
 export async function POST(req: NextRequest): Promise<Response> {
+  // Prod guard — route does not exist at all in production so there's
+  // no surface to accidentally hit with a cron secret leak.
+  if (process.env.NODE_ENV === "production") {
+    return new NextResponse("Not found", { status: 404 });
+  }
+
   const auth = req.headers.get("authorization");
   const secret = process.env.CRON_SECRET;
   if (!secret || auth !== `Bearer ${secret}`) {
