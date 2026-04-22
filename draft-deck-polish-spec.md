@@ -1069,3 +1069,178 @@ deferrals from Phase 8 interviewing:
 - **Rank-based XP against multi-user contests** (needs real users
   first).
 - **Mobile layout, sound, haptics, artwork.**
+
+---
+
+# Phase 9 batch — locked 2026-04-22
+
+Phase 8 shipped the BDL webhook pipeline but events only fire
+against `public.game` rows that already exist. Today only contest
+creation can populate those rows, and contest creation is gated
+on the season having scheduled games in it. The product is
+one sync away from being actually playable against live MLB
+data; Phase 9 closes that gap.
+
+Single deliverable: schedule sync + proof that one real MLB game
+scores a real user's lineup end-to-end.
+
+---
+
+## 14. Game schedule sync + first real end-to-end
+
+### Goal
+
+Make the product playable with live MLB data. A 2-hourly cron
+pulls today + next 2 days of scheduled games from BDL and upserts
+them into `public.game`. Webhook events for those games land
+correctly (not skipped as "unknown game"). A lineup submitted
+against a card pool of players in one of those games scores end-
+to-end when the game finalizes.
+
+This is functional work, not UX polish — no `/palette` demo,
+no new animations, no reduced-motion concerns.
+
+### What works today
+
+- Player sync exists and keeps `public.player` fresh (verified:
+  9/9 sample players resolved during P8.6 triage).
+- Team data is stable (static 30 MLB franchises; seeded).
+- `public.game` has a schema but nothing auto-populates it for
+  current-day MLB. Phase 4 and earlier flows created rows
+  opportunistically; no ongoing pull.
+- Webhook pipeline handles unknown-game events by skipping
+  quietly (P8.6 `unhandled: true` path).
+- Contest creation (`create_daily_contest`) references games via
+  `contest.included_game_ids uuid[]`. When games aren't
+  pre-populated, the contest either has an empty array or creates
+  the game row itself. Schedule sync makes the former the norm.
+
+### What Phase 9 builds
+
+**14.1 — Schedule sync server function.**
+- New file `src/lib/mlb/schedule-sync.ts` exporting
+  `syncScheduleHorizon(daysAhead: number)`:
+  - Fetches `getGames({ dates: [today, today+1, today+2] })` via
+    the existing `MLBDataProvider`.
+  - For each returned `MLBGame`:
+    - Resolve `home_team_id` + `away_team_id` via
+      `SELECT id FROM public.team WHERE bdl_team_id = $1`.
+    - If either team is missing, log + skip the game (shouldn't
+      happen with a full team seed; surfaces data gaps
+      explicitly).
+    - Upsert `public.game` keyed on `bdl_game_id` with:
+      `home_team_id`, `away_team_id`, `scheduled_start`,
+      `status` (translated from BDL's `game.status` string),
+      `venue`, `season_id` (derived from BDL `season` year).
+  - Returns `{ synced: number, skipped: number, errors: string[] }`
+    for observability.
+
+**14.2 — BDL `status` → our enum translation.**
+- Our `game_status` enum: `'scheduled' | 'live' | 'final' | 'postponed' | 'suspended' | 'canceled'`.
+- BDL publishes its own string set (e.g., `"Scheduled"`,
+  `"In Progress"`, `"Final"`, `"Postponed"`, `"Delayed"`).
+  Translation table lives in `schedule-sync.ts`, conservative on
+  unknowns (map to `'scheduled'` + log).
+
+**14.3 — Cron endpoint.**
+- `src/app/api/cron/sync-schedule/route.ts`:
+  - `GET` (cron-friendly), `CRON_SECRET`-gated.
+  - Wraps `syncScheduleHorizon(2)` with Sentry instrumentation.
+  - Returns the summary JSON for observability in Vercel logs.
+- `vercel.json` cron config: `0 */2 7-23 * * *` (every 2h from
+  7 AM to 11 PM ET — UTC-5/UTC-4 handled by Vercel at runtime
+  via a TZ-aware schedule; document the offset).
+- Idempotent — re-running within the same 2-hour window is safe.
+
+**14.4 — Status-transition guard.**
+- Sync may overwrite a `'live'` game back to `'scheduled'` if BDL
+  momentarily reports the earlier state. Guard the upsert: only
+  move a game backward in the lifecycle (live → scheduled,
+  final → live) if the BDL timestamp is more recent than the last
+  webhook-driven update.
+- Simpler alternative: never regress status. Prefer this —
+  webhooks are authoritative for status.
+
+**14.5 — First real end-to-end smoke.**
+- Hand-run scenario: pick a scheduled MLB game tonight; ensure it
+  lands in `public.game`; create a contest that references it;
+  submit a lineup with cards for players in that game; observe
+  `webhook_delivery` fill + `game_event` rows write + `final_fp`
+  populate + `contest_entry.status = 'final'` after
+  `mlb.game.ended` fires.
+- Document the run in `ADR-0014` as the "first real game"
+  verification — the moment the product works without any dev-sim
+  events.
+
+### Acceptance
+
+- [ ] `syncScheduleHorizon(2)` upserts N scheduled games from
+  BDL; rerun without duplicates.
+- [ ] Every BDL `game.status` maps to a valid `game_status` enum
+  value (no default-to-scheduled without logging).
+- [ ] Cron endpoint returns `{ synced, skipped, errors }` JSON
+  and is reachable only with a valid `CRON_SECRET`.
+- [ ] `vercel.json` schedules the cron every 2 hours in the
+  active window.
+- [ ] After one successful cron run on prod, at least one
+  scheduled game for today exists in `public.game`.
+- [ ] A real `mlb.game.started` webhook for a synced game updates
+  `public.game.status = 'live'` (no longer unknown-game-skipped).
+- [ ] A lineup-resolving end-to-end completes: `game_event` rows
+  land, `reconcileGame` fires at game-end, `contest_entry`
+  settles with `final_score > 0`, test-account lineup reflects
+  the scoring.
+- [ ] Integration / unit test for the status translation table +
+  upsert idempotency.
+
+### Dependencies
+
+- BDL SDK `getGames` — already wired via
+  `src/lib/mlb/provider.ts`.
+- `public.game` schema — no migration needed (columns already
+  exist per Phase 1).
+- Vercel cron infrastructure — already in use for other jobs
+  (season close, etc.).
+- Player / team sync — assumed working; any data gaps logged +
+  skipped, not fatal.
+
+### Trade-offs
+
+- **2h cadence means up-to-2h lag** for last-minute schedule
+  changes (rain-outs, reschedules). Acceptable; contests are
+  daily-granular not hour-granular.
+- **BDL status is authoritative for schedule, but webhooks are
+  authoritative for real-time status transitions.** The no-
+  regress rule keeps sync from stomping on webhook writes.
+- **Probable starting pitchers not available from BDL SDK.**
+  Parked — P8.5 W/L heuristic uses game-end stats, so probables
+  aren't a functional requirement. Future slice if we pivot
+  providers or BDL adds the field.
+- **No retro-backfill of historical games.** Only today + next
+  2 days. Historical contest resolution is already done.
+- **One real-game smoke is not "works every game" proof.** If a
+  bug surfaces on an edge case (double-header, suspended game,
+  postponement), we'll learn it in live traffic, not
+  pre-launch. Acceptable given the webhook pipeline's observable
+  failure paths (`webhook_failed`, `unhandled: true` skips).
+
+---
+
+## 15. Not in scope for this pass
+
+Still deferred. Carries forward §13 plus new items surfaced in
+Phase 8:
+
+- **Schedule sync for historical seasons.**
+- **Probable SP enrichment** (depends on BDL adding the field or
+  a second data source).
+- **Ceremony fn tolerance for pre-vaulted cards** (P7.4
+  carry-over).
+- **Live contest view polish** (score ticks, event-feed
+  cinematics).
+- **Onboarding flow pass.**
+- **Empty + error state sweep.**
+- **Accessibility audit** (WCAG 2.1 AA).
+- **Tier foil motion.**
+- **Dupe panel multi-instance picker.**
+- **Mobile / sound / haptics / artwork.**
