@@ -204,3 +204,52 @@ async function submitLineupImpl(
 }
 
 export const submitLineup = wrapAction(submitLineupImpl, { name: "submitLineup" });
+
+// ── Slot ↔ slot swap (polish spec §11.2) ─────────────────────────────
+
+type SwapLineupSlotsInput = {
+  entryId: string;
+  positionA: string;
+  positionB: string;
+};
+
+async function swapLineupSlotsImpl(input: SwapLineupSlotsInput): Promise<ActionResult<undefined>> {
+  if (!input.entryId || !input.positionA || !input.positionB) {
+    return { ok: false, error: { code: "VALIDATION", message: "Invalid input." } };
+  }
+  if (input.positionA === input.positionB) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: "Source and target are identical." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    await getDb().execute(sql`
+      SELECT public.swap_lineup_slots(
+        ${user.id}::uuid,
+        ${input.entryId}::uuid,
+        ${input.positionA}::text,
+        ${input.positionB}::text
+      )
+    `);
+    revalidatePath("/lineup");
+    await captureServerEvent(user.id, "lineup_slots_swapped", {
+      entry_id: input.entryId,
+      position_a: input.positionA,
+      position_b: input.positionB,
+    });
+    return { ok: true, data: undefined };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const swapLineupSlots = wrapAction(swapLineupSlotsImpl, {
+  name: "swapLineupSlots",
+});

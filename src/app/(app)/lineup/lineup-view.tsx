@@ -6,7 +6,12 @@ import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
 
-import { setAutoSubMode, submitLineup, updateLineupSlot } from "@/app/actions/lineup";
+import {
+  setAutoSubMode,
+  submitLineup,
+  swapLineupSlots,
+  updateLineupSlot,
+} from "@/app/actions/lineup";
 import { applyToken, removeToken } from "@/app/actions/tokens";
 import { CardDetailDrawer } from "@/components/card/CardDetailDrawer";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
@@ -121,11 +126,35 @@ export function LineupView(props: LineupViewProps) {
   const filledCount = optimisticSlots.filter((s) => s.cardId !== null).length;
   const canSubmit = filledCount === 10 && !locked && !submitting;
 
-  function handleCardDropped(position: LineupPosition, cardId: string | null) {
+  function handleCardDropped(
+    position: LineupPosition,
+    cardId: string | null,
+    fromPosition: LineupPosition | null,
+  ) {
     startTransition(async () => {
-      // Optimistic overlay: show the card in the slot instantly. The
-      // useOptimistic state is discarded when this transition settles,
-      // at which point props.slots carries the real committed state.
+      // Slot → slot drop: run the atomic swap through swap_lineup_slots
+      // so both slots update in one transaction. Optimistic overlay
+      // swaps both positions; server-side SQL fn validates dual
+      // eligibility.
+      if (fromPosition && cardId) {
+        const currentAtTarget =
+          optimisticSlots.find((s) => s.position === position)?.cardId ?? null;
+        applyOptimisticPatch({ position, cardId });
+        applyOptimisticPatch({ position: fromPosition, cardId: currentAtTarget });
+        const result = await swapLineupSlots({
+          entryId: props.entryId,
+          positionA: fromPosition,
+          positionB: position,
+        });
+        if (!result.ok) {
+          toast.error(result.error.message);
+          return;
+        }
+        router.refresh();
+        return;
+      }
+
+      // Bench → slot (or explicit remove with cardId=null).
       applyOptimisticPatch({ position, cardId });
       const result = await updateLineupSlot({
         entryId: props.entryId,

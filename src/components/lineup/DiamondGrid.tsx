@@ -16,7 +16,11 @@ type SlotFill = {
 type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
   locked: boolean;
-  onCardDropped: (position: LineupPosition, cardId: string | null) => void;
+  onCardDropped: (
+    position: LineupPosition,
+    cardId: string | null,
+    fromPosition: LineupPosition | null,
+  ) => void;
   onTokenDropped: (position: LineupPosition, tokenId: string) => void;
   onRemoveToken: (applicationId: string) => void;
   onOpenDetail: (cardId: string) => void;
@@ -46,7 +50,7 @@ export function DiamondGrid({
         card={fill.card}
         appliedToken={fill.appliedToken}
         locked={locked}
-        onCardDropped={(cardId) => onCardDropped(position, cardId)}
+        onCardDropped={(cardId, fromPosition) => onCardDropped(position, cardId, fromPosition)}
         onTokenDropped={(tokenId) => onTokenDropped(position, tokenId)}
         onRemoveToken={onRemoveToken}
         onOpenDetail={onOpenDetail}

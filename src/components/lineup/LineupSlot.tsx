@@ -1,8 +1,11 @@
 "use client";
 
-import { useDrop } from "react-dnd";
+import { useEffect } from "react";
+import { useDrag, useDrop } from "react-dnd";
+import { getEmptyImage } from "react-dnd-html5-backend";
 
 import { Card } from "@/components/card/Card";
+import { dragResult } from "@/components/card/drag-layer-state";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
@@ -21,7 +24,13 @@ type Props = {
     applicationId: string;
   } | null;
   locked: boolean;
-  onCardDropped: (cardId: string | null) => void;
+  /**
+   * Called when a card is dropped on this slot. `fromPosition` is the
+   * origin slot when the drag started from another lineup slot (used
+   * to route to swap_lineup_slots); null for bench → slot drops and
+   * for explicit "remove" clicks (pass cardId=null).
+   */
+  onCardDropped: (cardId: string | null, fromPosition: LineupPosition | null) => void;
   onTokenDropped: (tokenId: string) => void;
   onRemoveToken: (applicationId: string) => void;
   onOpenDetail: (cardId: string) => void;
@@ -40,6 +49,8 @@ export function LineupSlot({
   const isPitcher = isPitcherSlot(position);
 
   // Card drop target — accepts any hitter card for hitter slots, any pitcher for SP slots.
+  // Self-drop (dragging from this slot back to itself) is rejected so the
+  // invalid-drop bounce-back fires rather than a no-op server call.
   const [{ isCardOver, canCardDrop }, cardDropRef] = useDrop<
     CardDragItem,
     void,
@@ -47,17 +58,50 @@ export function LineupSlot({
   >(
     () => ({
       accept: DRAG_TYPES.CARD,
-      canDrop: (item) => !locked && item.isPitcher === isPitcher,
+      canDrop: (item) => !locked && item.isPitcher === isPitcher && item.fromPosition !== position,
       drop: (item) => {
-        onCardDropped(item.cardId);
+        onCardDropped(item.cardId, item.fromPosition ?? null);
       },
       collect: (monitor) => ({
         isCardOver: monitor.isOver(),
         canCardDrop: monitor.canDrop(),
       }),
     }),
-    [locked, isPitcher, onCardDropped],
+    [locked, isPitcher, position, onCardDropped],
   );
+
+  // Card drag source — active only when a filled slot. `fromPosition`
+  // routes the drop handler to swap_lineup_slots instead of
+  // update_lineup_slot.
+  const [{ isDragging }, slotDragRef, slotDragPreview] = useDrag<
+    CardDragItem,
+    void,
+    { isDragging: boolean }
+  >(
+    () => ({
+      type: DRAG_TYPES.CARD,
+      item: () => {
+        dragResult.lastDropAccepted = false;
+        return {
+          cardId: card?.id ?? "",
+          isPitcher: card?.isPitcher ?? isPitcher,
+          fromPosition: position,
+        };
+      },
+      canDrag: !locked && !!card,
+      end: (_item, monitor) => {
+        dragResult.lastDropAccepted = monitor.didDrop();
+      },
+      collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    }),
+    [card?.id, card?.isPitcher, position, locked],
+  );
+
+  // Suppress the default HTML5 drag ghost — CardDragLayer renders the
+  // motion-backed ghost instead (same pattern as BenchCard).
+  useEffect(() => {
+    slotDragPreview(getEmptyImage(), { captureDraggingState: true });
+  }, [slotDragPreview]);
 
   // Token drop target — only accepts tokens whose type matches the slot's player type
   // AND only when a card is present in this slot.
@@ -125,7 +169,12 @@ export function LineupSlot({
       <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--text-3)]">
         {position}
       </span>
-      <div className="relative">
+      <div
+        ref={(el) => {
+          slotDragRef(el);
+        }}
+        className={cn("relative", isDragging && "opacity-40")}
+      >
         <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
         {appliedToken && (
           <div className="absolute -bottom-2 -right-2 z-10">
@@ -141,7 +190,7 @@ export function LineupSlot({
       {!locked && (
         <button
           type="button"
-          onClick={() => onCardDropped(null)}
+          onClick={() => onCardDropped(null, null)}
           className="text-[10px] text-[var(--text-3)] underline-offset-2 hover:text-[var(--text-2)] hover:underline"
           aria-label={`Remove ${card.playerName}`}
         >
