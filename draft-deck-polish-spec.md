@@ -3462,3 +3462,211 @@ during the same schedule-sync pass; map by MLBAM game id.
 - contest_entry_status enum collapse (Phase 18 open item).
 - Configurable slate-pivot hour via env var.
 - Non-ET timezones.
+
+---
+
+# Phase 20 batch — locked 2026-04-22
+
+Feel Pass v1.12 — Live-Inning Legibility. Three open items
+from Phase 18+19 cleaned up together:
+
+1. **Live inning on the `game` row.** Webhook handler
+   already sees `play.inning` / `play.inning_half` on every
+   batter event but only writes to `game_event`; slot
+   footer has been showing "LIVE · 2-1" without inning.
+2. **Doubleheader / duplicate-game display.** Two games
+   on the same matchup + date collapse to one arbitrary
+   row in our lookup Map. Sort + dedup so the most-relevant
+   game surfaces.
+3. **`contest_entry_status` enum cleanup.** Drop the
+   vestigial 'locked' value (zero rows at it in prod).
+
+---
+
+## 54. Live inning on the `game` row
+
+### Goal
+
+Enrich the `<SlotGameState>` LIVE footer from "LIVE · 2-1"
+to "LIVE · T5 · 2-1" by tracking inning on the `game` row
+itself. Webhook handler fires the updates.
+
+### Scope
+
+- **Migration 0032** adds two columns to `public.game`:
+  - `current_inning integer` (nullable; 1-15+ during play,
+    NULL when scheduled / final)
+  - `current_inning_half text` with a CHECK constraint
+    allowing only `'top'` / `'bottom'` / NULL.
+- **Webhook handler** (`src/lib/mlb/webhook-handler.ts`
+  `handleGameEvent`): after inserting the `game_event`
+  row, also UPDATE the game row's inning columns.
+  Idempotent via `IS DISTINCT FROM` — no Realtime broadcast
+  when the value hasn't changed.
+- **`handleGameEnded`** resets inning columns to NULL
+  (final games show "FINAL" without trailing inning).
+- **`handleGameStarted`** sets `current_inning = 1,
+  current_inning_half = 'top'` if not already populated by
+  a prior event.
+- **`<SlotGameState>`** LIVE branch reads the new fields
+  via `SlotGameInfo` + renders ordinal when present.
+- **`<StatusChip>`**'s "Live · Top 5th · 3 games active"
+  copy already uses the event-stream `latestInning` — keep
+  that path; the `game` columns are game-scoped (per-slot)
+  while StatusChip is contest-scoped (aggregate).
+- **Lineup page query** extends the game SELECT to pull
+  `current_inning` + `current_inning_half` into
+  `slotGameByCardId`.
+
+### Behavior
+
+- Game scheduled → `current_inning = NULL`. Slot footer:
+  `vs LAD · 7:40p`.
+- Game starts → handler sets `(1, 'top')`. Slot footer:
+  `LIVE · T1 · 0-0`.
+- Batter events fire → inning values update as the game
+  progresses. Slot footer: `LIVE · B5 · 2-1`.
+- Game ends → handler clears to `NULL` + `NULL`. Slot
+  footer: `FINAL W 5-2`.
+
+### Acceptance
+
+- [ ] Migration 0032 applied locally + prod.
+- [ ] Live slot footer renders `T5` / `B5` where appropriate.
+- [ ] Values reset to NULL on game end; FINAL footer shows
+      no trailing inning.
+- [ ] Realtime UPDATE from the game row reaches the
+      client subscriber (already in publication per Phase 12).
+- [ ] StatusChip still reads inning from the event stream —
+      unchanged.
+
+### Trade-offs
+
+- **Per-event UPDATE has write amplification.** ~50
+  batter events per game × 30 games = 1500 UPDATEs per
+  live night. All idempotent via IS DISTINCT FROM, but
+  Postgres still touches the row. Acceptable at our scale.
+- **Two inning sources** (this column + event stream) —
+  Spec §21 still derives the Status-Chip inning from
+  events. Keeping them separate is fine; they answer
+  different questions.
+
+---
+
+## 55. Doubleheader + duplicate-game dedup
+
+### Goal
+
+When two `game` rows share the same (date, home_team,
+away_team) — either a real doubleheader or a BDL data
+duplicate — our lineup-page Map collapses to one
+arbitrarily. Fix: surface the most-relevant game with a
+deterministic priority.
+
+### Scope
+
+- **Priority:** per matchup + date, pick one game via:
+  1. Live > scheduled > final (by status).
+  2. Within status, prefer earliest `scheduled_start`
+     (NULLS LAST).
+  3. Fallback: earliest `created_at`.
+- **Implementation:** change the lineup-page game query
+  from a plain `SELECT` + in-memory Map overwrite to a
+  `SELECT DISTINCT ON (home_team_id, away_team_id)` with
+  `ORDER BY` matching the priority.
+- **Sort keys:**
+  ```sql
+  ORDER BY
+    home_team_id, away_team_id,
+    CASE status WHEN 'live' THEN 0
+                WHEN 'scheduled' THEN 1
+                WHEN 'final' THEN 2
+                ELSE 3 END,
+    scheduled_start NULLS LAST,
+    created_at
+  ```
+- **No schema change.** Phase 20 handles the display
+  side; real DH support (second-game surfacing,
+  unique-index preventing dupes) remains parked for when
+  it matters.
+
+### Acceptance
+
+- [ ] Today's LAA@TOR duplicate shows exactly one slot
+      footer (not two merged state).
+- [ ] If a live game + a scheduled DH2 exist for the same
+      team, the live one shows (per priority).
+- [ ] After DH1 finalizes + DH2 goes live, DH2 shows.
+
+### Trade-offs
+
+- **Second DH game is invisible post-dedup.** Until we
+  surface both, users lineup'ing a DH2-only player will
+  see `FINAL W` from DH1 in their footer while their
+  actual game is still scheduled. Rare edge case; flag
+  in ADR as known.
+- **No schema change** keeps the dedup logic local to
+  the page query. Easy to evolve if we add a
+  `game_number` column later.
+
+---
+
+## 56. `contest_entry_status` enum cleanup
+
+### Goal
+
+The 'locked' value on `contest_entry_status` was retired
+in Phase 18 (per-slot lock replaced contest-level lock).
+Zero rows at 'locked' in prod. Drop it from the enum.
+
+### Scope
+
+- **Migration 0033**:
+  1. Create new enum `contest_entry_status_v2` as
+     `('building', 'submitted', 'live', 'final')`.
+  2. `ALTER TABLE public.contest_entry ALTER COLUMN status
+      TYPE contest_entry_status_v2 USING status::text::contest_entry_status_v2`.
+  3. Drop old enum.
+  4. Rename new enum to `contest_entry_status`.
+- **SQL fn cleanup:** `update_lineup_slot`,
+  `swap_lineup_slots`, `apply_token`, `remove_token`
+  conditions drop 'locked' from the `IN (...)` lists
+  (harmless to keep, but cleaner without).
+- **TypeScript type cleanup:** `EntryStatus` type in
+  `LineupSidebar.tsx` + `LineupViewProps.entryStatus` in
+  `types.ts` drop the `'locked'` union member.
+
+### Acceptance
+
+- [ ] Migration applied. Enum now has 4 values.
+- [ ] Typecheck passes after union narrows.
+- [ ] No runtime code references `'locked'` as a state.
+
+### Trade-offs
+
+- **Breaking-change for anyone holding a pre-migration
+  client.** Since we're F2P single-user testing, not a
+  concern. New deploy ships right after migration.
+- **Enum rebuild is slightly heavier than simple DROP
+  VALUE** (which Postgres doesn't support). Accepted.
+
+---
+
+## 57. Not in scope for v1.12
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Full doubleheader support (second-game surfacing,
+  unique index on matchup + game_number).
+- Outs / baserunners on `game` row (deliberately capped at
+  inning only).
+- Pitch count / pitcher on mound.
+- Auto-transition of contest_entry.status (submitted → live).
