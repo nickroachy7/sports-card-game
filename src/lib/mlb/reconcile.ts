@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { getMLBProvider } from "@/lib/mlb/provider";
 import { withBdlRetry } from "@/lib/mlb/retry";
+import { type PitcherCandidate, pickWinningPitcher } from "@/lib/mlb/winning-pitcher";
 
 /**
  * Authoritative DK FP from MLBStats. Hitter + pitcher both. See gameplay
@@ -173,12 +174,13 @@ export async function reconcileGame(bdlGameId: number): Promise<{
       AND ce.status IN ('live', 'final')
   `);
 
-  // Winning pitcher attribution — BDL doesn't expose decisions, so we
-  // use a "most IP on the winning team" heuristic (≈accurate in ~90%
-  // of games; lead-change attribution for edge cases is out of scope
-  // for launch). Emits a synthetic 'mlb.game.pitcher_win' event so the
-  // existing _finalize_contest_entry milestone counter query picks it
-  // up. Idempotent via the game_event.provider_event_id unique index.
+  // Winning pitcher attribution — BDL's SDK doesn't expose MLB's
+  // official W/L decision, so we approximate via pickWinningPitcher()
+  // (see src/lib/mlb/winning-pitcher.ts). Priority: starter with ≥ 5
+  // IP on the winning team → fallback to most-IP-on-winning-team
+  // (floor 3 IP). Emits a synthetic 'mlb.game.pitcher_win' event so
+  // the existing _finalize_contest_entry milestone counter picks it
+  // up. Idempotent via game_event.provider_event_id unique index.
   const winnerPick = await db.execute<{
     home_team_id: string | null;
     away_team_id: string | null;
@@ -193,27 +195,50 @@ export async function reconcileGame(bdlGameId: number): Promise<{
   if (g && g.home_runs != null && g.away_runs != null && g.home_runs !== g.away_runs) {
     const winningTeamId = g.home_runs > g.away_runs ? g.home_team_id : g.away_team_id;
     if (winningTeamId) {
-      // Pick the pitcher with the most IP on the winning team who
-      // appeared in this game.
-      let topBdlId: number | null = null;
-      let topIp = 0;
-      for (const s of stats) {
-        if (typeof s.player?.id !== "number") continue;
-        if (s.ip <= topIp) continue;
-        // Is this player on the winning team? Check via player.team_id.
-        const teamRow = await db.execute<{ team_id: string | null }>(sql`
-          SELECT team_id FROM public.player WHERE bdl_player_id = ${s.player.id} LIMIT 1
-        `);
-        if (teamRow.rows[0]?.team_id !== winningTeamId) continue;
-        topBdlId = s.player.id;
-        topIp = s.ip;
-      }
-      if (topBdlId !== null && topIp >= 3) {
-        const pitcherRow = await db.execute<{ id: string }>(sql`
-          SELECT id FROM public.player WHERE bdl_player_id = ${topBdlId} LIMIT 1
-        `);
-        const pitcherId = pitcherRow.rows[0]?.id ?? null;
-        if (pitcherId) {
+      // Bulk-fetch player metadata (team + position) for every pitcher
+      // who appeared in this game. One query instead of N per pitcher.
+      const bdlIds = stats
+        .map((s) => s.player?.id)
+        .filter((id): id is number => typeof id === "number");
+      type PRow = {
+        id: string;
+        bdl_player_id: number;
+        team_id: string | null;
+        positions: string[] | null;
+      };
+      const playerRows =
+        bdlIds.length === 0
+          ? { rows: [] as PRow[] }
+          : await db.execute<PRow>(sql`
+              SELECT id, bdl_player_id, team_id, positions
+              FROM public.player
+              WHERE bdl_player_id = ANY(${sql`ARRAY[${sql.join(
+                bdlIds.map((n) => sql`${n}::int`),
+                sql`, `,
+              )}]::int[]`})
+            `);
+      const byBdl = new Map<number, PRow>();
+      for (const r of playerRows.rows) byBdl.set(r.bdl_player_id, r);
+
+      const candidates: PitcherCandidate[] = stats
+        .map((s) => {
+          const bdlId = s.player?.id;
+          if (typeof bdlId !== "number") return null;
+          const p = byBdl.get(bdlId);
+          if (!p) return null;
+          return {
+            bdlPlayerId: bdlId,
+            ip: s.ip,
+            isStarter: (p.positions ?? []).some((pos) => pos === "Starting Pitcher"),
+            onWinningTeam: p.team_id === winningTeamId,
+          };
+        })
+        .filter((c): c is PitcherCandidate => c !== null);
+
+      const winnerBdlId = pickWinningPitcher(candidates);
+      if (winnerBdlId !== null) {
+        const pitcher = byBdl.get(winnerBdlId);
+        if (pitcher) {
           await db.execute(sql`
             INSERT INTO public.game_event
               (game_id, provider_event_id, event_type, source, pitcher_player_id)
@@ -222,7 +247,7 @@ export async function reconcileGame(bdlGameId: number): Promise<{
               'reconcile:pwin:' || ${bdlGameId}::text,
               'mlb.game.pitcher_win',
               'reconcile',
-              ${pitcherId}::uuid
+              ${pitcher.id}::uuid
             )
             ON CONFLICT (provider_event_id) DO NOTHING
           `);
