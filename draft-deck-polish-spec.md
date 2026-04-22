@@ -1866,3 +1866,337 @@ user's contest games are currently live.
   because it'd need another provider consumer + the `card`
   table isn't in the Realtime publication).
 - Sound cue on positive-FP events (still parked per ADR-0015).
+
+---
+
+# Phase 13 batch — locked 2026-04-22
+
+Feel Pass v1.7. Four related polish items, one unifying
+theme: make the right sidebar the canonical "context" surface
+everywhere + close the long-parked player-photo gap.
+
+1. Kill the ZoomCanvas wrapper on the lineup page. The
+   drag-pan-zoom mechanic from P8.3 never paid its keep;
+   the diamond should just fit the viewport.
+2. Bring the lineup's sidebar aesthetic to the collection
+   page. Filters + count move above the grid; the sidebar
+   gains a summary-stats default.
+3. Clicking a card anywhere (lineup or collection, building
+   or live) swaps the sidebar to a card-detail panel with a
+   Back button. Replaces the `CardDetailDrawer`.
+4. Real player profile photos on cards. Schema scaffolding
+   has been in place since Phase 1 (`player.mlbam_id` +
+   `player.photo_url` + `player.photo_synced_at`);
+   Phase 13 activates it.
+
+---
+
+## 24. Lineup layout — remove ZoomCanvas, auto-fit diamond
+
+### Goal
+
+The `<ZoomCanvas>` from P8.3 added pinch-to-zoom + drag-to-pan
+around the MLB positional diamond. It was meant to handle
+small viewports and let users scan closer to a slot, but in
+practice users don't want to pan — the diamond already fits
+most desktop viewports at default scale, and the zoom
+interactions are a friction layer on what should be a
+point-and-click UI. Remove the wrapper; re-fit the diamond
+to live in a simple flex box.
+
+### Scope
+
+- Delete `<ZoomCanvas>` usage from `<LineupShell>`.
+- `DiamondGrid`'s grid columns become `minmax(80px, 1fr)` so
+  slots shrink on narrow viewports down to a readable
+  minimum (currently `minmax(96px, 1fr)`). Slot card size
+  stays 96×134 at default; slots auto-center inside their
+  grid cells. Below ~1040px diamond width, slots compress to
+  ~88px; below ~900px, the page gains a horizontal scroll
+  rather than a further compress — diamond identity is
+  worth preserving.
+- The zoom / fit / +/- control buttons go away entirely.
+  No re-home needed; they were self-contained in
+  `ZoomCanvas`.
+- No change to the slot internals — drag/drop, glow,
+  locking all carry forward unchanged.
+
+### Behavior
+
+- On any viewport ≥ 1040px wide: the diamond renders at its
+  natural size, centered in the left pane.
+- Between 900–1040px: slots compress to ~88×120 to keep the
+  diamond visible without scroll.
+- Below 900px: the diamond's parent pane keeps the diamond at
+  natural 96×134 size and the whole left pane gains
+  `overflow-x: auto`. The sidebar remains fixed 288px (`w-72`)
+  since spec §11 doesn't support mobile yet.
+
+### Acceptance
+
+- [ ] `ZoomCanvas` removed from `LineupShell` imports + usage.
+- [ ] The `ZoomCanvas.tsx` file itself stays in the repo for
+  now (other pages might reuse it later; deletion is a
+  follow-up if nothing imports it). Confirmed no other
+  imports → ok to delete.
+- [ ] Diamond fits at 1440/1280/1040 widths without scroll.
+- [ ] At 900px width the horizontal scroll on the left pane
+  appears without breaking the sidebar.
+- [ ] All existing drag-drop + glow + slot-click behaviors
+  still work.
+- [ ] `src/components/lineup/ZoomCanvas.tsx` either deleted
+  (preferred) or explicitly marked "unused — retained for
+  future reuse" in a header comment.
+
+### Trade-offs
+
+- **Losing the zoom mechanic.** No sub-viewport platforms
+  supported at launch; below 900px we scroll. When mobile
+  lands (out-of-scope per spec §23), the revisit is a
+  different layout (per-slot list?) not the ZoomCanvas.
+- **Slot size does not shrink below 88×120.** Card art +
+  tier frame stop being legible below that; the horizontal
+  scroll is the lesser evil.
+
+---
+
+## 25. Unified sidebar pattern — collection page + card detail swap
+
+### Goal
+
+The lineup page's right sidebar reads cleanly — Live Score,
+Box Score, Event Feed, Status Chip, each in a
+`<SidebarSection>` card. Collection page currently has no
+sidebar; filters + the "N / 250 cards" count live above the
+grid. Align the two pages on a shared pattern:
+
+- Collection page grows a right sidebar matching the lineup
+  aesthetic. Default content: collection summary stats
+  (total cards, career FP total, tier breakdown).
+- Filters + count stay above the grid (no change there;
+  they're already in the right place per spec).
+- Clicking any card anywhere — collection, lineup slot,
+  bench, live view — replaces the sidebar with a
+  `<CardDetailPanel>` (the former `CardDetailDrawer`
+  contents, chrome stripped) + a Back button at the top
+  that restores the prior sidebar content.
+
+### Scope
+
+- **Extract `<CardDetailPanel>`** from `CardDetailDrawer`.
+  Panel is the pure content (photo, tier frame,
+  name/position, career FP, contract bar, action buttons).
+  Drawer chrome is discarded; panel renders flush in a
+  sidebar column.
+- **`<SelectedCardSidebar>`** — wrapper that renders
+  `<CardDetailPanel>` with a Back button bar at the top.
+  The Back button calls `onBack()` which clears
+  `selectedCardId`.
+- **Lineup page wiring:**
+  - `selectedCardId` state moves to `<LineupView>`.
+  - `<LineupSidebar>` becomes conditional: if
+    `selectedCardId`, render `<SelectedCardSidebar>`;
+    otherwise render the existing building/post-submit
+    tree.
+  - Remove `<CardDetailDrawer>` usage from `<LineupView>`.
+  - Click handlers on `LineupSlot` + `BenchCard` call
+    `setSelectedCardId(id)` instead of the old
+    `openDetail` drawer path.
+- **Collection page:**
+  - `<CollectionShell>` — new layout matching
+    `<LineupShell>`: left pane (filters + count + grid),
+    right sidebar (288px, matches lineup).
+  - `<CollectionSidebar>` — renders
+    `<CollectionSummaryStats>` by default, swaps to
+    `<SelectedCardSidebar>` when a card is selected.
+  - `<CollectionSummaryStats>` — new component. Three
+    `<SidebarSection>` blocks:
+    1. Overview: Total cards · Career FP total · Active
+       contract cards.
+    2. Tier breakdown: Diamond N · Gold N · Silver N ·
+       Bronze N. Each row has a small tier-colored swatch.
+    3. Contracts: expiring soon count (≤ 3 plays left),
+       oldest card (earliest acquired), newest card.
+- **Uniform session:** selecting a card on the lineup page
+  should not bleed into the collection page (separate
+  `selectedCardId` per-page). Just scope the state locally
+  to each page's top-level component.
+
+### Behavior
+
+- Select → sidebar fully swaps to detail, Back returns.
+- No animation on the swap (keeps it snappy; matches the
+  spec §7 "instant UI" posture for navigational clicks).
+  Could add a 200ms cross-fade in a follow-up if it reads
+  jarring — parked as a nice-to-have.
+- Back button: top-left of the detail panel, a small
+  ←-arrow row with "Back". Consistent label on both pages.
+- Action buttons in the detail panel (Extend Contract,
+  Quick Sell, Apply Token, Vault) still work identically —
+  they were already callbacks; just calling them from a
+  sidebar column instead of a drawer.
+- On the lineup page specifically: if the selected card IS
+  the one currently being dragged, the detail view should
+  not interfere with the drag operation. Detail state is
+  separate from drag state; tested by keeping the drag
+  handlers on `LineupSlot` and letting them run regardless
+  of `selectedCardId`.
+
+### Acceptance
+
+- [ ] `<CardDetailPanel>` extracted; `<CardDetailDrawer>`
+  reduced to a thin wrapper (or deleted if unused).
+- [ ] Lineup page: clicking any card (lineup slot, bench)
+  swaps the sidebar to detail with a Back button.
+- [ ] Collection page: clicking any card swaps the sidebar
+  from summary stats → detail with a Back button.
+- [ ] `<CollectionSummaryStats>` renders correct counts
+  against the seeded test account.
+- [ ] Back button restores the correct default content on
+  each page (building vs post-submit vs summary stats).
+- [ ] All detail action buttons work end-to-end — Extend,
+  Quick Sell, Apply Token, Vault.
+- [ ] No visual regression on the existing sidebar sections
+  (Live Score, Box Score, Event Feed, Status Chip).
+
+### Trade-offs
+
+- **Lineup page loses the live view during card detail
+  browsing.** User must click Back to see score again.
+  The Event Feed in particular was always on during
+  live play; now it's behind a Back. Accepted trade per
+  interview — "consistent everywhere, one pattern, no mode
+  switching."
+- **No cross-fade animation.** The sidebar swap is hard.
+  If jarring in practice, we add a 200ms fade later.
+- **Drawer → sidebar for card detail, but the sidebar is
+  width-constrained (288px).** Some long card actions or
+  extended narratives might wrap awkwardly. The panel
+  contents were always designed for a constrained side
+  column; re-audit during build.
+
+---
+
+## 26. Real player profile images on cards
+
+### Goal
+
+Cards currently show a silhouette + initials (spec §4.4
+fallback). The schema has `player.mlbam_id`,
+`player.photo_url`, `player.photo_synced_at` in place since
+Phase 1. Phase 13 activates the pipeline + renders photos in
+the card front.
+
+### Scope
+
+- **MLBAM id backfill** — an admin endpoint
+  `/api/cron/mlbam-id-backfill` (CRON_SECRET-gated). Iterates
+  `player` rows with `mlbam_id IS NULL`, hits the MLB Stats
+  API search endpoint
+  (`https://statsapi.mlb.com/api/v1/people/search?names={name}`)
+  for each, disambiguates by team + first/last name match,
+  writes `mlbam_id` on match. BDL doesn't expose MLBAM ids
+  directly — this is the bridge.
+- **Photo URL derivation** — deterministic given
+  `mlbam_id`:
+  `https://img.mlbstatic.com/mlb-photos/image/upload/d_people:generic:headshot:67:current.png/w_120,q_auto:best/v1/people/{mlbam_id}/headshot/67/current`
+  (or the `midfield.mlbstatic.com` spots URL — either works,
+  pick the faster-cached one). No separate `photo_url`
+  column write needed initially — the URL is derivable at
+  render time from `mlbam_id`. We keep `photo_url` as an
+  override column for edge cases (photo temporarily wrong
+  in MLBAM, we want to pin a specific asset).
+- **Card rendering** — `<Card>` gets a `playerMlbamId` prop
+  (added to `LineupCardVM` + downstream view-model types).
+  Renders:
+  - If `playerMlbamId`: `<img>` with the MLBAM URL +
+    `onError` handler that swaps to the silhouette.
+  - Else: silhouette + initials (existing fallback).
+  - Photo area is circular, 48px on small cards (96×134
+    card), 72px on medium, 96px on large. Positioned at
+    the top-center of the card face, above the name.
+- **Admin triggers** — no cron schedule. The backfill runs
+  manually via `curl`:
+  ```bash
+  curl -s -H "Authorization: Bearer $CRON_SECRET" \
+    https://draftdeck.com/api/cron/mlbam-id-backfill | jq
+  ```
+  Runbook entry documents the flow. Re-run after any
+  `bdl-roster-sync` that adds new players.
+
+### Behavior
+
+- **Image load failure** (404, network, etc.) → `onError`
+  replaces `<img>` with the silhouette. Graceful degrade,
+  no broken-image icon.
+- **Privacy / licensing** — MLB's public headshot CDN is
+  the same source fantasy sites use; no different
+  licensing posture than current BDL usage. CLAUDE.md
+  flags this as non-commercial for launch (F2P).
+- **Cache policy** — images are CDN-cached aggressively.
+  No app-level cache needed; browser + MLBAM CDN handle it.
+
+### Acceptance
+
+- [ ] `mlbam_id` backfilled for ≥ 95% of active 40-man
+  players. Gap (5%) is acceptable — new callups or
+  name-ambiguous players fall through to the next run.
+- [ ] Card component renders MLBAM photo when
+  `playerMlbamId` is set.
+- [ ] Image load failure falls back to silhouette without
+  flicker.
+- [ ] Runbook documents the manual backfill command.
+- [ ] Test account's lineup shows photos for all 10
+  starters.
+
+### Dependencies
+
+- Schema already has the columns. No migration needed.
+- `admin-reconcile` route is the precedent for CRON_SECRET-
+  gated admin endpoints (`src/app/api/cron/admin-reconcile/route.ts`).
+- MLB Stats API (`statsapi.mlb.com`) is publicly accessible;
+  no key required. Rate limits are generous but we should
+  batch with a ~200ms delay between calls to be polite.
+
+### Trade-offs
+
+- **MLB Stats API as the join source** — not BDL. BDL
+  doesn't expose MLBAM ids. MLB Stats is the canonical
+  source and gives us the right id with high confidence.
+  Adds a dependency on a third-party endpoint, but it's
+  run manually + one-time-ish, not on the critical path.
+- **No local storage upload** — we serve MLBAM's CDN URLs
+  directly. If MLB changes the URL pattern in the future,
+  we need to update the renderer. Accepted risk; the URLs
+  have been stable for 5+ years.
+- **No bulk lookup endpoint** — MLB Stats API search is
+  one-name-at-a-time. For ~1500 active players this is
+  ~5 minutes of sequential calls. Runs manually + rarely;
+  no need to parallelize.
+- **Name disambiguation ambiguity** — two players named
+  "Jose Ramirez" will need team-based match. If team is
+  also ambiguous (traded mid-season), we pick the first
+  MLB Stats API result + mark the row for manual review
+  in logs.
+
+---
+
+## 27. Not in scope for v1.8
+
+- Onboarding flow pass.
+- Empty + error state sweep.
+- Accessibility audit (WCAG 2.1 AA).
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on the status chip.
+- Webhook retry observability dashboard.
+- CI integration for the fixture suite.
+- Per-slot contract-depletion animation.
+- Sound cue on positive-FP events.
+- Photo sync cron (daily/weekly schedule) — Phase 13 is
+  manual admin trigger only. Scheduling is a later phase
+  once we see how churn + new-player pace play out.
+- Uploading photos to Supabase Storage. Phase 13 serves
+  MLBAM CDN URLs directly.
+- Card detail panel cross-fade animation.
