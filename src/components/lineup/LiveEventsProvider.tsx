@@ -136,7 +136,13 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
       setEvents(mapped);
     })();
 
-    // 2) Realtime subscription — prepend incoming matching events.
+    // 2) Realtime subscription — three event sources (polish spec §47):
+    //    - game_event INSERT: per-player batting/pitching narration.
+    //    - game UPDATE: status transitions (scheduled → live, live →
+    //      final) synthesized into game-start / game-end feed lines.
+    //    - token_application UPDATE: triggered flip renders as a
+    //      token fire/miss line.
+    const contestGameIdSet = new Set(contestGameIds);
     const channel = supabase
       .channel(`lineup-events-${Date.now()}`)
       .on(
@@ -149,6 +155,30 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
           if (seenIdsRef.current.has(fe.id)) return;
           seenIdsRef.current.add(fe.id);
           setEvents((prev) => [fe, ...prev].slice(0, 50));
+        },
+      )
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "game" }, (payload) => {
+        const prev = payload.old as Partial<RawGameRow>;
+        const next = payload.new as Partial<RawGameRow>;
+        const id = next.id;
+        if (typeof id !== "string" || !contestGameIdSet.has(id)) return;
+        const fe = projectGameTransition(prev, next);
+        if (!fe) return;
+        if (seenIdsRef.current.has(fe.id)) return;
+        seenIdsRef.current.add(fe.id);
+        setEvents((prevState) => [fe, ...prevState].slice(0, 50));
+      })
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "token_application" },
+        (payload) => {
+          const prev = payload.old as Partial<RawTokenAppRow>;
+          const next = payload.new as Partial<RawTokenAppRow>;
+          const fe = projectTokenTrigger(prev, next);
+          if (!fe) return;
+          if (seenIdsRef.current.has(fe.id)) return;
+          seenIdsRef.current.add(fe.id);
+          setEvents((prevState) => [fe, ...prevState].slice(0, 50));
         },
       )
       .subscribe((subStatus) => {
@@ -255,4 +285,90 @@ function projectRow(row: RawGameEvent, players: Map<string, FeedPlayer>): FeedEv
 function normalizeHalf(raw: string | null): "top" | "bottom" | null {
   if (raw === "top" || raw === "bottom") return raw;
   return null;
+}
+
+// ── Game-state + token narration (polish spec §47) ─────────────────────
+
+type RawGameRow = {
+  id: string;
+  status: string;
+  home_runs: number | null;
+  away_runs: number | null;
+  // Not all rows carry these; we only read them best-effort for final copy.
+};
+
+type RawTokenAppRow = {
+  id: string;
+  triggered: boolean | null;
+  bonus_fp_awarded: string | number | null;
+};
+
+function projectGameTransition(
+  prev: Partial<RawGameRow>,
+  next: Partial<RawGameRow>,
+): FeedEvent | null {
+  const id = next.id;
+  if (typeof id !== "string") return null;
+  const prevStatus = prev.status ?? null;
+  const nextStatus = next.status ?? null;
+  if (prevStatus === nextStatus) return null;
+
+  const now = new Date();
+  const timeLabel = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+  if (prevStatus === "scheduled" && nextStatus === "live") {
+    return {
+      id: `game-start-${id}`,
+      playerId: id, // not a player — using game id so dedup works per game.
+      player: "⚾ Game",
+      action: "First pitch",
+      delta: 0,
+      timeLabel,
+      inning: null,
+      inningHalf: null,
+    };
+  }
+  if (prevStatus === "live" && nextStatus === "final") {
+    const score =
+      typeof next.home_runs === "number" && typeof next.away_runs === "number"
+        ? ` · ${next.home_runs}-${next.away_runs}`
+        : "";
+    return {
+      id: `game-end-${id}`,
+      playerId: id,
+      player: "⚾ Game",
+      action: `Final${score}`,
+      delta: 0,
+      timeLabel,
+      inning: null,
+      inningHalf: null,
+    };
+  }
+  return null;
+}
+
+function projectTokenTrigger(
+  prev: Partial<RawTokenAppRow>,
+  next: Partial<RawTokenAppRow>,
+): FeedEvent | null {
+  const id = next.id;
+  if (typeof id !== "string") return null;
+  // Only fire on the null → true/false transition (initial resolve).
+  if (prev.triggered !== null && prev.triggered !== undefined) return null;
+  if (next.triggered === null || next.triggered === undefined) return null;
+
+  const bonus = Number(next.bonus_fp_awarded ?? 0);
+  const now = new Date();
+  const timeLabel = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const action = next.triggered ? `Token hit · +${bonus.toFixed(1)} FP` : "Token missed";
+  return {
+    id: `token-app-${id}`,
+    playerId: id,
+    player: "🪙 Token",
+    action,
+    delta: next.triggered ? bonus : 0,
+    timeLabel,
+    inning: null,
+    inningHalf: null,
+  };
 }
