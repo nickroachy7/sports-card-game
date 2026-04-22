@@ -18,8 +18,11 @@ export const runtime = "nodejs";
  * fetch needed at display time.
  *
  * Manual trigger only (no schedule). Re-run after roster syncs pick
- * up new players. Idempotent — only touches rows with `mlbam_id
- * IS NULL`, so re-runs only retry un-matched players.
+ * up new players. Idempotent — marks every attempted row with
+ * `photo_synced_at = now()` (even on miss) so re-runs only touch
+ * genuinely-unseen players. To retry previously-failed rows, run
+ * `UPDATE public.player SET photo_synced_at = NULL WHERE mlbam_id
+ * IS NULL;` first.
  *
  * Query params:
  *   ?limit=N              Cap on how many players to attempt this run.
@@ -48,11 +51,16 @@ export async function GET(req: Request): Promise<Response> {
       full_name: string;
       team_abbr: string | null;
     };
+    // Skip rows we've already attempted (photo_synced_at IS NOT NULL)
+    // so re-runs chew through un-tried players first. Set the
+    // timestamp on both hit and miss below — treats it as "lookup
+    // attempted" rather than strictly "photo synced".
     const rows = await db.execute<Row>(sql`
       SELECT p.id, p.first_name, p.last_name, p.full_name, t.abbreviation AS team_abbr
       FROM public.player p
       LEFT JOIN public.team t ON t.id = p.team_id
       WHERE p.mlbam_id IS NULL
+        AND p.photo_synced_at IS NULL
         AND p.is_active_40_man = true
       ORDER BY p.last_name ASC, p.first_name ASC
       LIMIT ${limit}
@@ -63,46 +71,61 @@ export async function GET(req: Request): Promise<Response> {
     let unmatched = 0;
 
     for (const player of rows.rows) {
+      let result: number | "ambiguous" | null = null;
       try {
-        const mlbamId = await resolveMlbamId(player);
-        if (mlbamId === null) {
-          unmatched += 1;
-          continue;
-        }
-        if (mlbamId === "ambiguous") {
-          ambiguous += 1;
-          continue;
-        }
+        result = await resolveMlbamId(player);
+      } catch {
+        // Network / parse error: mark attempted so we skip next
+        // run; subsequent runs can retry by resetting photo_synced_at.
+      }
+
+      if (typeof result === "number") {
         await db.execute(sql`
           UPDATE public.player
-          SET mlbam_id = ${mlbamId}::int,
+          SET mlbam_id = ${result}::int,
               photo_synced_at = now()
           WHERE id = ${player.id}::uuid
         `);
         matched += 1;
-      } catch {
-        // Network / parse errors: skip + try next. Re-run the
-        // endpoint to retry.
-        unmatched += 1;
+      } else {
+        // Unmatched or ambiguous — mark attempted so re-runs skip.
+        await db.execute(sql`
+          UPDATE public.player
+          SET photo_synced_at = now()
+          WHERE id = ${player.id}::uuid
+        `);
+        if (result === "ambiguous") ambiguous += 1;
+        else unmatched += 1;
       }
+
       // Polite delay between calls — MLB Stats API is free +
       // generous, but no reason to hammer it.
       await sleep(200);
     }
 
-    // How many active rows still need an id after this batch.
-    const remainingRes = await db.execute<{ count: string | number }>(sql`
-      SELECT count(*) AS count FROM public.player
+    // How many active rows still need an attempt (genuinely unseen).
+    // Separate count for total-without-mlbam so we can see the gap
+    // between "tried but failed" and "not yet touched."
+    const remainingRes = await db.execute<{
+      unseen: string | number;
+      unmatched_total: string | number;
+    }>(sql`
+      SELECT
+        count(*) FILTER (WHERE photo_synced_at IS NULL) AS unseen,
+        count(*) AS unmatched_total
+      FROM public.player
       WHERE mlbam_id IS NULL AND is_active_40_man = true
     `);
-    const remaining = Number(remainingRes.rows[0]?.count ?? 0);
+    const unseen = Number(remainingRes.rows[0]?.unseen ?? 0);
+    const unmatchedTotal = Number(remainingRes.rows[0]?.unmatched_total ?? 0);
 
     return cronOk({
       attempted: rows.rows.length,
       matched,
       ambiguous,
       unmatched,
-      remaining,
+      unseen_remaining: unseen,
+      unmatched_total: unmatchedTotal,
     });
   } catch (err) {
     return cronError(err);
