@@ -32,20 +32,19 @@ export function BenchDrawer({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    // Polish spec §35 (Phase 15): cards in a slot disappear from
+    // the bench entirely. The bench tray is for "unused" — in-use
+    // cards read as clutter. Header counter below acknowledges the
+    // hidden set so users know nothing was lost.
     return cards
       .filter((c) => {
+        if (assignedCardIds.has(c.id)) return false;
         if (filter === "hitters" && c.isPitcher) return false;
         if (filter === "pitchers" && !c.isPitcher) return false;
         if (q && !c.playerName.toLowerCase().includes(q)) return false;
         return true;
       })
-      .sort((a, b) => {
-        // Unassigned first, then by name.
-        const aAssigned = assignedCardIds.has(a.id);
-        const bAssigned = assignedCardIds.has(b.id);
-        if (aAssigned !== bAssigned) return aAssigned ? 1 : -1;
-        return a.playerName.localeCompare(b.playerName);
-      });
+      .sort((a, b) => a.playerName.localeCompare(b.playerName));
   }, [cards, filter, search, assignedCardIds]);
 
   return (
@@ -60,6 +59,11 @@ export function BenchDrawer({
           ) : (
             <span className="font-mono text-xs text-[var(--text-2)]">
               {cards.length - assignedCardIds.size} available
+              {assignedCardIds.size > 0 && (
+                <span className="ml-1 text-[var(--text-3)]">
+                  · {assignedCardIds.size} in lineup
+                </span>
+              )}
             </span>
           )}
         </div>

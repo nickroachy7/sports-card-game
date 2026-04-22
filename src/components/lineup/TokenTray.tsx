@@ -10,7 +10,12 @@ type Props = {
 };
 
 export function TokenTray({ tokens, locked }: Props) {
-  const availableCount = tokens.filter((t) => t.appliedToCardId === null).length;
+  // Polish spec §35 (Phase 15): tokens applied to a lineup card drop
+  // out of the tray entirely. The tray is for "unused" tokens;
+  // applied ones render on their slot cards via <AppliedTokenBadge>.
+  // Applied tokens are the ones with `appliedToCardId` set.
+  const unapplied = tokens.filter((t) => t.appliedToCardId === null);
+  const appliedCount = tokens.length - unapplied.length;
 
   return (
     <section className="flex flex-col gap-2 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2">
@@ -25,15 +30,18 @@ export function TokenTray({ tokens, locked }: Props) {
             No tokens yet — earn some from Premium packs.
           </span>
         ) : (
-          <span className="font-mono text-xs text-[var(--text-2)]">
-            {availableCount} / {tokens.length} available
+          <span className="font-mono text-[var(--text-2)] text-xs">
+            {unapplied.length} available
+            {appliedCount > 0 && (
+              <span className="ml-1 text-[var(--text-3)]">· {appliedCount} in lineup</span>
+            )}
           </span>
         )}
       </header>
 
-      {tokens.length > 0 && (
+      {unapplied.length > 0 && (
         <div className={cn("flex items-center gap-3 overflow-x-auto py-1", locked && "opacity-50")}>
-          {tokens.map((token) => (
+          {unapplied.map((token) => (
             <TrayTokenPip key={token.id} token={token} disabled={locked} />
           ))}
         </div>
