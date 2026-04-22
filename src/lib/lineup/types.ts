@@ -58,6 +58,9 @@ export type LineupViewProps = {
   liveScore: number;
   /** Sum of final_fp across slots (settles after all games reconcile). */
   finalScore: number;
+  /** Games the contest covers. Used to scope the Event Feed's initial
+   *  fetch so we don't pull the full game_event table. */
+  contestGameIds: string[];
   slots: LineupSlotVM[];
   cards: LineupCardVM[];
   tokens: LineupTokenVM[];

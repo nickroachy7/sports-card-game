@@ -40,9 +40,11 @@ export default async function LineupPage() {
     id: string;
     name: string;
     lineup_locks_at: string;
+    included_game_ids: string[] | null;
   };
   const contestMeta = await db.execute<ContestRow>(sql`
-    SELECT id, name, lineup_locks_at FROM public.contest WHERE id = ${contestId}::uuid
+    SELECT id, name, lineup_locks_at, included_game_ids
+    FROM public.contest WHERE id = ${contestId}::uuid
   `);
   const contest = contestMeta.rows[0];
   if (!contest) {
@@ -197,6 +199,7 @@ export default async function LineupPage() {
       autoSubMode={entry.auto_sub_mode}
       liveScore={Number(entry.live_score)}
       finalScore={Number(entry.final_score)}
+      contestGameIds={contest.included_game_ids ?? []}
       slots={slots}
       cards={cards}
       tokens={tokens}

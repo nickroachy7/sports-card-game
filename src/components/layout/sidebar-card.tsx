@@ -7,7 +7,9 @@ export function SidebarSection({
   children,
   className,
 }: {
-  title: string;
+  /** Plain string for simple sections; pass a ReactNode to decorate
+   *  the title (e.g. a connection indicator next to "Event Feed"). */
+  title: ReactNode;
   children: ReactNode;
   className?: string;
 }) {

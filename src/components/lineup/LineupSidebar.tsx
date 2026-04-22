@@ -1,6 +1,7 @@
 "use client";
 
 import { SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
+import { EventFeed } from "@/components/lineup/EventFeed";
 import { Button } from "@/components/ui/button";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
@@ -28,6 +29,8 @@ type Props = {
   locked: boolean;
   lockCountdown: string;
   onSubmit: () => void;
+  /** Contest's included game ids (for Event Feed initial fetch scope). */
+  contestGameIds: string[];
 };
 
 export function LineupSidebar(props: Props) {
@@ -116,6 +119,7 @@ function PostSubmitSidebar({
   liveScore,
   finalScore,
   lockCountdown,
+  contestGameIds,
 }: Props) {
   const isFinal = entryStatus === "final";
   const displayScore = isFinal
@@ -129,6 +133,17 @@ function PostSubmitSidebar({
   // (see ADR-0014). Derive from slotFills as a fallback so the Live Score
   // reads correctly during the submitted → live transition window.
 
+  const lineupPlayers = LINEUP_POSITIONS.flatMap((pos) => {
+    const card = slotFills[pos].card;
+    if (!card) return [];
+    return [
+      {
+        playerId: card.playerId,
+        displayName: shortName(card.playerName),
+      },
+    ];
+  });
+
   return (
     <>
       <SidebarSection title={isFinal ? "Final Score" : "Live Score"}>
@@ -136,6 +151,8 @@ function PostSubmitSidebar({
       </SidebarSection>
 
       <BoxScoreSection slotFills={slotFills} isFinal={isFinal} />
+
+      <EventFeed lineupPlayers={lineupPlayers} contestGameIds={contestGameIds} />
 
       <div className="mt-auto flex flex-col gap-2 pt-2">
         <p className="text-xs text-[var(--text-3)]">

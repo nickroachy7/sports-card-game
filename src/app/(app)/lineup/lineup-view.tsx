@@ -328,6 +328,7 @@ export function LineupView(props: LineupViewProps) {
             entryStatus={props.entryStatus}
             liveScore={props.liveScore}
             finalScore={props.finalScore}
+            contestGameIds={props.contestGameIds}
             autoSubMode={mode}
             onAutoSubModeChange={handleModeChange}
             canSubmit={canSubmit}
