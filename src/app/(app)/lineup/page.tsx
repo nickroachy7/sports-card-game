@@ -8,6 +8,7 @@ import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
 import type { LineupCardVM, LineupSlotVM, LineupTokenVM } from "@/lib/lineup/types";
+import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
 export const dynamic = "force-dynamic";
 
@@ -89,6 +90,7 @@ export default async function LineupPage() {
     team_abbreviation: string | null;
     status: PlayerStatus;
     is_pitcher: boolean;
+    mlbam_id: number | null;
     current_tier: CardTier;
     career_fp_total: string | number;
     contract_plays_remaining: number;
@@ -99,7 +101,7 @@ export default async function LineupPage() {
     SELECT
       c.id, c.player_id,
       p.full_name AS player_name,
-      p.positions, p.status, p.is_pitcher,
+      p.positions, p.status, p.is_pitcher, p.mlbam_id,
       t.abbreviation AS team_abbreviation,
       c.current_tier, c.career_fp_total, c.contract_plays_remaining,
       c.is_expired, c.applied_token_id
@@ -164,7 +166,7 @@ export default async function LineupPage() {
     hasAppliedToken: r.applied_token_id !== null,
     isPitcher: r.is_pitcher,
     appliedTokenId: r.applied_token_id,
-    photoUrl: null,
+    photoUrl: r.mlbam_id ? mlbamHeadshotUrl(r.mlbam_id, "small") : null,
   }));
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { type CollectionCard, CollectionGrid } from "@/app/(app)/collection/collection-grid";
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import { createServerClient } from "@/lib/db/supabase";
+import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 import { captureServerEvent } from "@/lib/observability/action";
 
 export const dynamic = "force-dynamic";
@@ -20,9 +21,16 @@ type RawRow = {
         full_name: string;
         positions: string[] | null;
         status: PlayerStatus;
+        mlbam_id: number | null;
         team: { abbreviation: string } | { abbreviation: string }[] | null;
       }
-    | { full_name: string; positions: string[] | null; status: PlayerStatus; team: unknown }[]
+    | {
+        full_name: string;
+        positions: string[] | null;
+        status: PlayerStatus;
+        mlbam_id: number | null;
+        team: unknown;
+      }[]
     | null;
 };
 
@@ -53,7 +61,7 @@ export default async function CollectionPage() {
         .select(
           `id, career_fp_total, current_tier, contract_plays_remaining, is_expired,
          applied_token_id, acquired_at,
-         player:player_id ( full_name, positions, status, team:team_id ( abbreviation ) )`,
+         player:player_id ( full_name, positions, status, mlbam_id, team:team_id ( abbreviation ) )`,
         )
         .eq("user_id", user.id)
         .eq("is_vaulted", false)
@@ -123,7 +131,7 @@ export default async function CollectionPage() {
       isExpired: row.is_expired,
       hasAppliedToken: row.applied_token_id !== null,
       appliedToken,
-      photoUrl: null,
+      photoUrl: player?.mlbam_id ? mlbamHeadshotUrl(player.mlbam_id, "medium") : null,
       acquiredAt: row.acquired_at,
     };
   });

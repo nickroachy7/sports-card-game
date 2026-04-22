@@ -267,6 +267,31 @@ curl -s -H "Authorization: Bearer $CRON_SECRET" \
 Missing or wrong `Authorization` header → 401 `UNAUTHENTICATED`.
 Missing `BDL_API_KEY` → 500 with "BDL_API_KEY is not set".
 
+### Backfill MLBAM ids (player photos)
+
+Card photos are derived at render time from `player.mlbam_id`.
+BDL doesn't expose MLBAM ids, so a one-time backfill hits MLB
+Stats API's public name-search endpoint and writes the match
+back. Manual trigger only (no schedule — Vercel Hobby cron
+budget is one/day). Re-run after roster syncs pick up new
+players.
+
+```bash
+export CRON_SECRET=$(grep ^CRON_SECRET .env.local | cut -d= -f2- | tr -d '"')
+
+# Default: 50 players per invocation. Override with ?limit=N
+# (max 500) to chew through a larger backlog in one shot.
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  "https://draftdeck.com/api/cron/mlbam-id-backfill?limit=100" | jq
+```
+
+Response shape: `{ attempted, matched, ambiguous, unmatched,
+remaining }`. Re-run as long as `remaining > 0`. Ambiguous
+rows (two players with the same name + unresolvable team)
+stay null — they'll render with silhouette fallback. For
+manual fix-ups, look them up in MLB Stats API and
+`UPDATE public.player SET mlbam_id = N WHERE id = '...';`.
+
 ---
 
 ## Debugging

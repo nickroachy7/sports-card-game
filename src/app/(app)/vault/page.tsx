@@ -5,6 +5,7 @@ import type { CardViewModel } from "@/components/card/Card";
 import { PreVaultedList } from "@/components/vault/PreVaultedList";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { createServerClient } from "@/lib/db/supabase";
+import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
 export const dynamic = "force-dynamic";
 
@@ -135,7 +136,7 @@ export default async function VaultPage() {
       .select(
         `id, current_tier, career_fp_total, contract_plays_remaining, is_expired, applied_token_id,
          vault_source,
-         player:player_id (full_name, positions, status, team:team_id (abbreviation))`,
+         player:player_id (full_name, positions, status, mlbam_id, team:team_id (abbreviation))`,
       )
       .eq("user_id", user.id)
       .eq("is_vaulted", true)
@@ -159,6 +160,7 @@ export default async function VaultPage() {
       full_name: string;
       positions: string[] | null;
       status: PlayerStatus;
+      mlbam_id: number | null;
       team: { abbreviation: string | null } | { abbreviation: string | null }[] | null;
     } | null;
   };
@@ -179,7 +181,7 @@ export default async function VaultPage() {
       isExpired: r.is_expired,
       hasAppliedToken: r.applied_token_id !== null,
       isVaulted: true,
-      photoUrl: null,
+      photoUrl: p?.mlbam_id ? mlbamHeadshotUrl(p.mlbam_id, "medium") : null,
     };
     return { card, refundCoins: Math.floor((qsValues[tier] ?? 0) * 0.15) };
   });

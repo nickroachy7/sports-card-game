@@ -6,6 +6,7 @@ import type { CardViewModel } from "@/components/card/Card";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
+import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
 export type PlayerValueTier = "star" | "starter" | "role" | "prospect";
 
@@ -47,6 +48,7 @@ export async function fetchRevealedCards(cardIds: string[]): Promise<RevealedCar
     status: PlayerStatus;
     team_abbreviation: string | null;
     player_value_tier: PlayerValueTier | null;
+    mlbam_id: number | null;
   };
   const db = getDb();
   const [res, cfgRes] = await Promise.all([
@@ -61,6 +63,7 @@ export async function fetchRevealedCards(cardIds: string[]): Promise<RevealedCar
              (p.positions)[1] AS position,
              p.status,
              p.designated_value_tier AS player_value_tier,
+             p.mlbam_id,
              t.abbreviation AS team_abbreviation
       FROM public.card c
       JOIN public.player p ON p.id = c.player_id
@@ -97,7 +100,7 @@ export async function fetchRevealedCards(cardIds: string[]): Promise<RevealedCar
       playerStatus: r.status,
       isExpired: r.is_expired,
       hasAppliedToken: r.applied_token_id !== null,
-      photoUrl: null,
+      photoUrl: r.mlbam_id ? mlbamHeadshotUrl(r.mlbam_id, "large") : null,
       playerValueTier: (r.player_value_tier ?? "role") as PlayerValueTier,
       quickSellValue: qsValues[r.current_tier] ?? 0,
     }));

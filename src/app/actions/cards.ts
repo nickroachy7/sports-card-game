@@ -14,6 +14,7 @@ import {
 } from "@/lib/contracts/cards";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
+import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 import { captureServerEvent, wrapAction } from "@/lib/observability/action";
 
 type ActionResult<T> =
@@ -179,7 +180,7 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
       `id, career_fp_total, current_tier, contract_plays_remaining, extension_count,
        is_expired, applied_token_id, tokens_applied_count, tokens_triggered_count,
        acquired_at,
-       player:player_id ( full_name, positions, status, team:team_id ( abbreviation ) )`,
+       player:player_id ( full_name, positions, status, mlbam_id, team:team_id ( abbreviation ) )`,
     )
     .eq("id", cardId)
     .eq("user_id", user.id)
@@ -206,6 +207,7 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
 
   const player = Array.isArray(cardRow.player) ? cardRow.player[0] : cardRow.player;
   const team = player ? (Array.isArray(player.team) ? player.team[0] : player.team) : null;
+  const mlbamId = (player as { mlbam_id?: number | null } | null)?.mlbam_id ?? null;
   const tier = cardRow.current_tier as CardTier;
   const quickSellValues = (cfg?.quick_sell_values ?? {}) as Record<CardTier, number>;
   const extensionCostPerPlay = (cfg?.extension_cost_per_play ?? {}) as Record<CardTier, number>;
@@ -226,7 +228,7 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
       playerStatus: (player?.status ?? "active") as PlayerStatus,
       isExpired: cardRow.is_expired,
       hasAppliedToken: cardRow.applied_token_id !== null,
-      photoUrl: null,
+      photoUrl: mlbamId ? mlbamHeadshotUrl(mlbamId, "large") : null,
       quickSellValue: quickSellValues[tier] ?? 0,
       extensionCount: cardRow.extension_count,
       tokensApplied: cardRow.tokens_applied_count,

@@ -1,3 +1,4 @@
+import { CardPhoto } from "@/components/card/CardPhoto";
 import { contractColor, TIER_FRAME } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { cn } from "@/lib/utils";
@@ -113,17 +114,11 @@ export function Card({
           className="absolute inset-x-0 top-0 flex items-center justify-center text-[var(--text-3)]"
           style={{ height: isSmall ? "58%" : isLarge ? "62%" : "60%" }}
         >
-          {card.photoUrl ? (
-            // biome-ignore lint/performance/noImgElement: BDL CDN off-domain, no next/image loader
-            <img src={card.photoUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
-          ) : (
-            <span
-              className="font-sans font-bold"
-              style={{ fontSize: isSmall ? 20 : isLarge ? 72 : 36 }}
-            >
-              {initials || "?"}
-            </span>
-          )}
+          <CardPhoto
+            photoUrl={card.photoUrl ?? null}
+            initials={initials}
+            fontSize={isSmall ? 20 : isLarge ? 72 : 36}
+          />
         </div>
 
         {/* Position tag — top-left. */}
