@@ -1449,3 +1449,183 @@ Carries forward §15 minus what we're shipping this phase:
   10; scope-cut to keep focus).
 - Webhook retry observability dashboard.
 - reconcileGame integration test.
+
+---
+
+# Phase 11 batch — locked 2026-04-22
+
+Closes the ADR-0014 / ADR-0015 carry-over: two phases in a row
+surfaced pre-existing latent bugs only when the relevant SQL
+fns were first exercised against real lineup data in
+production. A local-Supabase integration test harness that
+seeds realistic scenarios + calls the fns + asserts outcomes
+would have caught both pre-commit. This phase builds it.
+
+---
+
+## 19. Integration test harness — real-lineup fixture
+
+### Goal
+
+Prevent the "latent SQL bug surfaces on first live invocation"
+class of issue that bit us in P9.5 (reconcile UPDATE-FROM alias)
+and P10.5 (ceremony token constraint + FK chain). Each bug was
+a one-line fix once found; the cost was the debugging time +
+manual DO-block smoke required to find them. A fixture pattern
+that seeds a realistic scenario, calls the SQL fn, and asserts
+the DB state would have caught both pre-commit.
+
+Two integration test suites + a shared seed library. Run locally
+against `supabase start`; not in CI (matches the existing
+`tests/integration/rls.test.ts` posture). The bar is
+"regressions in scoring or ceremony paths get caught before
+commit."
+
+### Scope
+
+- `tests/fixtures/seed.ts` — shared helpers for creating users,
+  cards, tokens, games, contests, lineup slots, applied-token
+  records. Mirrors the real schema invariants; cleanup via
+  `auth.users` CASCADE.
+- `tests/integration/reconcile.test.ts` — exercises
+  `reconcileGame(bdlGameId)` against a seeded lineup + game +
+  stats. Would catch a regression on the P9.5 class of bug.
+- `tests/integration/ceremony.test.ts` — exercises
+  `commit_vault_selection` through pre-vaulted / fresh /
+  mixed-selection paths. Would catch a regression on the P10.5
+  class of bug.
+- `docs/runbook.md` update: add a "How to run integration
+  tests" section (prereqs + commands).
+
+### Behavior
+
+**Seed library (`tests/fixtures/seed.ts`) exports:**
+
+```ts
+seedUser(): Promise<{ userId: string; seasonId: string }>
+seedCard({
+  userId, playerId?, tier?, is_vaulted?,
+  vault_source?, contract_plays_remaining?,
+}): Promise<string>  // card_id
+seedGame({
+  bdlGameId?, homeTeamId, awayTeamId,
+  date?, status?,
+}): Promise<string>  // game_id
+seedContest({
+  seasonId, gameIds, name?,
+}): Promise<string>  // contest_id
+seedContestEntry({
+  userId, contestId, status?,
+}): Promise<string>  // entry_id (creates empty 10 slots)
+seedLineupSlot({
+  entryId, position, cardId, tokenApplicationId?,
+}): Promise<void>
+seedToken({
+  userId, type, bonusFp,
+  appliedToCardId?, appliedToContestId?,
+}): Promise<string>  // token_id
+seedTokenApplication({
+  userId, tokenId, cardId, contestId,
+}): Promise<string>  // token_application_id
+cleanupUser(userId): Promise<void>
+```
+
+All writes via a direct `pg` Client on `DATABASE_URL`, not the
+Supabase JS client — matches the `rls.test.ts` pattern and
+bypasses RLS cleanly for test setup.
+
+**Reconcile test coverage:**
+
+- **Happy path** — seed a lineup with 2 hitters rostered in a
+  completed game; mock `provider.fetchGameStats` to return box-
+  score numbers; assert `slot.final_fp` is written for each
+  slot and `contest_entry.final_score` rolls up (when
+  `entry.status IN ('live','final')`).
+- **Empty stats** — game with no stats returns; no slot writes.
+- **QS token trigger** — seeded pitcher with QS token, stats
+  showing 6+ IP + ≤3 ER; assert token_application.triggered=true
+  + slot FP includes bonus.
+- **Winning-pitcher attribution** — seeded game with team runs +
+  pitcher stats; assert `mlb.game.pitcher_win` game_event row
+  emitted with correct pitcher.
+- **Regression guard** — a test that specifically runs the
+  UPDATE-FROM subquery from reconcile.ts and asserts it
+  completes without a 42P01 error.
+
+**Ceremony test coverage:**
+
+- **Happy path** — user with 3 fresh cards, calls
+  `commit_vault_selection` in offseason; asserts 3 vault_entry
+  rows + all 3 cards marked `is_vaulted=true` +
+  `vault_source='ceremony'`.
+- **Pre-vaulted tolerance** — user with 2 fresh + 1 midseason-
+  vaulted; commits all 3; asserts pre-vaulted retains
+  `vault_source='midseason'` + original `vaulted_at`; fresh
+  two get `vault_source='ceremony'`.
+- **Token constraint regression guard** — user with an applied
+  token on a non-selected card; commit clears both
+  applied_to_card_id AND applied_to_contest_id (the P10.5 bug).
+- **Token FK regression guard** — user with an unused token
+  that has a token_application row; commit succeeds without
+  23503 (the P10.5 bug).
+- **Double-commit idempotency** — commit once, attempt again;
+  assert second raises 23514 "already committed."
+- **Cap enforcement** — attempt to commit 11 cards; assert
+  22023.
+
+### Acceptance
+
+- [ ] `pnpm test:integration` (new script) runs both suites
+  against local Supabase and passes.
+- [ ] All reconcile tests pass without manual fix-ups.
+- [ ] All ceremony tests pass; each of the two specific
+  regression-guard tests fails if you revert migration 0025 /
+  0026.
+- [ ] `docs/runbook.md` explains how to `supabase start` + run
+  the integration suite.
+- [ ] `CLAUDE.md` gets a one-line pointer: "Before merging
+  SQL-fn changes, run `pnpm test:integration`."
+
+### Dependencies
+
+- Local Supabase already runs for `tests/integration/rls.test.ts`.
+  No new infrastructure.
+- `pg` client (already a transitive dep via Drizzle). If
+  missing from devDeps, add it.
+- New Vitest config entry to scope an integration-only run
+  (optional — can reuse the existing `pnpm test` and rely on
+  users to run when relevant).
+
+### Trade-offs
+
+- **Local-only** — no CI coverage. If you ship a broken SQL
+  fn without running the suite, prod catches it. Same posture
+  as `rls.test.ts`. Re-evaluate when adding contributors.
+- **Direct pg client for seeds** — bypasses RLS. That's the
+  intent (setup needs to write anywhere); the prod safety
+  story is unchanged because RLS still applies at runtime
+  via the Supabase JS path.
+- **Not covering every SQL fn** — open_pack, apply_token,
+  quick_sell_card, vault_card_midseason, destroy_vaulted_card
+  are all out of scope for this phase. Reconcile + ceremony
+  are the two that surfaced bugs; rest stay covered by their
+  existing unit tests + DO-block smokes. Add fixture tests
+  when a fn gets touched.
+
+---
+
+## 20. Not in scope for v1.6
+
+- Onboarding flow pass.
+- Empty + error state sweep.
+- Accessibility audit (WCAG 2.1 AA).
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Live-view polish (per-slot FP glow, status chip details,
+  rank display).
+- Webhook retry observability dashboard.
+- CI integration for the fixture suite.
+- open_pack / apply_token / quick-sell / vault-midseason /
+  destroy-vaulted integration tests (extend as needed when
+  those fns get touched).
