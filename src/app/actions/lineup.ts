@@ -27,6 +27,15 @@ function mapDbError(err: unknown): { code: string; message: string } {
   const msg = e.message ?? "Unknown error";
   if (e.code === "P0002") return { code: "NOT_FOUND", message: msg };
   if (e.code === "23514") {
+    // Polish spec §44 — per-slot lock takes precedence over the older
+    // contest-level lock messaging so the toast tells the user which
+    // slot is frozen.
+    if (msg.includes("SLOT_LOCKED")) {
+      return {
+        code: "SLOT_LOCKED",
+        message: msg.replace(/^.*SLOT_LOCKED:\s*/, ""),
+      };
+    }
     if (msg.includes("contest locked") || msg.includes("contest not pending")) {
       return { code: "CONTEST_LOCKED", message: "Lineup lock has passed." };
     }

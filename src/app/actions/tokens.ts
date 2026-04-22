@@ -22,6 +22,14 @@ function mapDbError(err: unknown): { code: string; message: string } {
   const msg = e.message ?? "Unknown error";
   if (e.code === "P0002") return { code: "NOT_FOUND", message: msg };
   if (e.code === "23514") {
+    // Polish spec §44 — slot lock check fires before the token
+    // eligibility ones; surface it first.
+    if (msg.includes("SLOT_LOCKED")) {
+      return {
+        code: "SLOT_LOCKED",
+        message: msg.replace(/^.*SLOT_LOCKED:\s*/, ""),
+      };
+    }
     if (msg.includes("token already applied")) {
       return { code: "TOKEN_ALREADY_APPLIED", message: "Token is already applied." };
     }
