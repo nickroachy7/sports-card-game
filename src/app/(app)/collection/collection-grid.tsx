@@ -6,17 +6,13 @@ import { toast } from "sonner";
 
 import { removeToken } from "@/app/actions/tokens";
 import { Card, type CardViewModel } from "@/components/card/Card";
-import { CardDetailDrawer } from "@/components/card/CardDetailDrawer";
-import { SidebarRow, SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
+import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
+import { CollectionShell } from "@/components/collection/CollectionShell";
+import { CollectionSummaryStats } from "@/components/collection/CollectionSummaryStats";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  type CardTier,
-  type PlayerStatus,
-  TIER_LABEL,
-  type TokenType,
-} from "@/lib/contracts/cards";
+import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 
 export type CollectionCard = CardViewModel & {
   positions: string[];
@@ -87,9 +83,10 @@ export function CollectionGrid({
   const [contract, setContract] = useState<ContractFilter>("all");
   const [sort, setSort] = useState<SortKey>("tier");
 
-  // Drawer state is derived from the ?card query param so that
-  // back/forward navigation naturally opens / closes the drawer and
-  // shareable links survive.
+  // Detail state is derived from the ?card query param so that
+  // back/forward navigation naturally opens / closes the detail
+  // and shareable links survive. The sidebar swaps to
+  // <SelectedCardSidebar> when this is non-null (polish spec §25).
   const detailCardId = searchParams.get("card");
 
   const openDetail = useCallback(
@@ -119,20 +116,14 @@ export function CollectionGrid({
     });
   }
 
-  // Keep drawer-open-state aligned with URL: if the `?card=<id>` points
-  // at a card we no longer have (quick-sold, destroyed, vaulted), close
-  // the drawer and clear the param so we don't re-open on refresh.
+  // Keep the ?card param aligned with the current list: if it points
+  // at a card we no longer have (quick-sold, destroyed, vaulted),
+  // drop it so the sidebar falls back to summary stats.
   useEffect(() => {
     if (detailCardId && !cards.some((c) => c.id === detailCardId)) {
       closeDetail();
     }
   }, [detailCardId, cards, closeDetail]);
-
-  const tierBreakdown = useMemo(() => {
-    const b: Record<CardTier, number> = { bronze: 0, silver: 0, gold: 0, diamond: 0 };
-    for (const c of cards) b[c.tier] += 1;
-    return b;
-  }, [cards]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -177,66 +168,48 @@ export function CollectionGrid({
     setSort("tier");
   }
 
-  return (
-    <section className="mx-auto flex w-full max-w-7xl gap-6 px-6 py-6">
-      {/* Grid */}
-      <div className="flex min-w-0 flex-1 flex-col gap-4">
-        {nearCap && (
-          <div className="rounded-md border border-[#D4A647] bg-[#D4A64722] px-3 py-2 text-sm text-[var(--text)]">
-            Collection nearly full — quick-sell low-value cards or visit the Shop.
-          </div>
-        )}
+  const main = (
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-6 py-6">
+      {nearCap && (
+        <div className="rounded-md border border-[#D4A647] bg-[#D4A64722] px-3 py-2 text-sm text-[var(--text)]">
+          Collection nearly full — quick-sell low-value cards or visit the Shop.
+        </div>
+      )}
 
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="font-sans text-2xl font-bold tracking-tight text-[var(--text)]">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-sans font-bold text-2xl text-[var(--text)] tracking-tight">
             Collection
           </h1>
-          <Input
-            placeholder="Search player…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="max-w-64"
-          />
+          <span className="text-[var(--text-3)] text-xs tabular-nums">
+            {filtered.length === cards.length
+              ? `${cards.length} / ${collectionCap} cards`
+              : `${filtered.length} of ${cards.length} · ${cards.length} / ${collectionCap} total`}
+          </span>
         </div>
-
-        {filtered.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-10 text-center text-sm text-[var(--text-3)]">
-            {cards.length === 0
-              ? "No cards yet. Open a pack from the Shop to start collecting."
-              : "No cards match your filters."}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {filtered.map((c) => (
-              <div key={c.id} className="relative">
-                <Card card={c} size="medium" onClick={() => openDetail(c.id)} />
-                {c.appliedToken && (
-                  <div className="absolute -right-2 -bottom-2 z-10">
-                    <AppliedTokenBadge
-                      tokenType={c.appliedToken.tokenType}
-                      bonusFp={c.appliedToken.bonusFp}
-                      onRemove={() => handleRemoveToken(c.appliedToken?.applicationId ?? "")}
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <Input
+          placeholder="Search player…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="max-w-64"
+        />
       </div>
 
-      {/* Right rail */}
-      <aside className="hidden w-60 shrink-0 flex-col gap-6 md:flex">
-        <SidebarSection title="Collection">
-          <SidebarStat value={`${cards.length} / ${collectionCap}`} accent={nearCap} />
-        </SidebarSection>
-
-        <SidebarSection title="Tiers">
-          {(["diamond", "gold", "silver", "bronze"] as CardTier[]).map((t) => (
-            <SidebarRow key={t} label={TIER_LABEL[t]} value={tierBreakdown[t]} />
-          ))}
-        </SidebarSection>
-
+      {/* Filter bar — spec §25 relocates filters from sidebar to
+          above the grid. */}
+      <div className="flex flex-wrap items-end gap-3 border-[var(--border)] border-b pb-3">
+        <FilterSelect
+          label="Tier"
+          value={tier}
+          onChange={(v) => setTier(v as TierFilter)}
+          options={[
+            ["all", "Any"],
+            ["bronze", "Bronze"],
+            ["silver", "Silver"],
+            ["gold", "Gold"],
+            ["diamond", "Diamond"],
+          ]}
+        />
         <FilterSelect
           label="Position"
           value={position}
@@ -252,18 +225,6 @@ export function CollectionGrid({
             ["DH", "DH"],
             ["SP", "SP"],
             ["RP", "RP"],
-          ]}
-        />
-        <FilterSelect
-          label="Tier"
-          value={tier}
-          onChange={(v) => setTier(v as TierFilter)}
-          options={[
-            ["all", "Any"],
-            ["bronze", "Bronze"],
-            ["silver", "Silver"],
-            ["gold", "Gold"],
-            ["diamond", "Diamond"],
           ]}
         />
         <FilterSelect
@@ -302,20 +263,45 @@ export function CollectionGrid({
             ["name", "Player name"],
           ]}
         />
-
-        <Button variant="outline" onClick={reset}>
+        <Button variant="outline" size="sm" onClick={reset}>
           Reset
         </Button>
-      </aside>
-      <CardDetailDrawer
-        cardId={detailCardId}
-        open={detailCardId !== null}
-        onOpenChange={(next) => {
-          if (!next) closeDetail();
-        }}
-      />
-    </section>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="rounded-lg border border-[var(--border)] border-dashed bg-[var(--surface)] p-10 text-center text-[var(--text-3)] text-sm">
+          {cards.length === 0
+            ? "No cards yet. Open a pack from the Shop to start collecting."
+            : "No cards match your filters."}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {filtered.map((c) => (
+            <div key={c.id} className="relative">
+              <Card card={c} size="medium" onClick={() => openDetail(c.id)} />
+              {c.appliedToken && (
+                <div className="-right-2 -bottom-2 absolute z-10">
+                  <AppliedTokenBadge
+                    tokenType={c.appliedToken.tokenType}
+                    bonusFp={c.appliedToken.bonusFp}
+                    onRemove={() => handleRemoveToken(c.appliedToken?.applicationId ?? "")}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
+
+  const sidebar = detailCardId ? (
+    <SelectedCardSidebar cardId={detailCardId} onBack={closeDetail} />
+  ) : (
+    <CollectionSummaryStats cards={cards} collectionCap={collectionCap} />
+  );
+
+  return <CollectionShell main={main} sidebar={sidebar} />;
 }
 
 function FilterSelect<T extends string>({
@@ -331,11 +317,11 @@ function FilterSelect<T extends string>({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">{label}</span>
+      <span className="text-[var(--text-3)] text-xs uppercase tracking-wider">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
-        className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]"
+        className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-[var(--text)] text-sm"
       >
         {options.map(([v, l]) => (
           <option key={v} value={v}>
