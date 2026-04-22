@@ -6,6 +6,7 @@ import { getEmptyImage } from "react-dnd-html5-backend";
 
 import { Card } from "@/components/card/Card";
 import { dragResult } from "@/components/card/drag-layer-state";
+import { SlotFpGlow } from "@/components/lineup/SlotFpGlow";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
@@ -176,6 +177,8 @@ export function LineupSlot({
         className={cn("relative", isDragging && "opacity-40")}
       >
         <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
+        {/* Per-slot FP glow — post-submit only. Polish spec §21. */}
+        <SlotFpGlow playerId={card.playerId} enabled={locked} />
         {appliedToken && (
           <div className="absolute -bottom-2 -right-2 z-10">
             <AppliedTokenBadge
