@@ -141,6 +141,8 @@ export default async function LineupPage() {
       position: pos,
       starterCardId: row?.starter_card_id ?? null,
       tokenApplicationId: row?.token_application_id ?? null,
+      liveFp: Number(row?.live_fp ?? 0),
+      finalFp: Number(row?.final_fp ?? 0),
     };
   });
 

@@ -10,10 +10,17 @@ import { cn } from "@/lib/utils";
 type SlotFill = {
   card: LineupCardVM | null;
   appliedToken: { bonusFp: number } | null;
+  liveFp: number;
+  finalFp: number;
 };
+
+type EntryStatus = "building" | "submitted" | "locked" | "live" | "final";
 
 type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
+  entryStatus: EntryStatus;
+  liveScore: number;
+  finalScore: number;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
   canSubmit: boolean;
@@ -23,7 +30,16 @@ type Props = {
   onSubmit: () => void;
 };
 
-export function LineupSidebar({
+export function LineupSidebar(props: Props) {
+  if (props.entryStatus === "building") {
+    return <BuildingSidebar {...props} />;
+  }
+  return <PostSubmitSidebar {...props} />;
+}
+
+// ── Building state ────────────────────────────────────────────────────
+
+function BuildingSidebar({
   slotFills,
   autoSubMode,
   onAutoSubModeChange,
@@ -90,6 +106,137 @@ export function LineupSidebar({
       </div>
     </>
   );
+}
+
+// ── Submitted / Live / Final state ────────────────────────────────────
+
+function PostSubmitSidebar({
+  slotFills,
+  entryStatus,
+  liveScore,
+  finalScore,
+  lockCountdown,
+}: Props) {
+  const isFinal = entryStatus === "final";
+  const displayScore = isFinal
+    ? finalScore
+    : liveScore > 0
+      ? liveScore
+      : slotSum(slotFills, "liveFp") + slotSum(slotFills, "finalFp");
+  // The rollup inside reconcileGame only updates contest_entry.live_score /
+  // final_score when status is 'live' or 'final' — while 'submitted' the
+  // entry aggregate stays at zero even though slot FPs may be populated
+  // (see ADR-0014). Derive from slotFills as a fallback so the Live Score
+  // reads correctly during the submitted → live transition window.
+
+  return (
+    <>
+      <SidebarSection title={isFinal ? "Final Score" : "Live Score"}>
+        <SidebarStat value={displayScore.toFixed(1)} accent={displayScore > 0} />
+      </SidebarSection>
+
+      <BoxScoreSection slotFills={slotFills} isFinal={isFinal} />
+
+      <div className="mt-auto flex flex-col gap-2 pt-2">
+        <p className="text-xs text-[var(--text-3)]">
+          {entryStatus === "live" ? <>Live · {lockCountdown}</> : <>Locked · {lockCountdown}</>}
+        </p>
+        <StatusChip entryStatus={entryStatus} displayScore={displayScore} />
+      </div>
+    </>
+  );
+}
+
+function BoxScoreSection({
+  slotFills,
+  isFinal,
+}: {
+  slotFills: Record<LineupPosition, SlotFill>;
+  isFinal: boolean;
+}) {
+  return (
+    <SidebarSection title="Box Score" className="min-h-0 flex-1">
+      <ol className="flex flex-col gap-0.5">
+        {LINEUP_POSITIONS.map((pos) => {
+          const fill = slotFills[pos];
+          const fp = isFinal ? fill.finalFp : fill.liveFp || fill.finalFp;
+          const hasScored = fp !== 0 || fill.finalFp !== 0;
+          const playerLabel = fill.card ? shortName(fill.card.playerName) : "—";
+          return (
+            <li
+              key={pos}
+              className="grid grid-cols-[2rem_1fr_3rem] items-baseline gap-1 text-[11px]"
+            >
+              <span className="font-mono text-[var(--text-3)]">{pos}</span>
+              <span
+                className={cn(
+                  "truncate",
+                  fill.card ? "text-[var(--text-2)]" : "text-[var(--text-3)]",
+                )}
+              >
+                {playerLabel}
+              </span>
+              <span
+                className={cn(
+                  "text-right font-mono tabular-nums",
+                  hasScored ? "font-semibold text-[var(--text)]" : "text-[var(--text-3)]",
+                )}
+              >
+                {hasScored ? fp.toFixed(1) : "—"}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </SidebarSection>
+  );
+}
+
+function StatusChip({
+  entryStatus,
+  displayScore,
+}: {
+  entryStatus: EntryStatus;
+  displayScore: number;
+}) {
+  let label: string;
+  switch (entryStatus) {
+    case "submitted":
+      label = "Submitted · Waiting on first pitch";
+      break;
+    case "locked":
+      label = "Locked · Games starting";
+      break;
+    case "live":
+      label = "Live · Games in progress";
+      break;
+    case "final":
+      label = `Final · ${displayScore.toFixed(1)} FP`;
+      break;
+    default:
+      label = "Submitted";
+  }
+  return (
+    <div className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-center text-xs font-medium text-[var(--text-2)]">
+      {label}
+    </div>
+  );
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function shortName(full: string): string {
+  const parts = full.trim().split(/\s+/);
+  if (parts.length < 2) return full;
+  const first = parts[0] ?? "";
+  const last = parts.slice(1).join(" ");
+  return `${first.charAt(0)}. ${last}`;
+}
+
+function slotSum(slotFills: Record<LineupPosition, SlotFill>, key: "liveFp" | "finalFp"): number {
+  let total = 0;
+  for (const pos of LINEUP_POSITIONS) total += slotFills[pos][key];
+  return total;
 }
 
 function ModeRadio({

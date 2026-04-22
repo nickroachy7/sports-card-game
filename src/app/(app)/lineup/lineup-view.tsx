@@ -40,6 +40,11 @@ type SlotFill = {
     bonusFp: number;
     applicationId: string;
   } | null;
+  /** Running FP during live games (populated by the scoring reducer). */
+  liveFp: number;
+  /** Authoritative FP after game reconcile. Zero until the starter's
+   *  game finalizes. */
+  finalFp: number;
 };
 
 export function LineupView(props: LineupViewProps) {
@@ -88,6 +93,17 @@ export function LineupView(props: LineupViewProps) {
     (state, patch) => state.map((s) => (s.position === patch.position ? patch : s)),
   );
 
+  // Map slot position → committed FPs (live_fp / final_fp) from props.
+  // These don't flow through the optimistic overlay — they only update
+  // when a server refresh delivers new slot data.
+  const slotFpByPosition = useMemo(() => {
+    const map = new Map<LineupPosition, { liveFp: number; finalFp: number }>();
+    for (const s of props.slots) {
+      map.set(s.position, { liveFp: s.liveFp, finalFp: s.finalFp });
+    }
+    return map;
+  }, [props.slots]);
+
   // Build slotFills: for each canonical position, what's there?
   const slotFills = useMemo(() => {
     const fills = {} as Record<LineupPosition, SlotFill>;
@@ -110,10 +126,16 @@ export function LineupView(props: LineupViewProps) {
           }
         }
       }
-      fills[pos] = { card, appliedToken };
+      const fp = slotFpByPosition.get(pos);
+      fills[pos] = {
+        card,
+        appliedToken,
+        liveFp: fp?.liveFp ?? 0,
+        finalFp: fp?.finalFp ?? 0,
+      };
     }
     return fills;
-  }, [optimisticSlots, cardsById, tokensById, tokenApps]);
+  }, [optimisticSlots, cardsById, tokensById, tokenApps, slotFpByPosition]);
 
   const assignedCardIds = useMemo(() => {
     const set = new Set<string>();
@@ -303,6 +325,9 @@ export function LineupView(props: LineupViewProps) {
         sidebar={
           <LineupSidebar
             slotFills={slotFills}
+            entryStatus={props.entryStatus}
+            liveScore={props.liveScore}
+            finalScore={props.finalScore}
             autoSubMode={mode}
             onAutoSubModeChange={handleModeChange}
             canSubmit={canSubmit}

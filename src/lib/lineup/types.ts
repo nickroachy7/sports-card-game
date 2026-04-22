@@ -38,6 +38,11 @@ export type LineupSlotVM = {
   position: LineupPosition;
   starterCardId: string | null;
   tokenApplicationId: string | null;
+  /** Running FP from live events (before game_end reconcile). */
+  liveFp: number;
+  /** Authoritative FP after reconcile. Zero until the starter's game
+   *  finalizes + reconcileGame runs. */
+  finalFp: number;
 };
 
 export type LineupViewProps = {
