@@ -668,3 +668,404 @@ Carries forward §4 entries that remain parked, plus new deferrals:
 - **Accessibility audit pass** (WCAG 2.1 AA).
 - **Mobile layout.**
 - **Sound design / haptics / artwork.**
+
+---
+
+# Phase 8 batch — polish items locked 2026-04-21
+
+The three entries below were locked via a two-round interview after
+Phase 7 shipped. They target the biggest remaining UX moment (pack
+opening), finish the lineup-page arc (slot swap, collection drawer
+migration, n8n-style diamond viewport), and pay down two pieces of
+hardening debt (real BDL webhook, MLB-official W/L attribution).
+
+---
+
+## 10. Pack opening reveal redesign
+
+### Goal
+
+The current pack opening is a quick flip card-by-card — functional
+but flat. A pack opening should feel like the biggest moment in the
+app. Rebuild the reveal as a paced, user-controlled sequence with
+a proper celebration when you hit a star-tier player, and a clear
+choice when you pull a duplicate.
+
+### What we're building on top of
+
+All pulled cards start at Bronze tier (tier progression happens
+later via career FP). So the reveal's scarcity axis isn't the
+card's tier — it's the **player's talent tier**, which the schema
+already tracks via `player.player_value_tier` enum
+(`'star' | 'starter' | 'role' | 'prospect'`). That's what drives
+the celebration moment.
+
+### Behavior
+
+- **Carousel + tap-through:** all N cards in the pack land face-
+  down in a row. One card is "active" (centered, slightly lifted).
+  Tap the active card → flip reveal animation (180° flip, ~350ms,
+  eased). The next card becomes active; user taps again.
+- **Reveal animation (per card):**
+  - Face-down → flip to face-up (tier frame materializes).
+  - If player is `'star'` or `'starter'` → fire the star-pull
+    celebration AFTER the flip completes (brief pause, ~150ms).
+  - Dupe stamp (if applicable) lands with the face-up flip.
+- **Star-pull celebration:**
+  - **`'star'`:** full celebration — card hero-scales to 1.4 with a
+    brief radial burst + particles ('dust puffs' from behind the
+    card) + a subtle screen-darken behind the card to spotlight it.
+    ~900ms total. Feels earned.
+  - **`'starter'`:** smaller variant — card hero-scales to 1.15
+    with a single glow pulse along the tier frame. No screen-
+    darken, no particles. ~450ms. A notable but less reverent
+    moment.
+  - No celebration for `'role'` / `'prospect'` — just a normal
+    flip.
+- **Duplicate handling (keep one, sell one):**
+  - When the pulled card is a player the user already owns, the
+    reveal pauses after the flip with a split panel:
+    - Left: the **new** card (fresh 15-play contract, bronze).
+      Shows the coins earned from selling this one.
+    - Right: the **existing** card (user's current instance, with
+      its career FP + contract count). Shows the coins earned
+      from selling this one instead.
+  - User picks one. The unpicked card is destroyed + coins are
+    credited (via existing `quick_sell_card` for the existing
+    instance, or a pack-opening-equivalent credit for the new one).
+  - If the user owns **multiple** existing instances of the
+    player: the "existing" side picks the instance with the lowest
+    career FP as the default candidate; a small "(change)" link
+    opens a tiny picker for power users to select a different
+    instance. Default flow is one-tap.
+- **End of reveal:** "Done" / "Back to Shop" CTA. Coin ticker in
+  the header has ticked up live as each sell resolved.
+
+### Star-pull particle physics
+
+Reuses the Phase 6 motion vocabulary (§1) — same iOS-snappy spring
+personality, no new motion primitives. Specifics:
+- Scale spring: `stiffness 300, damping 22, mass 1` for the hero
+  lift (slightly softer than the drag spring).
+- Particles: 8–12 dust puffs spawn behind the card with randomized
+  velocity vectors; decay via opacity + scale over ~500ms. Motion
+  (framer-motion) handles the parallel animations.
+- Reduced-motion: no hero-scale, no particles. Card emits a brief
+  ring-pulse instead (matches the muted Phase 7 reduced-motion
+  behavior everywhere else).
+
+### Acceptance
+
+- [ ] Pack opening shows N cards face-down in a carousel.
+- [ ] Tap the active card → it flips face-up. Next card becomes
+  active.
+- [ ] A `'star'` pull triggers the full celebration (hero scale +
+  particles + screen-darken). Covers feel-testable on `/palette`
+  via a dedicated demo.
+- [ ] A `'starter'` pull triggers the small celebration (glow
+  pulse). Same `/palette` coverage.
+- [ ] A `'role'` or `'prospect'` pull plays only the flip — no
+  celebration layer.
+- [ ] A dupe pull shows the keep-new vs keep-existing panel; user
+  picks one; unpicked card destroys + coins credit.
+- [ ] User with multiple existing instances defaults to the
+  lowest-FP instance; can change via a picker.
+- [ ] Coin counter in header ticks up on each sell resolution (no
+  batching at end of reveal).
+- [ ] Reduced-motion: flip is instant, dupe panel is instant, no
+  particles or hero scale; coin ticker still updates.
+- [ ] Playwright scenario: signup → open daily pack → reveal all →
+  back to collection with expected count.
+
+### Dependencies
+
+- `src/components/pack/` — existing reveal components. Major
+  rewrite; keep the data-loading server action (`openPack`) as-is.
+- New `/palette` section demonstrating the three flip variants +
+  dupe panel (client demo; keep server↔client seam safe per ADR-
+  0011 #2).
+- SQL: no new fns. Dupe handling calls `quick_sell_card` for the
+  existing-instance path; new-instance sell needs a
+  `credit_coins` wrapper in the pack-opening flow (may already
+  exist in `open_pack`; verify during build).
+- `reference/` type extracts: BDL SDK's player schema already
+  exposes `player_value_tier`; no new data plumbing.
+
+### Trade-offs
+
+- **Tap-through pacing loses the batch-open speedrun.** Users
+  opening five packs in a row tap more than they do today. Mitigate
+  with a "Skip all" button that plays the remaining flips as a
+  cinematic (no celebration).
+- **Dupe panel adds a decision point the current flow doesn't
+  have.** If users regret sell-new more than sell-existing, the
+  picker default biases against that — lowest-FP existing is
+  usually what the user meant. Instrument (PostHog event
+  `pack_dupe_decision`) so we can tune.
+- **Star-pull frequency hinges on pack composition.** If the daily
+  pack rolls mostly role/prospect players, the celebration is
+  rare — which is the point, but we should monitor and adjust
+  pack seeds if it feels too sparse.
+
+---
+
+## 11. Lineup finish — collection drawer, slot swap, diamond pan+zoom
+
+### Goal
+
+Close the Phase 7 arc. Three pieces that each stand alone but
+finish the lineup-page story: make the detail drawer universal
+(Collection too), let users drag a card in a slot onto another
+slot to swap them, and replace the "internal scroll at 800px"
+compromise with a proper pan+zoom canvas on the diamond.
+
+### 11.1 Collection drawer migration
+
+**Behavior:**
+- Click a card in `/collection` → `<CardDetailDrawer>` opens in
+  place. URL updates to `/collection?card=<id>` (query param, not
+  a new route).
+- On direct visit of `/collection?card=<id>`, the grid renders
+  with the drawer pre-opened.
+- Back button closes the drawer (history stack: grid → grid+card
+  → grid).
+- `/collection/[cardId]` stays as a route (direct links still
+  work). The full-page version becomes secondary — consider it the
+  permalink surface.
+
+**Acceptance:**
+- [ ] Collection grid cards open the drawer, not a new page.
+- [ ] URL query param updates on open / clears on close.
+- [ ] Forward/back navigation moves the drawer open / closed.
+- [ ] Direct `/collection?card=<id>` link opens the drawer on
+  mount.
+- [ ] Direct `/collection/[cardId]` still renders the existing
+  full-page view (back-compat).
+- [ ] Collection cards gain the corner `AppliedTokenBadge` for
+  any card with an applied token (the regression flagged in P7.2
+  fixes here).
+
+**Dependencies:**
+- `src/app/(app)/collection/collection-grid.tsx` — swap `<Link>`
+  to a click handler that sets `?card=<id>` via `router.push` +
+  opens the drawer. Grid owns the drawer state + cardId lookup.
+- `<CardDetailDrawer>` already built in P7.3; add an optional
+  `onAddToVault` path that the Collection context wires to
+  `vaultCardMidseason`.
+- Corner badge propagation: Collection page loads applied-token
+  metadata (already in `applied_token_id` column — just need to
+  join tokens + render badge).
+
+### 11.2 Slot ↔ slot swap drag
+
+**Behavior:**
+- Drag a card from one filled slot onto another filled slot →
+  swap the two cards. Atomic server-side (single SQL fn).
+- Position eligibility check: the dragged card's positions must
+  include the target slot's role, AND the displaced card's
+  positions must include the dragged card's origin role. If
+  either fails → shake-back (existing §1 invalid-drop), no swap.
+- Drag from a slot onto an empty slot: just move (existing
+  behavior, but via the new fn for symmetry).
+- Drag from a slot onto the bench drawer: existing "Remove from
+  slot" button is still there; add this as a second path.
+
+**Acceptance:**
+- [ ] Two hitters of compatible positions swap via drag.
+- [ ] Incompatible swap (SS onto OF where SS can't play OF or OF
+  can't play SS) shakes back without moving.
+- [ ] Slot → bench drop moves the card to bench.
+- [ ] Optimistic UI: both slots update instantly; server round-
+  trip settles via `useOptimistic`.
+- [ ] E2E coverage skipped per ADR-0011 drag-drop posture; manual
+  smoke on prod.
+
+**Dependencies:**
+- New SQL fn `swap_lineup_slots(entry_id, position_a, position_b)`
+  — validates ownership, eligibility both directions, applies
+  both updates atomically.
+- New server action `swapLineupSlots` in `app/actions/lineup.ts`.
+- `LineupSlot` becomes a drag SOURCE when filled (currently only
+  drop target). `useDrag` wrapper with `canDrag` gated on
+  `!locked && card`.
+- `CardDragLayer` works as-is (domain-generic per ADR-0011).
+
+### 11.3 Diamond pan + zoom canvas
+
+**Goal:** Drop the internal overflow-scroll workaround. Diamond
+lives on a pan+zoom canvas; user can zoom in to inspect a slot,
+pan around, or tap "Fit" to return to the default.
+
+**Behavior:**
+- Default zoom level fits the diamond to the pane (derived at
+  mount from pane dimensions). Slot cards render at the shared
+  `<Card size="small">` (96×134) — no shrink required because
+  zoom handles the fit.
+- **Gestures:**
+  - Trackpad pinch → zoom around the pointer.
+  - Ctrl/Cmd + scroll → zoom around the pointer.
+  - Drag on empty diamond space (when zoomed past fit) → pan.
+  - Floating control cluster (top-right of the diamond pane):
+    - `+` / `−` buttons — zoom in / out by 20%.
+    - `Fit` button — scale + recenter to the mount-time fit.
+- **Zoom bounds:** 0.5× (min) to 2.0× (max) of the mount-time
+  fit. Hard clamp; scroll past bounds dampens.
+- **Pan bounds:** diamond stays within the pane (can't pan all
+  content off-screen). Elastic resistance at edges.
+
+**Acceptance:**
+- [ ] Pane mounts with the full diamond visible (no internal
+  scroll at 800px viewport).
+- [ ] Trackpad pinch, ctrl-scroll, and buttons all zoom around the
+  pointer (or pane center for buttons).
+- [ ] Drag-to-pan only activates when zoomed past fit. At fit
+  level, drag does nothing (avoids accidental pan).
+- [ ] Fit button returns to mount-time transform.
+- [ ] Dragging a card onto a slot still works — slot drop targets
+  ignore the pan/zoom transform correctly (hit-testing is done in
+  transformed coordinate space by default; verify).
+- [ ] Reduced-motion: zoom + pan are instant (no easing). Fit
+  button still works.
+
+**Dependencies:**
+- New `<ZoomCanvas>` component (or reuse a motion wrapper) —
+  probably wraps the `<DiamondGrid>`'s outer container with a
+  `transform: scale() translate()` CSS + handles gesture events.
+- Consider `@use-gesture/react` or motion's drag/pinch primitives
+  — both already adjacent to our stack. If adding a dep,
+  `@use-gesture/react` is the narrow choice; otherwise
+  hand-rolled pinch detection from wheel events with ctrlKey.
+- Removes P7.1's "internal overflow scroll" workaround on the
+  diamond pane. `LineupShell`'s middle row becomes a fixed-size
+  pan surface.
+
+### Trade-offs
+
+- **Pan+zoom is more UI than a fixed diamond needs.** n8n's
+  canvas pays off because workflows scale with content. The
+  diamond is always 10 slots. But: it gives users a way to
+  inspect a slot + feels modern + avoids the "cards too small to
+  read" objection if we later shrink default size. Accepted per
+  interview.
+- **Gesture precedence.** Pinch, ctrl-scroll, and drag-pan all
+  compete. Resolution: pinch zooms; wheel without ctrl scrolls
+  the page (which we want suppressed on the diamond pane anyway);
+  drag on cards drags the card (react-dnd has priority); drag on
+  empty space pans. Document clearly.
+- **Collection migration loses `/collection/[cardId]` as the
+  primary surface.** Anyone relying on that URL as a permalink
+  still gets a full page. If we drop the page later, flip to a
+  redirect to `/collection?card=<id>`.
+
+---
+
+## 12. Hardening — BDL webhook + MLB-official W/L attribution
+
+### Goal
+
+Two pieces of load-bearing debt. Both replace scaffolding built
+for development with the real production path.
+
+### 12.1 Real BallDontLie webhook registration
+
+**Today:** `/api/dev/webhook-sim` is the only path that exercises
+the MLB event ingestion pipeline. Real BDL webhooks have never
+been wired to the production endpoint.
+
+**Plan:**
+- Coordinate with BDL to register the prod webhook URL
+  (`https://draft-deck.vercel.app/api/webhooks/balldontlie`) and
+  configure the HMAC signing secret on both sides.
+- Update `BDL_WEBHOOK_SECRET` env var in Vercel prod.
+- Run a subscription test: fire one real MLB game event from BDL,
+  confirm our endpoint accepts, verifies HMAC, and writes to
+  `webhook_delivery` + downstream tables.
+- Leave `/api/dev/webhook-sim` in place as a dev-only path (guard
+  with `NODE_ENV !== 'production'`).
+
+**Acceptance:**
+- [ ] Webhook registered with BDL; secret stored in Vercel prod
+  env.
+- [ ] One real BDL event arrives + is accepted + processed end-
+  to-end (game event → scoring → contest update).
+- [ ] `webhook_delivery` audit shows the real event distinct from
+  dev-sim events (different `source` or similar marker).
+- [ ] Dev-sim route returns 404 in prod.
+
+**Dependencies:**
+- BDL coordination (may stall until user confirms credentials).
+- No app code changes beyond env + a small `NODE_ENV` guard on
+  dev-sim route.
+
+### 12.2 Play-by-play W/L attribution
+
+**Today:** `src/lib/mlb/reconcile.ts` uses a heuristic — the
+pitcher with the most innings pitched on the winning team gets
+the W. For most games this lines up with the official MLB rule,
+but it diverges in games where a reliever picks up the W, or
+where the SP was pulled before 5 IP and someone else met the
+scoring requirement.
+
+**Plan:**
+- BDL's play-by-play payload includes MLB's official W/L
+  attribution per game. Read it; use it directly instead of
+  computing our own.
+- Update `reconcile.ts` to read the `winning_pitcher_id` /
+  `losing_pitcher_id` (or whatever the BDL shape names them) and
+  apply them to the rostered pitcher's scoring.
+- If BDL doesn't publish the official attribution (edge: game in
+  progress, no decision yet), keep the heuristic as fallback
+  only.
+- Backfill: one-time script to recompute W/L for contests scored
+  under the old heuristic (optional; depends on how many contests
+  are affected).
+
+**Acceptance:**
+- [ ] `reconcile.ts` reads MLB-official W/L from the play-by-play
+  payload.
+- [ ] When the official attribution is present, it drives the FP
+  stat; heuristic only fires when official is absent.
+- [ ] Unit test covers the happy path + the "official missing →
+  heuristic fallback" path.
+- [ ] No change to existing finalized contests without an
+  explicit backfill run (guard via script; don't silently rewrite
+  history).
+
+**Dependencies:**
+- BDL SDK types (`reference/` extracts) — verify the field name
+  for official W/L attribution. Update `src/lib/mlb/provider.ts`
+  if needed.
+- Scoring logic in `reconcile.ts` + `src/lib/db/functions/` scoring
+  fns may need SQL updates too.
+
+### Trade-offs
+
+- **BDL webhook registration stalls on external coord.** If BDL
+  doesn't turn around quickly, 12.1 slips. Slice 12.2 has no
+  external dep so it can ship regardless.
+- **Backfill history vs leave it.** Changing the W/L rule
+  retroactively rewrites past contest outcomes. Default: don't
+  rewrite. If the divergence is small, skip entirely. If it
+  affects leaderboards meaningfully, surface a one-time recompute
+  script in P8.5 and document what changed.
+
+---
+
+## 13. Not in scope for v1.3
+
+Carries forward §4 + §9 entries that remain parked, plus
+deferrals from Phase 8 interviewing:
+
+- **Ceremony fn tolerance for pre-vaulted cards** (P7.4 followup;
+  not urgent, season's months out).
+- **Empty + error state sweep** (still parked — candidate for
+  Phase 9).
+- **Tier foil motion** (silver shine, gold bloom, diamond
+  shimmer).
+- **Onboarding flow pass.**
+- **Live contest view polish** (score tick animations, event-feed
+  cinematics, heat-map). Good candidate for next phase.
+- **Accessibility audit** (WCAG 2.1 AA).
+- **Rank-based XP against multi-user contests** (needs real users
+  first).
+- **Mobile layout, sound, haptics, artwork.**
