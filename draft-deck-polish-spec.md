@@ -2366,3 +2366,273 @@ burned a play?" narrative on the diamond.
 - Sound cue on positive-FP events.
 - Manual-override column for unmatched MLBAM ids.
 - Card-to-card cross-fade inside the selected-card sidebar.
+
+---
+
+# Phase 15 batch — locked 2026-04-22
+
+Feel Pass v1.9. Three user-visible fixes — including one
+surfaced by real use of the Phase 13 sidebar pattern — plus
+the proper fix to the Phase 14 backfill ceiling.
+
+1. Card detail in the sidebar overflows horizontally. The
+   layout was designed for the old full-page drawer; Phase
+   13 reused the component in a 288px sidebar without
+   re-fitting. Screenshot confirmed the scroll.
+2. Cards + tokens currently in a lineup still appear in the
+   bench / tokens tray (dimmed, non-draggable). Users read
+   those trays as "unused" — in-use items should drop out
+   entirely with a counter acknowledging they exist.
+3. MLBAM backfill is stuck at ~77% because MLB Stats API's
+   `/people/search` filters to MLB-service-time players.
+   `/api/v1/sports/1/roster/40Man?teamId=N` returns the
+   full 40-man for a given team, MLBAM ids included — one
+   call per team, 30 calls total.
+
+---
+
+## 33. Card detail view — sidebar-friendly layout
+
+### Goal
+
+The existing `<CardDetailView>` component renders at a
+five-column max-w-5xl width with `<Card size="large">`
+(320px). Phase 13 embedded it inside a 288px sidebar. The
+horizontal scroll is visible + confirmed via screenshot.
+
+### Scope
+
+- `<CardDetailView>` always renders single-column. Drop
+  the `md:flex-row` two-column split.
+- `<Card>` in the detail view drops from `size="large"` to
+  `size="medium"` (160×224) — fits cleanly inside the 288px
+  sidebar with margin.
+- Padding tightens: `gap-8 px-6 py-8` → `gap-4 px-2 py-3`
+  to reclaim vertical space now that everything stacks.
+- Action buttons + stats + tier progress + token history
+  all remain — just stacked in one scrolling column.
+
+### Behavior
+
+- No content removed. Narrative stays the same — the
+  change is purely layout density.
+- The `/collection/[cardId]` page-level route is orphaned
+  (nothing links to it) and still renders `<CardDetailView>`.
+  It becomes a stack-of-content page too (fine on desktop
+  at the narrower width).
+
+### Acceptance
+
+- [ ] Click a card on `/lineup` — detail sidebar fits
+  without horizontal scroll at 288px.
+- [ ] Click a card on `/collection` — same.
+- [ ] Action buttons (Extend / Quick Sell / Vault / Remove
+  from slot) visible and clickable.
+- [ ] Tier progress bar + career FP still render legibly.
+
+### Trade-offs
+
+- **Medium card in a narrow column loses some "holding a
+  card" moment** vs. the previous large card on a wide
+  page. Trade for legibility. If the sidebar ever grows
+  past ~320px we can revisit.
+- **`/collection/[cardId]` page-level route inherits the
+  compact layout.** One file for two contexts; acceptable
+  since the route is orphan anyway — P15.2 redirects it.
+
+---
+
+## 34. Redirect orphan detail route
+
+### Goal
+
+`/collection/[cardId]` has been an orphan since Phase 13
+(the sidebar pattern became canonical + nothing links to
+the page). Keep the URL addressable for any bookmarks or
+external links; redirect through to the sidebar pattern.
+
+### Scope
+
+- `src/app/(app)/collection/[cardId]/page.tsx` becomes a
+  thin Server Component that calls
+  `redirect(\`/collection?card=${cardId}\`)`. Existing data
+  fetch + detail render code deleted.
+
+### Acceptance
+
+- [ ] Hitting `/collection/abc-123` redirects to
+  `/collection?card=abc-123`.
+- [ ] Redirect status 307 (temporary redirect — Next's
+  default for `redirect()` from server components).
+
+### Trade-offs
+
+- **Losing a dedicated detail URL.** Deep-linking to a
+  card's detail still works via `?card=<id>`; the old URL
+  pattern just rewrites. Nobody loses anything.
+
+---
+
+## 35. Bench + tokens — hide in-lineup, show counter
+
+### Goal
+
+The bench tray displays all non-vaulted cards, including
+ones currently in a slot (dimmed + non-draggable). User
+feedback: that tray reads as "unused stuff" — having
+in-use cards there is confusing. Same for tokens tray +
+token applications.
+
+### Scope
+
+- **`<BenchDrawer>`** filters out any card whose id is in
+  `assignedCardIds` (already wired as a prop). Previously
+  the filter sorted them to the end; now it drops them.
+- Header gains a secondary count: `Bench (12) · 4 in lineup`
+  so users know their collection didn't shrink.
+- **`<TokenTray>`** filters out any token whose id
+  corresponds to an existing `token_application` for the
+  current contest. Currently applied tokens show in the
+  tray but can't be dragged; now they disappear.
+- Header gains: `Tokens (3) · 2 in lineup`.
+
+### Behavior
+
+- Drag a card from bench → slot: card disappears from
+  bench, counter increments (2 → 3).
+- Remove from slot: card reappears in bench, counter
+  decrements.
+- Same pattern for tokens.
+- Filters (Hitters/Pitchers/search on bench) apply after
+  the in-lineup filter — counter always reflects the full
+  set.
+- Building state + post-submit state: same filter applies.
+  Post-submit locked, drags don't work anyway, but the
+  cleaner tray is the same improvement.
+
+### Acceptance
+
+- [ ] Cards in slots don't appear in the bench.
+- [ ] Tokens applied to lineup cards don't appear in the
+  tray.
+- [ ] Counter chip reads accurately after drag/remove
+  operations.
+- [ ] Filter / search on bench operates on the reduced
+  set.
+- [ ] Locked state: counter still shown, no regression.
+
+### Trade-offs
+
+- **Loses visual confirmation that you own the assigned
+  card.** Users who liked seeing "ghosted" cards in bench
+  as a memory anchor lose that. Counter + the slot
+  rendering is enough signal.
+- **No dedicated "In lineup" view.** If users want to
+  browse what they've committed, the diamond + sidebar
+  detail is the surface. Not adding a third view.
+
+---
+
+## 36. MLBAM backfill via /sports/1/roster/40Man
+
+### Goal
+
+Raise the MLBAM id match rate from ~77% to effectively
+100% of active 40-man players. MLB Stats API's
+`/people/search` filters to MLB-service-time players,
+which excludes ~23% of our 40-man records (callups,
+recently optioned, on the 60-day IL, etc.). The
+`/api/v1/sports/1/roster/40Man?teamId=N` endpoint returns
+the full 40-man for a given team, MLBAM id included, with
+no service-time filter.
+
+### Scope
+
+- **`/api/cron/mlbam-id-backfill`** rewritten. One call
+  per team (30 teams × 1 call = 30 HTTP requests total,
+  vs. per-player search). For each team's 40-man roster:
+  - Match our `player` rows by `first_name + last_name`
+    (normalized) + `team_id` join.
+  - Write `mlbam_id` + `photo_synced_at` on match.
+- **Ambiguous cases disappear.** Two "Jose Ramirez"
+  players on different teams now resolve cleanly — each
+  team's roster is scoped.
+- **Fallback to the Phase 14 search-based matcher** for
+  players not in any team's 40-man (e.g., released /
+  retired in-season). Keep the fuzzy + team_disambiguated
+  strategies for that fallback path.
+- **Response shape** gains `roster_matched` + `fallback_matched`
+  counters.
+- **Query params:**
+  - `?limit=N` — cap on how many teams to process
+    (default 30, max 30). Each team's 40-man takes ~1–2s
+    inclusive of the rate-limit sleep.
+  - `?retry_failed=true` — same as Phase 14; ignores the
+    `photo_synced_at IS NOT NULL` skip.
+
+### Behavior
+
+- Teams fetched in parallel-friendly but rate-limited way:
+  sequential with 500ms between requests. ~15–30s total
+  run.
+- For each 40-man roster response:
+  - For each person: `normalize(firstName) +
+    normalize(lastName)` → look up `player` rows on that
+    team. Match.
+  - Team-scope prevents same-name collisions by construction.
+- Players not matched after all 30 teams processed: fall
+  through to the Phase 14 search matcher (single HTTP call
+  per residual player, fuzzy + team strategies intact).
+
+### Acceptance
+
+- [ ] After a run, `unmatched_total` drops below 20
+  (residual genuinely-unknown).
+- [ ] Response includes `roster_matched` (from 40-man) +
+  `fallback_matched` (from search) + `ambiguous` +
+  `unmatched` + strategies.
+- [ ] Idempotent — safe to re-run.
+- [ ] Runbook updated.
+
+### Dependencies
+
+- MLB Stats API `/api/v1/sports/1/roster/40Man?teamId=N`
+  is free + public.
+- `public.team.bdl_team_id` or `team.abbreviation` — need
+  a way to look up MLB Stats' teamId (which differs from
+  both BDL's id and our own internal id). MLB Stats uses
+  a canonical teamId (e.g., 108 = Angels, 119 = Dodgers).
+  Add a lookup table — either a small JSON constant or
+  derive via `/api/v1/teams?sportId=1` once.
+
+### Trade-offs
+
+- **Adds a one-time team lookup.** The MLB Stats teamId
+  ↔ abbreviation map is ~30 rows. Shipping as a const
+  (`src/lib/mlb/mlb-stats-team-ids.ts`) is simpler than a
+  DB column.
+- **Roster endpoint gives `team_id` indirectly** — the
+  player row comes back with its current team implicit
+  in the roster URL. We don't need to trust MLB's
+  returned team field.
+- **Still ~2 HTTP calls per player for the fallback
+  path.** A handful; not a budget concern.
+
+---
+
+## 37. Not in scope for v1.9.5
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability dashboard.
+- CI integration for fixture suite.
+- Sound cue on positive-FP events.
+- Auto-sub contract-depletion glow on bench cards.
+- `retry_failed=true` offset pagination.
+- `/collection/[cardId]` as a full-page experience (sidebar
+  is canonical; route redirects).
