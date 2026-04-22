@@ -267,6 +267,7 @@ A task is "done" when all of these are true:
 - [ ] `pnpm typecheck` is clean.
 - [ ] `pnpm lint` is clean (Biome).
 - [ ] `pnpm test` passes.
+- [ ] If it touches reconcile, a scoring/vault SQL fn, or a migration that hits `game_event`/`contest_lineup_slot`/`card`/`token`/`vault_entry`: `pnpm test:integration` passes (prereq: `supabase start`). See `docs/runbook.md` → "Run the integration test suite."
 - [ ] If it touches UI: the rendered result matches the spec (tier frame colors, spacing, typography from `draft-deck-ui-ux-spec.md`).
 - [ ] If it touches DB: a migration exists and has been applied locally; RLS policies are in place.
 - [ ] If it touches an API / Action: zod contracts exist in `src/lib/contracts/`, error codes come from the catalog.

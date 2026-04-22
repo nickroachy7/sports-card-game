@@ -136,6 +136,39 @@ Rollback:
 
 ## Testing recipes
 
+### Run the integration test suite
+
+Integration tests drive SQL functions end-to-end against local
+Supabase using typed seed helpers in `tests/fixtures/seed.ts`.
+Catches the class of latent bug P9.5 + P10.5 surfaced
+(reconcile UPDATE-FROM, ceremony check-constraint /
+FK cascades) pre-commit rather than post-deploy.
+
+```bash
+# Prereq: local Supabase stack running + migrations applied.
+supabase start
+pnpm db:push
+
+# Run all three integration files (rls + reconcile + ceremony).
+pnpm test:integration
+```
+
+**When to run** (pre-commit reminder):
+
+| Change touches…                                 | Run `pnpm test:integration` |
+|-------------------------------------------------|-----------------------------|
+| `src/lib/mlb/reconcile.ts`                      | Yes                         |
+| Any scoring SQL function (`_compute_*_fp`, etc.)| Yes                         |
+| Any vault SQL function (`commit_vault_selection`, `vault_card_midseason`, `destroy_vaulted_card`) | Yes |
+| A migration that touches `game_event`, `contest_lineup_slot`, `card`, `token`, or `vault_entry` | Yes |
+| Pure UI / `src/components/`                     | No                          |
+| New Server Action (non-scoring)                 | No, write a targeted unit test |
+
+Seed library + mock-provider contract live in
+`tests/fixtures/{seed,mock-provider}.ts`. Each test cleans up
+via `cleanupUser(userId)` which `DELETE FROM auth.users`
+CASCADEs through every owner-scoped row.
+
 ### Run one test file
 
 ```bash
