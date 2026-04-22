@@ -19,7 +19,8 @@ import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { DiamondGrid } from "@/components/lineup/DiamondGrid";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupShell } from "@/components/lineup/LineupShell";
-import { LineupSidebar } from "@/components/lineup/LineupSidebar";
+import { LineupSidebar, shortName } from "@/components/lineup/LineupSidebar";
+import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import type { TokenType } from "@/lib/contracts/cards";
@@ -144,6 +145,19 @@ export function LineupView(props: LineupViewProps) {
     }
     return set;
   }, [optimisticSlots]);
+
+  // Lineup's rostered players — input to <LiveEventsProvider> post-
+  // submit so the Realtime channel filters to just these IDs. Derived
+  // from slotFills so a mid-session lineup change (e.g., auto-sub)
+  // re-shapes the subscription.
+  const lineupPlayers = useMemo<FeedPlayer[]>(() => {
+    const out: FeedPlayer[] = [];
+    for (const pos of LINEUP_POSITIONS) {
+      const card = slotFills[pos].card;
+      if (card) out.push({ playerId: card.playerId, displayName: shortName(card.playerName) });
+    }
+    return out;
+  }, [slotFills]);
 
   const filledCount = optimisticSlots.filter((s) => s.cardId !== null).length;
   const canSubmit = filledCount === 10 && !locked && !submitting;
@@ -295,61 +309,77 @@ export function LineupView(props: LineupViewProps) {
     router.refresh();
   }
 
+  // Post-submit: wrap the tree in <LiveEventsProvider> so the Event
+  // Feed + per-slot FP glow share one Realtime channel (polish spec
+  // §21). Building state skips the provider entirely — no submitted
+  // lineup means no events to narrate.
+  const isPostSubmit = props.entryStatus !== "building";
+
+  const shell = (
+    <LineupShell
+      header={
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
+          <div className="flex flex-col">
+            <h1 className="font-sans text-base font-bold tracking-tight text-[var(--text)]">
+              {props.contestName}
+            </h1>
+            <span className="text-xs text-[var(--text-3)]">
+              {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
+            </span>
+          </div>
+        </header>
+      }
+      diamond={
+        <DiamondGrid
+          slotFills={slotFills}
+          locked={locked}
+          onCardDropped={handleCardDropped}
+          onTokenDropped={handleTokenDropped}
+          onRemoveToken={handleRemoveToken}
+          onOpenDetail={handleOpenDetail}
+        />
+      }
+      sidebar={
+        <LineupSidebar
+          slotFills={slotFills}
+          entryStatus={props.entryStatus}
+          liveScore={props.liveScore}
+          finalScore={props.finalScore}
+          contestGameIds={props.contestGameIds}
+          autoSubMode={mode}
+          onAutoSubModeChange={handleModeChange}
+          canSubmit={canSubmit}
+          submitting={submitting}
+          locked={locked}
+          lockCountdown={lockCountdown}
+          onSubmit={handleSubmit}
+        />
+      }
+      bench={
+        <BenchDrawer
+          cards={props.cards}
+          assignedCardIds={assignedCardIds}
+          appliedTokenByCardId={appliedTokenByCardId}
+          onRemoveToken={handleRemoveToken}
+          onOpenDetail={handleOpenDetail}
+          locked={locked}
+        />
+      }
+      tokens={<TokenTray tokens={props.tokens} locked={locked} />}
+    />
+  );
+
   return (
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
       <TokenDragLayer resolveToken={resolveToken} />
-      <LineupShell
-        header={
-          <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
-            <div className="flex flex-col">
-              <h1 className="font-sans text-base font-bold tracking-tight text-[var(--text)]">
-                {props.contestName}
-              </h1>
-              <span className="text-xs text-[var(--text-3)]">
-                {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
-              </span>
-            </div>
-          </header>
-        }
-        diamond={
-          <DiamondGrid
-            slotFills={slotFills}
-            locked={locked}
-            onCardDropped={handleCardDropped}
-            onTokenDropped={handleTokenDropped}
-            onRemoveToken={handleRemoveToken}
-            onOpenDetail={handleOpenDetail}
-          />
-        }
-        sidebar={
-          <LineupSidebar
-            slotFills={slotFills}
-            entryStatus={props.entryStatus}
-            liveScore={props.liveScore}
-            finalScore={props.finalScore}
-            contestGameIds={props.contestGameIds}
-            autoSubMode={mode}
-            onAutoSubModeChange={handleModeChange}
-            canSubmit={canSubmit}
-            submitting={submitting}
-            locked={locked}
-            lockCountdown={lockCountdown}
-            onSubmit={handleSubmit}
-          />
-        }
-        bench={
-          <BenchDrawer
-            cards={props.cards}
-            assignedCardIds={assignedCardIds}
-            appliedTokenByCardId={appliedTokenByCardId}
-            onRemoveToken={handleRemoveToken}
-            onOpenDetail={handleOpenDetail}
-            locked={locked}
-          />
-        }
-        tokens={<TokenTray tokens={props.tokens} locked={locked} />}
-      />
+      {isPostSubmit ? (
+        <LiveEventsProvider lineupPlayers={lineupPlayers} contestGameIds={props.contestGameIds}>
+          {shell}
+        </LiveEventsProvider>
+      ) : (
+        shell
+      )}
       <CardDetailDrawer
         cardId={detailCardId}
         open={detailCardId !== null}

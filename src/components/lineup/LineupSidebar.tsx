@@ -119,7 +119,6 @@ function PostSubmitSidebar({
   liveScore,
   finalScore,
   lockCountdown,
-  contestGameIds,
 }: Props) {
   const isFinal = entryStatus === "final";
   const displayScore = isFinal
@@ -132,17 +131,8 @@ function PostSubmitSidebar({
   // entry aggregate stays at zero even though slot FPs may be populated
   // (see ADR-0014). Derive from slotFills as a fallback so the Live Score
   // reads correctly during the submitted → live transition window.
-
-  const lineupPlayers = LINEUP_POSITIONS.flatMap((pos) => {
-    const card = slotFills[pos].card;
-    if (!card) return [];
-    return [
-      {
-        playerId: card.playerId,
-        displayName: shortName(card.playerName),
-      },
-    ];
-  });
+  // The Event Feed + per-slot glow both consume <LiveEventsProvider>
+  // higher up the tree — no subscription wiring happens here anymore.
 
   return (
     <>
@@ -152,7 +142,7 @@ function PostSubmitSidebar({
 
       <BoxScoreSection slotFills={slotFills} isFinal={isFinal} />
 
-      <EventFeed lineupPlayers={lineupPlayers} contestGameIds={contestGameIds} />
+      <EventFeed />
 
       <div className="mt-auto flex flex-col gap-2 pt-2">
         <p className="text-xs text-[var(--text-3)]">
@@ -242,7 +232,7 @@ function StatusChip({
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function shortName(full: string): string {
+export function shortName(full: string): string {
   const parts = full.trim().split(/\s+/);
   if (parts.length < 2) return full;
   const first = parts[0] ?? "";
