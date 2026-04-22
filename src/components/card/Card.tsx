@@ -16,6 +16,10 @@ export type CardViewModel = {
   playerStatus: PlayerStatus;
   isExpired: boolean;
   hasAppliedToken: boolean;
+  /** Pre-vaulted (midseason) or ceremony-committed cards render the
+   *  "VAULTED" frame treatment — muted border, cross-hatch overlay,
+   *  ribbon stamp. Non-playable; drag sources must gate via canDrag. */
+  isVaulted?: boolean;
   photoUrl?: string | null;
 };
 
@@ -76,7 +80,9 @@ export function Card({
     height: sz.height,
     borderRadius: sz.radius,
   };
-  const ariaLabel = `${card.playerName}, ${frame.label} tier, ${card.contractPlays}/${card.contractMax} plays`;
+  const ariaLabel = `${card.playerName}, ${frame.label} tier, ${
+    card.isVaulted ? "vaulted" : `${card.contractPlays}/${card.contractMax} plays`
+  }`;
 
   const body = (
     <>
@@ -209,6 +215,40 @@ export function Card({
           </div>
         </div>
       </div>
+      {/* VAULTED overlay — polish spec §7. Muted grey veil + diagonal
+          stamp. Sits above all content, below click target. */}
+      {card.isVaulted && (
+        <>
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0"
+            style={{
+              borderRadius: sz.radius,
+              background: "linear-gradient(rgba(26,24,22,0.55), rgba(26,24,22,0.55))",
+            }}
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+            style={{ borderRadius: sz.radius }}
+          >
+            <span
+              className="font-sans font-bold uppercase text-[var(--text)]"
+              style={{
+                fontSize: isSmall ? 11 : isLarge ? 28 : 16,
+                letterSpacing: "0.3em",
+                transform: "rotate(-12deg)",
+                padding: isSmall ? "2px 6px" : isLarge ? "6px 18px" : "3px 10px",
+                border: `${isLarge ? 3 : 2}px solid var(--text)`,
+                backgroundColor: "rgba(26,24,22,0.65)",
+                opacity: 0.85,
+              }}
+            >
+              Vaulted
+            </span>
+          </div>
+        </>
+      )}
     </>
   );
 

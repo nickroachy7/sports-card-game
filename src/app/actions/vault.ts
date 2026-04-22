@@ -36,6 +36,24 @@ function mapDbError(err: unknown): { code: string; message: string } {
     if (msg.includes("season not in offseason")) {
       return { code: "CONFLICT", message: "Vault ceremony is not open yet." };
     }
+    if (msg.includes("already vaulted")) {
+      return { code: "VAULT_CARD_ALREADY_VAULTED", message: "Card is already in the vault." };
+    }
+    if (msg.includes("vault at cap")) {
+      return {
+        code: "VAULT_CAP_FULL",
+        message: "Vault is full (10). Destroy a vaulted card to free a slot.",
+      };
+    }
+    if (msg.includes("locked in a submitted lineup")) {
+      return {
+        code: "VAULT_CARD_LOCKED_IN_LINEUP",
+        message: "Card is in a locked lineup. Vault it after today's contest scores.",
+      };
+    }
+    if (msg.includes("not vaulted")) {
+      return { code: "VAULT_CARD_NOT_VAULTED", message: "Card is not in the vault." };
+    }
     return { code: "CONFLICT", message: msg };
   }
   return { code: "INTERNAL", message: msg };
@@ -134,4 +152,120 @@ async function commitVaultSelectionImpl(
 
 export const commitVaultSelection = wrapAction(commitVaultSelectionImpl, {
   name: "commitVaultSelection",
+});
+
+// ── Mid-season vault (polish spec §7) ──────────────────────────────────
+
+type VaultCardMidseasonResult = {
+  cardId: string;
+  vaultCount: number;
+  vaultSource: "midseason";
+};
+
+async function vaultCardMidseasonImpl(input: {
+  cardId: string;
+}): Promise<ActionResult<VaultCardMidseasonResult>> {
+  if (!input.cardId || typeof input.cardId !== "string") {
+    return { ok: false, error: { code: "VALIDATION", message: "Invalid card id." } };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const res = await getDb().execute<{
+      vault_card_midseason: { card_id: string; vault_count: number; vault_source: "midseason" };
+    }>(sql`
+      SELECT public.vault_card_midseason(
+        ${user.id}::uuid, ${input.cardId}::uuid
+      ) AS vault_card_midseason
+    `);
+    const raw = res.rows[0]?.vault_card_midseason;
+    if (!raw) return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
+    revalidatePath("/lineup");
+    revalidatePath("/collection");
+    revalidatePath("/vault");
+    await captureServerEvent(user.id, "card_vaulted_midseason", {
+      card_id: raw.card_id,
+      vault_count: raw.vault_count,
+    });
+    return {
+      ok: true,
+      data: {
+        cardId: raw.card_id,
+        vaultCount: raw.vault_count,
+        vaultSource: raw.vault_source,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const vaultCardMidseason = wrapAction(vaultCardMidseasonImpl, {
+  name: "vaultCardMidseason",
+});
+
+type DestroyVaultedCardResult = {
+  cardId: string;
+  tier: string;
+  refundCoins: number;
+  vaultSource: string;
+  balanceAfter: number;
+};
+
+async function destroyVaultedCardImpl(input: {
+  cardId: string;
+}): Promise<ActionResult<DestroyVaultedCardResult>> {
+  if (!input.cardId || typeof input.cardId !== "string") {
+    return { ok: false, error: { code: "VALIDATION", message: "Invalid card id." } };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const res = await getDb().execute<{
+      destroy_vaulted_card: {
+        card_id: string;
+        tier: string;
+        refund_coins: number | string;
+        vault_source: string;
+        balance_after: number | string;
+      };
+    }>(sql`
+      SELECT public.destroy_vaulted_card(
+        ${user.id}::uuid, ${input.cardId}::uuid
+      ) AS destroy_vaulted_card
+    `);
+    const raw = res.rows[0]?.destroy_vaulted_card;
+    if (!raw) return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
+    revalidatePath("/vault");
+    revalidatePath("/", "layout");
+    const data: DestroyVaultedCardResult = {
+      cardId: raw.card_id,
+      tier: raw.tier,
+      refundCoins: Number(raw.refund_coins),
+      vaultSource: raw.vault_source,
+      balanceAfter: Number(raw.balance_after),
+    };
+    await captureServerEvent(user.id, "vaulted_card_destroyed", {
+      card_id: data.cardId,
+      tier: data.tier,
+      refund_coins: data.refundCoins,
+      vault_source: data.vaultSource,
+      balance_after: data.balanceAfter,
+    });
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const destroyVaultedCard = wrapAction(destroyVaultedCardImpl, {
+  name: "destroyVaultedCard",
 });

@@ -1,13 +1,17 @@
 "use client";
 
+import { Archive } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
 
+import { vaultCardMidseason } from "@/app/actions/vault";
 import { Card, type CardViewModel } from "@/components/card/Card";
 import { DissolveCard } from "@/components/card/DissolveCard";
 import { ExtendContractModal } from "@/components/card/ExtendContractModal";
 import { QuickSellModal } from "@/components/card/QuickSellModal";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { nextTier, TIER_FRAME, TIERS } from "@/lib/card/tiers";
 import { type CardTier, TIER_LABEL } from "@/lib/contracts/cards";
@@ -29,6 +33,21 @@ export type CardDetailData = {
 export function CardDetailView({ data }: { data: CardDetailData }) {
   const router = useRouter();
   const [dissolving, setDissolving] = useState(false);
+  const [vaulting, startVault] = useTransition();
+
+  function handleVault() {
+    startVault(async () => {
+      const res = await vaultCardMidseason({ cardId: data.card.id });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success("Added to vault.");
+      router.push("/vault");
+      router.refresh();
+    });
+  }
+
   const { card } = data;
   const frame = TIER_FRAME[card.tier];
   const next = nextTier(card.tier);
@@ -189,6 +208,28 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
                   Remove the applied token before quick-selling or extending.
                 </p>
               )}
+              <div className="flex items-stretch gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={handleVault}
+                  disabled={vaulting || card.isExpired || card.hasAppliedToken}
+                  title={
+                    card.isExpired
+                      ? "Expired cards can't be vaulted"
+                      : card.hasAppliedToken
+                        ? "Remove the applied token first"
+                        : "Freeze this card into the season vault"
+                  }
+                >
+                  <Archive className="mr-1 size-4" aria-hidden="true" />
+                  {vaulting ? "Vaulting…" : "Add to vault"}
+                </Button>
+              </div>
+              <p className="text-xs text-[var(--text-3)]">
+                Vaulting freezes a card for the season — it can't play again. Counts toward the
+                10-card vault cap. Destroying a vaulted card returns ~15% of its quick-sell value.
+              </p>
             </section>
           </TabsContent>
 

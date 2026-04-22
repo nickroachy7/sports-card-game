@@ -131,6 +131,7 @@ export default function PalettePage() {
               <Card size={size} card={mockCard("gold", { hasAppliedToken: true })} />
               <Card size={size} card={mockCard("silver", { playerStatus: "il", longName: true })} />
               <Card size={size} card={mockCard("bronze", { isExpired: true })} />
+              <Card size={size} card={mockCard("diamond", { isVaulted: true })} />
             </div>
           </div>
         ))}

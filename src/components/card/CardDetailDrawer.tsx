@@ -1,10 +1,11 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Archive, X } from "lucide-react";
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { getCardDetail } from "@/app/actions/cards";
+import { vaultCardMidseason } from "@/app/actions/vault";
 import { type CardDetailData, CardDetailView } from "@/components/card/CardDetailView";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -15,6 +16,9 @@ export type LineupContext = {
   /** Called when the user picks Remove from slot. Drawer closes after the
    *  action settles. */
   onRemoveFromSlot: () => Promise<void> | void;
+  /** Called after a successful mid-season vault so the caller can
+   *  refresh. Drawer closes before this fires. */
+  onVaulted?: () => void;
 };
 
 type Props = {
@@ -37,6 +41,7 @@ export function CardDetailDrawer({ cardId, open, onOpenChange, lineupContext }: 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [removing, startRemove] = useTransition();
+  const [vaulting, startVault] = useTransition();
 
   // Fetch detail when opening with a new cardId. Cleared on close.
   useEffect(() => {
@@ -73,6 +78,20 @@ export function CardDetailDrawer({ cardId, open, onOpenChange, lineupContext }: 
       } catch {
         toast.error("Couldn't remove card from slot.");
       }
+    });
+  }
+
+  function handleAddToVault() {
+    if (!cardId) return;
+    startVault(async () => {
+      const res = await vaultCardMidseason({ cardId });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success("Added to vault.");
+      onOpenChange(false);
+      lineupContext?.onVaulted?.();
     });
   }
 
@@ -122,8 +141,21 @@ export function CardDetailDrawer({ cardId, open, onOpenChange, lineupContext }: 
                   {removing ? "Removing…" : "Remove from slot"}
                 </Button>
               )}
-              <Button variant="outline" className="flex-1" disabled title="Lands in P7.4">
-                Add to vault
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={handleAddToVault}
+                disabled={vaulting || data.card.isExpired || data.card.hasAppliedToken}
+                title={
+                  data.card.isExpired
+                    ? "Expired cards can't be vaulted"
+                    : data.card.hasAppliedToken
+                      ? "Remove the applied token first"
+                      : undefined
+                }
+              >
+                <Archive className="mr-1 size-3.5" aria-hidden="true" />
+                {vaulting ? "Vaulting…" : "Add to vault"}
               </Button>
             </div>
           </footer>

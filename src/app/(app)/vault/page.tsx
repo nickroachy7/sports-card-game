@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import type { CardTier } from "@/lib/contracts/cards";
+import type { CardViewModel } from "@/components/card/Card";
+import { PreVaultedList } from "@/components/vault/PreVaultedList";
+import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { createServerClient } from "@/lib/db/supabase";
 
 export const dynamic = "force-dynamic";
@@ -99,34 +101,88 @@ export default async function VaultPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/signin");
 
-  const [{ data: vaultRows }, { data: seasonStates }, { data: finalEntries }, { data: offseason }] =
-    await Promise.all([
-      supabase
-        .from("vault_entry")
-        .select(
-          `id, season_id, final_tier, final_fp, tokens_applied_count, tokens_triggered_count, created_at,
+  const [
+    { data: vaultRows },
+    { data: seasonStates },
+    { data: finalEntries },
+    { data: offseason },
+    { data: preVaulted },
+    cfgRes,
+  ] = await Promise.all([
+    supabase
+      .from("vault_entry")
+      .select(
+        `id, season_id, final_tier, final_fp, tokens_applied_count, tokens_triggered_count, created_at,
          season:season_id (year),
          player:player_id (full_name, positions)`,
-        )
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("user_season_state")
-        .select("season_id, season_fp, season_contests_won")
-        .eq("user_id", user.id),
-      supabase
-        .from("contest_entry")
-        .select("season_id")
-        .eq("user_id", user.id)
-        .eq("status", "final"),
-      supabase
-        .from("season")
-        .select("id, year, status")
-        .eq("status", "offseason")
-        .order("year", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
+      )
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("user_season_state")
+      .select("season_id, season_fp, season_contests_won")
+      .eq("user_id", user.id),
+    supabase.from("contest_entry").select("season_id").eq("user_id", user.id).eq("status", "final"),
+    supabase
+      .from("season")
+      .select("id, year, status")
+      .eq("status", "offseason")
+      .order("year", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("card")
+      .select(
+        `id, current_tier, career_fp_total, contract_plays_remaining, is_expired, applied_token_id,
+         vault_source,
+         player:player_id (full_name, positions, status, team:team_id (abbreviation))`,
+      )
+      .eq("user_id", user.id)
+      .eq("is_vaulted", true)
+      .eq("vault_source", "midseason")
+      .order("vaulted_at", { ascending: false }),
+    supabase.rpc("get_active_economy_config").single(),
+  ]);
+
+  type EconCfg = { quick_sell_values: Record<CardTier, number> };
+  const cfg = (cfgRes.data ?? null) as EconCfg | null;
+  const qsValues = (cfg?.quick_sell_values ?? {}) as Record<CardTier, number>;
+
+  type PreVaultedRow = {
+    id: string;
+    current_tier: CardTier;
+    career_fp_total: string | number;
+    contract_plays_remaining: number;
+    is_expired: boolean;
+    applied_token_id: string | null;
+    player: {
+      full_name: string;
+      positions: string[] | null;
+      status: PlayerStatus;
+      team: { abbreviation: string | null } | { abbreviation: string | null }[] | null;
+    } | null;
+  };
+  const preVaultedEntries = ((preVaulted ?? []) as unknown as PreVaultedRow[]).map((r) => {
+    const p = Array.isArray(r.player) ? r.player[0] : r.player;
+    const t = p && Array.isArray(p.team) ? p.team[0] : p?.team;
+    const tier = r.current_tier;
+    const card: CardViewModel = {
+      id: r.id,
+      playerName: p?.full_name ?? "Unknown",
+      position: p?.positions?.[0] ?? null,
+      teamAbbreviation: t?.abbreviation ?? null,
+      tier,
+      careerFp: Number(r.career_fp_total ?? 0),
+      contractPlays: r.contract_plays_remaining,
+      contractMax: 15,
+      playerStatus: (p?.status ?? "active") as PlayerStatus,
+      isExpired: r.is_expired,
+      hasAppliedToken: r.applied_token_id !== null,
+      isVaulted: true,
+      photoUrl: null,
+    };
+    return { card, refundCoins: Math.floor((qsValues[tier] ?? 0) * 0.15) };
+  });
 
   const rows = (vaultRows ?? []) as VaultRow[];
   const states = (seasonStates ?? []) as SeasonState[];
@@ -204,12 +260,14 @@ export default async function VaultPage() {
         </p>
       </header>
 
-      {sortedGroups.length === 0 ? (
+      <PreVaultedList entries={preVaultedEntries} />
+
+      {sortedGroups.length === 0 && preVaultedEntries.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-12 text-center text-sm text-[var(--text-3)]">
-          No vaulted cards yet. Preserve up to 10 cards each season in the end-of-season vault
-          ceremony.
+          No vaulted cards yet. Preserve up to 10 cards each season — vault any time mid-season from
+          a card's detail drawer, or wait for the end-of-season ceremony.
         </div>
-      ) : (
+      ) : sortedGroups.length === 0 ? null : (
         <div className="flex flex-col gap-8">
           {sortedGroups.map((group) => (
             <article

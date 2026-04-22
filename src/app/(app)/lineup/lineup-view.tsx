@@ -304,6 +304,7 @@ export function LineupView(props: LineupViewProps) {
         lineupContext={{
           slotted: detailSlotPosition !== null,
           onRemoveFromSlot: handleRemoveFromSlot,
+          onVaulted: () => router.refresh(),
         }}
       />
     </DndProvider>
