@@ -37,7 +37,6 @@ export const contestStatus = pgEnum("contest_status", [
 export const contestEntryStatus = pgEnum("contest_entry_status", [
   "building",
   "submitted",
-  "locked",
   "live",
   "final",
 ]);

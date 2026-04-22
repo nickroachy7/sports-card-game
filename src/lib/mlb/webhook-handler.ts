@@ -100,7 +100,13 @@ async function handleGameStarted(
   const db = getDb();
   const res = await db.execute<{ id: string }>(sql`
     UPDATE public.game
-    SET status = 'live'::game_status, updated_at = now()
+    SET status = 'live'::game_status,
+        -- Polish spec §54 (Phase 20): seed inning to T1 if not already
+        -- populated. A prior batter event might have beaten the
+        -- game.started delivery; don't stomp its value.
+        current_inning = COALESCE(current_inning, 1),
+        current_inning_half = COALESCE(current_inning_half, 'top'),
+        updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
     RETURNING id
   `);
@@ -140,7 +146,13 @@ async function handleGameEnded(
   const db = getDb();
   const res = await db.execute<{ id: string }>(sql`
     UPDATE public.game
-    SET status = 'final'::game_status, ended_at = now(), updated_at = now()
+    SET status = 'final'::game_status,
+        ended_at = now(),
+        -- Polish spec §54 — clear live-inning state; FINAL footer
+        -- renders just the score, no trailing "T9".
+        current_inning = NULL,
+        current_inning_half = NULL,
+        updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
     RETURNING id
   `);
@@ -207,6 +219,8 @@ async function handleGameEvent(
     };
   }
   const providerEventId = `bdl:${deliveryId}`;
+  const inning = payload.play?.inning ?? null;
+  const inningHalf = payload.play?.inning_half ?? null;
   await db.execute(sql`
     INSERT INTO public.game_event (
       game_id, provider_event_id, event_type, source,
@@ -218,8 +232,8 @@ async function handleGameEvent(
       ${providerEventId},
       ${eventType},
       'webhook',
-      ${payload.play?.inning ?? null},
-      ${payload.play?.inning_half ?? null},
+      ${inning},
+      ${inningHalf},
       ${payload.batter?.id ? sql`(SELECT id FROM public.player WHERE bdl_player_id = ${payload.batter.id})` : sql`NULL`},
       ${payload.pitcher?.id ? sql`(SELECT id FROM public.player WHERE bdl_player_id = ${payload.pitcher.id})` : sql`NULL`},
       ${payload.play?.type ?? null},
@@ -231,5 +245,23 @@ async function handleGameEvent(
     )
     ON CONFLICT (provider_event_id) DO NOTHING
   `);
+
+  // Polish spec §54 — live inning on public.game. Idempotent via
+  // IS DISTINCT FROM: Postgres only touches the row when the inning
+  // or half actually changes, so Realtime broadcasts are the
+  // signal-only set (~half-inning transitions, ~18/game).
+  if (inning !== null || inningHalf !== null) {
+    await db.execute(sql`
+      UPDATE public.game
+      SET current_inning = ${inning}::int,
+          current_inning_half = ${inningHalf},
+          updated_at = now()
+      WHERE id = ${gameId}::uuid
+        AND status = 'live'
+        AND (current_inning IS DISTINCT FROM ${inning}::int
+             OR current_inning_half IS DISTINCT FROM ${inningHalf})
+    `);
+  }
+
   return { dispatched: true, eventType, providerEventId };
 }

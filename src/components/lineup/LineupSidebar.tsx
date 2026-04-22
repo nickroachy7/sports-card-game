@@ -22,7 +22,7 @@ type SlotFill = {
   gameInfo?: SlotGameInfo | null;
 };
 
-type EntryStatus = "building" | "submitted" | "locked" | "live" | "final";
+type EntryStatus = "building" | "submitted" | "live" | "final";
 
 type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
@@ -239,9 +239,6 @@ function StatusChip({
   switch (entryStatus) {
     case "submitted":
       label = "Submitted · Waiting on first pitch";
-      break;
-    case "locked":
-      label = "Locked · Games starting";
       break;
     case "live":
       label = liveLabel(latestInning, gamesActive, gamesReady);

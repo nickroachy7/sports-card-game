@@ -57,7 +57,7 @@ export default async function LineupPage() {
 
   type EntryRow = {
     id: string;
-    status: "building" | "submitted" | "locked" | "live" | "final";
+    status: "building" | "submitted" | "live" | "final";
     auto_sub_mode: AutoSubMode;
     live_score: string | number;
     final_score: string | number;
@@ -191,14 +191,20 @@ export default async function LineupPage() {
       status: SlotGameInfo["status"];
       home_runs: number | null;
       away_runs: number | null;
+      current_inning: number | null;
+      current_inning_half: "top" | "bottom" | null;
     };
+    // Polish spec §55 (Phase 20). DISTINCT ON per matchup collapses
+    // doubleheader + BDL-duplicate rows down to one row; priority
+    // prefers live > scheduled > final, then earliest start time.
     const gamesRes = await db.execute<GameRow>(sql`
-      SELECT
+      SELECT DISTINCT ON (g.home_team_id, g.away_team_id)
         g.id,
         g.home_team_id, g.away_team_id,
         ht.abbreviation AS home_abbr,
         at.abbreviation AS away_abbr,
-        g.scheduled_start, g.status, g.home_runs, g.away_runs
+        g.scheduled_start, g.status, g.home_runs, g.away_runs,
+        g.current_inning, g.current_inning_half
       FROM public.game g
       LEFT JOIN public.team ht ON ht.id = g.home_team_id
       LEFT JOIN public.team at ON at.id = g.away_team_id
@@ -206,6 +212,16 @@ export default async function LineupPage() {
         (contest.included_game_ids ?? []).map((id) => sql`${id}::uuid`),
         sql`, `,
       )}]::uuid[]`})
+      ORDER BY
+        g.home_team_id, g.away_team_id,
+        CASE g.status
+          WHEN 'live' THEN 0
+          WHEN 'scheduled' THEN 1
+          WHEN 'final' THEN 2
+          ELSE 3
+        END,
+        g.scheduled_start NULLS LAST,
+        g.created_at
     `);
     // Build team_id → game info. A team can only appear in one game
     // per contest slate (one game per day per team).
@@ -228,6 +244,8 @@ export default async function LineupPage() {
         status: game.status,
         homeRuns: game.home_runs,
         awayRuns: game.away_runs,
+        currentInning: game.current_inning,
+        currentInningHalf: game.current_inning_half,
       };
     }
   }

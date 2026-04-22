@@ -86,9 +86,19 @@ function renderFooter(info: SlotGameInfo): string | null {
     return `${vs} ${info.opponentAbbr} · ${time}`;
   }
   if (info.status === "live") {
-    return info.homeRuns !== null && info.awayRuns !== null
-      ? `LIVE · ${info.homeRuns}-${info.awayRuns}`
-      : "LIVE";
+    // Polish spec §54 (Phase 20) — show "T5" / "B8" when populated
+    // by the webhook handler; fall back to just the score otherwise.
+    const halfPrefix =
+      info.currentInningHalf === "top" ? "T" : info.currentInningHalf === "bottom" ? "B" : null;
+    const inningPart =
+      halfPrefix !== null && info.currentInning !== null
+        ? ` · ${halfPrefix}${info.currentInning}`
+        : "";
+    const scorePart =
+      info.homeRuns !== null && info.awayRuns !== null
+        ? ` · ${info.homeRuns}-${info.awayRuns}`
+        : "";
+    return `LIVE${inningPart}${scorePart}`;
   }
   if (info.status === "final") {
     const ourRuns = info.isHome ? info.homeRuns : info.awayRuns;

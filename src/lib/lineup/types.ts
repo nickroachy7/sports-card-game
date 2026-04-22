@@ -50,6 +50,11 @@ export type SlotGameInfo = {
   status: "scheduled" | "live" | "final" | "postponed" | "suspended" | "canceled";
   homeRuns: number | null;
   awayRuns: number | null;
+  /** Polish spec §54 (Phase 20). 1-15+ during live play, NULL when
+   *  scheduled or final. Webhook handler populates via play.inning. */
+  currentInning: number | null;
+  /** 'top' | 'bottom' during live play, NULL otherwise. */
+  currentInningHalf: "top" | "bottom" | null;
 };
 
 export type LineupTokenVM = {
@@ -77,7 +82,7 @@ export type LineupViewProps = {
   contestName: string;
   lineupLocksAt: string; // ISO
   entryId: string;
-  entryStatus: "building" | "submitted" | "locked" | "live" | "final";
+  entryStatus: "building" | "submitted" | "live" | "final";
   autoSubMode: AutoSubMode;
   /** Sum of live_fp across slots (live during games). Included so the
    *  unified view can render the Live Score big number in submitted/
