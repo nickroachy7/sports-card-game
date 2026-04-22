@@ -31,14 +31,23 @@ export type DispatchResult = {
   providerEventId: string | null;
   /** Set to the reason the handler didn't write a game_event. */
   note?: string;
+  /**
+   * True when `dispatched=false` because no handler is registered for
+   * this event_type. Distinct from `dispatched=false` due to a
+   * handler-side validation error (missing game.id, etc.). The
+   * processor treats unhandled events as successful no-ops (no retry,
+   * no webhook_failed row) because no amount of retrying will help.
+   */
+  unhandled?: boolean;
 };
 
 /**
  * Handler dispatch table.
- * M4 launches with stubs for game lifecycle + batter events; deeper
- * handlers (token-triggering) land alongside the live contest work in
- * Phase 3. Unknown event types still return `{ dispatched: false }` so
- * the caller parks them in webhook_failed for manual review.
+ * Event types not in this registry are no-ops — BDL subscribes us to
+ * more types (foulout, groundout, inning_half_ended, etc.) than we
+ * model for scoring. Those deliveries return `{ unhandled: true }` and
+ * the processor marks them as successfully processed rather than
+ * failed.
  */
 const HANDLERS: Record<
   string,
@@ -65,6 +74,7 @@ export async function dispatchWebhook(
   if (!handler) {
     return {
       dispatched: false,
+      unhandled: true,
       eventType,
       providerEventId: null,
       note: "no handler for event_type",
@@ -78,20 +88,38 @@ async function handleGameStarted(
   _deliveryId: string,
 ): Promise<DispatchResult> {
   const bdlGameId = payload.game?.id;
-  if (typeof bdlGameId === "number") {
-    const db = getDb();
-    await db.execute(sql`
-      UPDATE public.game
-      SET status = 'live'::game_status, updated_at = now()
-      WHERE bdl_game_id = ${bdlGameId}
-    `);
-    // Flip any submitted contest_entries touching this game to 'live'.
-    await db.execute(sql`
-      SELECT public.mark_contest_entries_on_game_start(
-        (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
-      )
-    `);
+  if (typeof bdlGameId !== "number") {
+    return {
+      dispatched: false,
+      unhandled: true,
+      eventType: "mlb.game.started",
+      providerEventId: null,
+      note: "missing game.id",
+    };
   }
+  const db = getDb();
+  const res = await db.execute<{ id: string }>(sql`
+    UPDATE public.game
+    SET status = 'live'::game_status, updated_at = now()
+    WHERE bdl_game_id = ${bdlGameId}
+    RETURNING id
+  `);
+  if (res.rows.length === 0) {
+    // Game not in our DB — BDL fires events for every MLB game. We
+    // only care about games in active contests. Skip quietly.
+    return {
+      dispatched: false,
+      unhandled: true,
+      eventType: "mlb.game.started",
+      providerEventId: null,
+      note: `game ${bdlGameId} not in our db`,
+    };
+  }
+  await db.execute(sql`
+    SELECT public.mark_contest_entries_on_game_start(
+      (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
+    )
+  `);
   return { dispatched: true, eventType: "mlb.game.started", providerEventId: null };
 }
 
@@ -100,28 +128,44 @@ async function handleGameEnded(
   _deliveryId: string,
 ): Promise<DispatchResult> {
   const bdlGameId = payload.game?.id;
-  if (typeof bdlGameId === "number") {
-    const db = getDb();
-    await db.execute(sql`
-      UPDATE public.game
-      SET status = 'final'::game_status, ended_at = now(), updated_at = now()
-      WHERE bdl_game_id = ${bdlGameId}
-    `);
-    // Pull authoritative box score and overwrite final_fp on every
-    // rostered slot. Best-effort — failures are logged but don't fail
-    // the webhook so the vendor doesn't retry.
-    try {
-      await reconcileGame(bdlGameId);
-    } catch (err) {
-      console.error("[webhook] reconcileGame failed", { bdlGameId }, err);
-    }
-    // Flip any live contest_entries to 'final' if ALL their games are done.
-    await db.execute(sql`
-      SELECT public.mark_contest_entries_on_game_end(
-        (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
-      )
-    `);
+  if (typeof bdlGameId !== "number") {
+    return {
+      dispatched: false,
+      unhandled: true,
+      eventType: "mlb.game.ended",
+      providerEventId: null,
+      note: "missing game.id",
+    };
   }
+  const db = getDb();
+  const res = await db.execute<{ id: string }>(sql`
+    UPDATE public.game
+    SET status = 'final'::game_status, ended_at = now(), updated_at = now()
+    WHERE bdl_game_id = ${bdlGameId}
+    RETURNING id
+  `);
+  if (res.rows.length === 0) {
+    return {
+      dispatched: false,
+      unhandled: true,
+      eventType: "mlb.game.ended",
+      providerEventId: null,
+      note: `game ${bdlGameId} not in our db`,
+    };
+  }
+  // Pull authoritative box score and overwrite final_fp on every
+  // rostered slot. Best-effort — failures are logged but don't fail
+  // the webhook so the vendor doesn't retry.
+  try {
+    await reconcileGame(bdlGameId);
+  } catch (err) {
+    console.error("[webhook] reconcileGame failed", { bdlGameId }, err);
+  }
+  await db.execute(sql`
+    SELECT public.mark_contest_entries_on_game_end(
+      (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
+    )
+  `);
   return { dispatched: true, eventType: "mlb.game.ended", providerEventId: null };
 }
 
@@ -134,17 +178,35 @@ async function handleGameEvent(
   payload: WebhookPayload,
   deliveryId: string,
 ): Promise<DispatchResult> {
+  const eventType = payload.event_type ?? "unknown";
   const bdlGameId = payload.game?.id;
   if (typeof bdlGameId !== "number") {
     return {
       dispatched: false,
-      eventType: payload.event_type ?? "unknown",
+      unhandled: true,
+      eventType,
       providerEventId: null,
       note: "missing game.id",
     };
   }
-  const providerEventId = `bdl:${deliveryId}`;
   const db = getDb();
+  // Resolve the game row first so we can skip quietly when BDL fires
+  // events for games we don't have in our DB (BDL sends every MLB
+  // game; we only model games in active contests).
+  const gameRow = await db.execute<{ id: string }>(sql`
+    SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId} LIMIT 1
+  `);
+  const gameId = gameRow.rows[0]?.id;
+  if (!gameId) {
+    return {
+      dispatched: false,
+      unhandled: true,
+      eventType,
+      providerEventId: null,
+      note: `game ${bdlGameId} not in our db`,
+    };
+  }
+  const providerEventId = `bdl:${deliveryId}`;
   await db.execute(sql`
     INSERT INTO public.game_event (
       game_id, provider_event_id, event_type, source,
@@ -152,9 +214,9 @@ async function handleGameEvent(
       play_type, play_text, score_value,
       home_score_after, away_score_after, raw_payload
     ) VALUES (
-      (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId}),
+      ${gameId}::uuid,
       ${providerEventId},
-      ${payload.event_type ?? "unknown"},
+      ${eventType},
       'webhook',
       ${payload.play?.inning ?? null},
       ${payload.play?.inning_half ?? null},
@@ -169,5 +231,5 @@ async function handleGameEvent(
     )
     ON CONFLICT (provider_event_id) DO NOTHING
   `);
-  return { dispatched: true, eventType: payload.event_type ?? "unknown", providerEventId };
+  return { dispatched: true, eventType, providerEventId };
 }

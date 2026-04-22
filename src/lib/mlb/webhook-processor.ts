@@ -42,6 +42,18 @@ export async function processWebhook(input: ProcessInput): Promise<ProcessResult
     return { outcome: "already_processed" };
   }
 
+  // Parse first so webhook_delivery.event_type reflects the body's
+  // event_type, not just the (often-absent) x-bdl-webhook-event-type
+  // header. BDL delivers the event_type in the body.
+  let parsed: WebhookPayload | null = null;
+  let parseError: string | null = null;
+  try {
+    parsed = JSON.parse(input.rawBody) as WebhookPayload;
+  } catch (err) {
+    parseError = err instanceof Error ? err.message : "invalid JSON";
+  }
+  const eventType = parsed?.event_type ?? input.eventType ?? "unknown";
+
   if (!prior) {
     await db.execute(sql`
       INSERT INTO public.webhook_delivery (
@@ -49,7 +61,7 @@ export async function processWebhook(input: ProcessInput): Promise<ProcessResult
         provider_event_id, signature
       ) VALUES (
         ${input.deliveryId},
-        ${input.eventType ?? "unknown"},
+        ${eventType},
         'received'::webhook_status,
         ${input.rawBody}::jsonb,
         ${input.providerEventId ?? null},
@@ -59,20 +71,27 @@ export async function processWebhook(input: ProcessInput): Promise<ProcessResult
     `);
   }
 
-  let parsed: WebhookPayload;
-  try {
-    parsed = JSON.parse(input.rawBody) as WebhookPayload;
-  } catch (err) {
-    await recordFailure(input, err instanceof Error ? err.message : "invalid JSON");
-    return { outcome: "failed", eventType: input.eventType ?? "unknown", error: "invalid JSON" };
+  if (!parsed) {
+    await recordFailure(input, eventType, parseError ?? "invalid JSON");
+    return { outcome: "failed", eventType, error: parseError ?? "invalid JSON" };
   }
-
-  const eventType = parsed.event_type ?? input.eventType ?? "unknown";
 
   try {
     const result = await dispatchWebhook(parsed, input.deliveryId);
     if (!result.dispatched) {
-      await recordFailure(input, result.note ?? "not dispatched");
+      if (result.unhandled) {
+        // Event type has no registered handler — intentional no-op
+        // (BDL subscribes us to more types than we model). Mark the
+        // delivery as processed; don't park in webhook_failed.
+        await db.execute(sql`
+          UPDATE public.webhook_delivery
+          SET status = 'processed'::webhook_status,
+              processed_at = now()
+          WHERE delivery_id = ${input.deliveryId}
+        `);
+        return { outcome: "processed", eventType };
+      }
+      await recordFailure(input, eventType, result.note ?? "not dispatched");
       return {
         outcome: "failed",
         eventType,
@@ -88,19 +107,19 @@ export async function processWebhook(input: ProcessInput): Promise<ProcessResult
     return { outcome: "processed", eventType };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await recordFailure(input, msg);
+    await recordFailure(input, eventType, msg);
     return { outcome: "failed", eventType, error: msg };
   }
 }
 
-async function recordFailure(input: ProcessInput, error: string): Promise<void> {
+async function recordFailure(input: ProcessInput, eventType: string, error: string): Promise<void> {
   const db = getDb();
   await db.execute(sql`
     INSERT INTO public.webhook_failed (
       delivery_id, event_type, error_message, raw_payload, retry_count
     ) VALUES (
       ${input.deliveryId},
-      ${input.eventType ?? "unknown"},
+      ${eventType},
       ${error},
       ${input.rawBody}::jsonb,
       0
