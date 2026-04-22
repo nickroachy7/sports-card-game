@@ -1234,13 +1234,218 @@ Phase 8:
 - **Schedule sync for historical seasons.**
 - **Probable SP enrichment** (depends on BDL adding the field or
   a second data source).
-- **Ceremony fn tolerance for pre-vaulted cards** (P7.4
-  carry-over).
-- **Live contest view polish** (score ticks, event-feed
-  cinematics).
 - **Onboarding flow pass.**
 - **Empty + error state sweep.**
 - **Accessibility audit** (WCAG 2.1 AA).
 - **Tier foil motion.**
 - **Dupe panel multi-instance picker.**
 - **Mobile / sound / haptics / artwork.**
+
+---
+
+# Phase 10 batch — locked 2026-04-22
+
+Closes two open items after the first real-game scoring night:
+the user-flagged post-submit page flip (spec'd to keep users on
+the main lineup page with live score overlaid), and the ceremony
+fn tolerance carried from P7.4.7 that blocks the first real
+offseason commit.
+
+---
+
+## 16. Unified lineup view
+
+### Goal
+
+Kill the page-flip you hit last night. Lineup page stays the
+Lineup page across every entry state — building, submitted, live,
+final. Only the sidebar + bottom-strip chrome transforms; the
+diamond always shows the same 10 slotted cards.
+
+Today the page delegates to two entirely different views (
+`<LineupShell>` for building, `<LiveListView>` for the rest).
+Users submit a lineup and the entire surface they were just
+looking at disappears. Bad — the submitted lineup is what you
+*want* to look at while games play.
+
+### Behavior
+
+**Page shell is identical in all states.** `<LineupShell>` from
+P7.1 renders:
+- Header row: contest name + lock countdown.
+- Main row: `<DiamondGrid>` (centered) + right sidebar (`w-72`).
+- Bottom strip: bench row + tokens tray row (both stacked).
+
+**State-driven chrome inside the shell:**
+
+| Surface | Building | Submitted / Live / Final |
+|---|---|---|
+| Diamond | Draggable cards, click-to-detail. | Read-only cards, click-to-detail still works. Drag disabled at source (no ghost). |
+| Sidebar — Readiness | `N / 10 slots filled` + warnings | *(hidden)* |
+| Sidebar — Projected FP | Heuristic projection | *(hidden)* |
+| Sidebar — Auto-sub | Smart / Manual radios | *(hidden)* |
+| Sidebar — **Live Score** | *(hidden)* | Big number (sum of slot `final_fp` or `live_fp`). Updates via Realtime. |
+| Sidebar — **Box Score** | *(hidden)* | Per-slot row: `C   Jung Hoo Lee   8.0`. Pending slots show `—`. |
+| Sidebar — **Event Feed** | *(hidden)* | Scrollable list of events where `batter_player_id` or `pitcher_player_id` matches a card in this lineup. Newest first. Empty state: "Waiting for first pitch…" |
+| Sidebar — Submit / Status | `Submit lineup` button | Status chip (see below) |
+| Bench tray | Interactive, drag source | Visible, disabled (no drag source, no click-to-open-detail on bench cards either). |
+| Tokens tray | Interactive, drag source | Visible, disabled (no drag source). |
+
+### Event feed format
+
+One row per event:
+
+```
+Altuve hit a double · +5.0 · 8:47 PM
+Baty struck out · 0.0 · 9:03 PM
+Lee singled; RBI · +5.0 · 9:11 PM
+```
+
+Fields:
+- **Player name** (short form — last name first).
+- **Action** — lowercased play text, normalized from BDL's
+  `play.text` or `play.type` fallback.
+- **FP delta** — `+N.N` for positive, `0.0` for non-scoring. Bold.
+- **Time** — local time HH:MM.
+
+Scope: only events where the batter or pitcher is in the user's
+lineup. All other events skipped. If an event lands on both
+(user has both the batter AND pitcher), show it once.
+
+### Status chip
+
+Replaces the Submit CTA. Text varies by state:
+
+- **Submitted, no games live yet** — `Submitted · Waits for
+  first pitch` (if >15 min to first pitch) or `Submitted ·
+  Locks in 42m` (countdown during the pre-game window).
+- **Live** — `Live · Top 5th, 3 games active`. Inning pulled
+  from the most-recently-updated lineup-player game; games-
+  active count from the contest's game rows with
+  `status='live'`.
+- **Final** — `Final · 97.5 FP`. Rank display (`Placed 3rd of
+  8`) deferred — §17 adds it if cheap, otherwise P11.
+
+Chip is a visual block (not a button); no click interaction.
+
+### Live update mechanism
+
+Supabase Realtime subscription on `game_event` insert, filtered
+client-side to `batter_player_id | pitcher_player_id IN (lineup
+player ids)`. Re-fetches entry + slot state on any matching
+event. Event feed state is client-derived — don't
+`revalidatePath`; use optimistic updates keyed on
+`provider_event_id` to prevent double-render.
+
+Fallback: polling every 30s if Realtime connection drops. A
+connection indicator (small dot in the sidebar header) shows
+live / reconnecting.
+
+### Acceptance
+
+- [ ] Submitting a lineup does not navigate. Page stays at
+  `/lineup`, diamond keeps showing the 10 cards.
+- [ ] Sidebar transitions from building chrome to box score +
+  event feed within one render after the entry status change.
+- [ ] Bench + tokens rows are visible, non-interactive.
+- [ ] Live Score sum reflects current slot FPs (live_fp during
+  live games, final_fp after).
+- [ ] Event feed renders at most the user's lineup's events.
+- [ ] Realtime subscription connects on page load + tears down
+  on unmount.
+- [ ] Status chip text reflects accurate live/final state.
+- [ ] Reduced-motion: FP updates are instant (no tick animations
+  unless ~60ms counter).
+
+### Dependencies
+
+- `contest_lineup_slot.live_fp` + `final_fp` columns — already
+  written by the scoring reducer + reconcile.
+- `contest_entry.live_score` + `final_score` — aggregate fields
+  already on the entry.
+- Supabase Realtime — in stack; already used for webhook
+  pipeline debugging.
+- `public.game` rows populated — P9 schedule sync ensures this.
+
+### Trade-offs
+
+- **One page, many states** trades code cleanliness (one route
+  handler vs. two) for more complex state management. Worth it
+  given the user-visible win.
+- **Event feed client-filtered** means a user on many tabs
+  sees the full firehose of events on each connection. BDL's
+  volume is tolerable (~hundreds/hr during active windows);
+  revisit if Realtime quota becomes a concern.
+- **Rank display deferred.** Requires the existing leaderboard
+  path to expose per-entry rank at query time. Can add post-
+  shipping if cheap; not blocking.
+
+---
+
+## 17. Ceremony fn tolerance for pre-vaulted cards
+
+### Goal
+
+`commit_vault_selection` today rejects cards that are already
+`is_vaulted = true`. Since P7.4 shipped mid-season vault
+(cards enter vault with `vault_source='midseason'`), any user
+with pre-vaulted cards at season end would hit this guard and
+be blocked from their first real offseason ceremony.
+
+Fix: relax the guard to accept pre-vaulted cards as valid
+selections. Skip the `card` update for already-vaulted rows
+(they already have `is_vaulted=true`, `vaulted_at=...`), but
+still insert the `vault_entry` snapshot row for the ceremony
+audit.
+
+### Behavior
+
+- `commit_vault_selection(user_id, season_id, card_ids[])`:
+  - Selected cards can be `is_vaulted=false` OR `is_vaulted=true
+    AND vault_source='midseason'`.
+  - For `is_vaulted=false`: existing path — insert vault_entry
+    + mark card as vaulted (`is_vaulted=true`,
+    `vault_source='ceremony'`).
+  - For `is_vaulted=true AND vault_source='midseason'`: insert
+    vault_entry snapshot only; leave `card.is_vaulted=true` +
+    `vault_source='midseason'` alone. The card is already in
+    the vault; we're just memorializing it in `vault_entry`.
+- `is_vaulted=true AND vault_source='ceremony'` still raises —
+  that's a double-commit attempt.
+
+### Acceptance
+
+- [ ] User with 5 pre-vaulted (midseason) + 3 fresh selections
+  can commit the ceremony: all 8 end up in `vault_entry`, cards
+  all `is_vaulted=true`, sources preserved per original path.
+- [ ] User selecting a ceremony-committed card (re-run attempt)
+  still raises `vault_commit_already_processed`.
+- [ ] Existing 10-card cap still enforced across selection set.
+- [ ] DO-block smoke passes on prod.
+
+### Dependencies
+
+- Migration (0024) that patches `commit_vault_selection`. No
+  schema change, just fn body update.
+
+### Trade-offs
+
+- None — strict semantics win from P7.4 are preserved, the
+  guard is just made aware of the new mid-season source.
+
+---
+
+## 18. Not in scope for v1.5
+
+Carries forward §15 minus what we're shipping this phase:
+
+- Onboarding flow pass.
+- Empty + error state sweep.
+- Accessibility audit (WCAG 2.1 AA).
+- Tier foil motion (silver shine, gold bloom, diamond shimmer).
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Dev-sim fixture with real-lineup seed (considered for Phase
+  10; scope-cut to keep focus).
+- Webhook retry observability dashboard.
+- reconcileGame integration test.
