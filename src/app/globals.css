@@ -59,3 +59,23 @@
     border-color: var(--border);
   }
 }
+
+/*
+ * Global reduced-motion floor — polish spec §1 / §5 / §7.
+ *
+ * Framer-motion surfaces (CardDragLayer, TokenDragLayer, DissolveCard)
+ * already branch on useReducedMotion. This rule catches everything
+ * else: shadcn `animate-in/out` Tailwind helpers (Sheet drawer,
+ * AlertDialog confirm), CSS transitions on tooltips, hover-state
+ * lifts, and any future primitives that don't opt into the hook.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
