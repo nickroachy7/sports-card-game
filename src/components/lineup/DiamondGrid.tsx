@@ -62,7 +62,10 @@ export function DiamondGrid({
     <div
       className="mx-auto grid w-full max-w-3xl justify-items-center gap-y-3 px-4 py-4"
       style={{
-        gridTemplateColumns: "repeat(5, minmax(96px, 1fr))",
+        // Polish spec §24 (Phase 13): columns compress to 80px so the
+        // diamond fits ~1040px viewports without scroll. Below that
+        // the parent pane scrolls horizontally.
+        gridTemplateColumns: "repeat(5, minmax(80px, 1fr))",
         gridTemplateRows: "repeat(4, auto)",
       }}
     >
