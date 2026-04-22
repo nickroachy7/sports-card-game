@@ -1,18 +1,32 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { toast } from "sonner";
 
+import { removeToken } from "@/app/actions/tokens";
 import { Card, type CardViewModel } from "@/components/card/Card";
+import { CardDetailDrawer } from "@/components/card/CardDetailDrawer";
 import { SidebarRow, SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
+import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { type CardTier, type PlayerStatus, TIER_LABEL } from "@/lib/contracts/cards";
+import {
+  type CardTier,
+  type PlayerStatus,
+  TIER_LABEL,
+  type TokenType,
+} from "@/lib/contracts/cards";
 
 export type CollectionCard = CardViewModel & {
   positions: string[];
   playerStatus: PlayerStatus;
   acquiredAt: string;
+  appliedToken?: {
+    tokenType: TokenType;
+    bonusFp: number;
+    applicationId: string;
+  };
 };
 
 type TierFilter = "all" | CardTier;
@@ -63,12 +77,56 @@ export function CollectionGrid({
   cards: CollectionCard[];
   collectionCap: number;
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [tier, setTier] = useState<TierFilter>("all");
   const [position, setPosition] = useState<PositionFilter>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [contract, setContract] = useState<ContractFilter>("all");
   const [sort, setSort] = useState<SortKey>("tier");
+
+  // Drawer state is derived from the ?card query param so that
+  // back/forward navigation naturally opens / closes the drawer and
+  // shareable links survive.
+  const detailCardId = searchParams.get("card");
+
+  const openDetail = useCallback(
+    (cardId: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("card", cardId);
+      router.push(`/collection?${next.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const closeDetail = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("card");
+    const q = next.toString();
+    router.push(q ? `/collection?${q}` : "/collection", { scroll: false });
+  }, [router, searchParams]);
+
+  function handleRemoveToken(applicationId: string) {
+    startTransition(async () => {
+      const res = await removeToken({ tokenApplicationId: applicationId });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  // Keep drawer-open-state aligned with URL: if the `?card=<id>` points
+  // at a card we no longer have (quick-sold, destroyed, vaulted), close
+  // the drawer and clear the param so we don't re-open on refresh.
+  useEffect(() => {
+    if (detailCardId && !cards.some((c) => c.id === detailCardId)) {
+      closeDetail();
+    }
+  }, [detailCardId, cards, closeDetail]);
 
   const tierBreakdown = useMemo(() => {
     const b: Record<CardTier, number> = { bronze: 0, silver: 0, gold: 0, diamond: 0 };
@@ -150,9 +208,18 @@ export function CollectionGrid({
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {filtered.map((c) => (
-              <Link key={c.id} href={`/collection/${c.id}`} prefetch={false}>
-                <Card card={c} size="medium" />
-              </Link>
+              <div key={c.id} className="relative">
+                <Card card={c} size="medium" onClick={() => openDetail(c.id)} />
+                {c.appliedToken && (
+                  <div className="absolute -right-2 -bottom-2 z-10">
+                    <AppliedTokenBadge
+                      tokenType={c.appliedToken.tokenType}
+                      bonusFp={c.appliedToken.bonusFp}
+                      onRemove={() => handleRemoveToken(c.appliedToken?.applicationId ?? "")}
+                    />
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -240,6 +307,13 @@ export function CollectionGrid({
           Reset
         </Button>
       </aside>
+      <CardDetailDrawer
+        cardId={detailCardId}
+        open={detailCardId !== null}
+        onOpenChange={(next) => {
+          if (!next) closeDetail();
+        }}
+      />
     </section>
   );
 }
