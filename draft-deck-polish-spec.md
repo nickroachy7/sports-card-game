@@ -2997,3 +2997,296 @@ automatically.
   until we see how often BDL genuinely misses 40-man.
 - Alerting on drift (`missing_from_our_db` threshold).
 - `retry_failed=true` offset pagination.
+
+---
+
+# Phase 18 batch — locked 2026-04-22
+
+Feel Pass v1.11 — Gameplay Legibility. Five items that make
+the live-contest surface actually playable:
+
+1. **Per-slot lock model.** Individual slots lock when
+   their player's game starts, not the whole lineup at
+   once. Users can still edit later-starting slots after
+   earlier ones have gone live.
+2. **Game-state visualization on each slot.** Pre-game /
+   live / final indicator plus opponent + time / score.
+3. **Live FP on the card face** during live and final
+   contests (currently always shows career FP).
+4. **Event feed gains game start + game end + token
+   trigger narration.**
+5. **Box Score rows show game state** so the right sidebar
+   reflects the same context as the diamond.
+
+---
+
+## 44. Per-slot lock model
+
+### Goal
+
+Current behavior: contest goes through `building →
+submitted → locked → live → final`; `locked` kills edits
+for every slot simultaneously. User feedback: that's too
+coarse. A slot whose player's game starts at 10 PM should
+stay editable until 10 PM even if another slot's game
+went live at 7 PM.
+
+### Scope
+
+- **Contest status simplified** to `building → submitted
+  → live → final`. Drop `locked` as a distinct state — it
+  was always the step between "submitted" and "first
+  game starts" and serves no purpose once per-slot lock
+  lands.
+- **Per-slot lock is a derived predicate**, not a DB
+  column:
+  - Locked ⟺ the slot's player's game exists AND
+    `now() >= game.scheduled_start_time` (or
+    `game.status IN ('live','final')`).
+  - Unlocked ⟺ no game found OR game still 'scheduled'
+    and start time is in the future.
+- **Server Actions check per-slot lock** before mutating:
+  - `updateLineupSlot`, `swapLineupSlots`, `applyToken`,
+    `removeToken` — reject with `SLOT_LOCKED` if the
+    target slot's game has started.
+  - The SQL fns gain a `is_slot_locked(slot_id)` helper.
+- **`submitLineup` still required** to enter the contest
+  (full 10 slots). After submit, per-slot edits allowed
+  until each slot's game start.
+
+### Behavior
+
+- Drag-drop / click-to-remove / apply-token on an
+  **unlocked** slot works post-submit identically to
+  building state.
+- Locked slots: drag source disabled (visual lock
+  indicator), drop target rejects with toast (`SLOT_LOCKED:
+  This player's game has started`).
+- Swap between two slots: both must be unlocked. One
+  locked → toast rejection.
+
+### Acceptance
+
+- [ ] Contest status enum collapses to 4 values.
+- [ ] `updateLineupSlot` rejects `SLOT_LOCKED` when the
+  target slot's game has started.
+- [ ] Lineup UI visually locks a slot once its game goes
+  live; other slots remain editable.
+- [ ] Submit flow unchanged: 10 filled slots required
+  before the contest entry is "submitted."
+- [ ] Integration test covering per-slot lock added to
+  `tests/integration/lineup.test.ts` (new file, or
+  extend reconcile test suite).
+
+### Trade-offs
+
+- **Derived state vs. a per-slot column.** Computing on
+  read means zero writes but an extra join per action.
+  Acceptable — the action path already touches game for
+  other reasons.
+- **Loses the "locked" narrative moment.** The chip that
+  says "Locked · Games starting" after submit disappears;
+  becomes "Live · (N games active)" at the moment the
+  first game starts. Trade for flexibility.
+
+---
+
+## 45. Game-state visualization on slots
+
+### Goal
+
+Users cannot currently tell whether a slot's player is
+pre-game, live, or final just by scanning the diamond.
+Management decisions (swap, token) require that info.
+
+### Scope
+
+- **New slot-footer line** under each LineupSlot, below
+  the existing `remove` link. Shows three states:
+  - **Pre-game:** `vs LAD · Fri 7:10p` (home) or
+    `@ LAD · Fri 7:10p` (away). Color: muted grey.
+  - **Live:** `LIVE · T5 · 2-1` (inning + current score).
+    Color: emerald.
+  - **Final:** `FINAL W 5-2` (win or loss + final score).
+    Color: neutral.
+- **Data source:** a per-contest game fetch that joins
+  `public.game` to the starter card's `player.team_id`.
+  Included in the lineup page's `LineupViewProps`.
+- **Fallback:** no game scheduled today → no footer line.
+
+### Behavior
+
+- Updates via existing `game` Realtime publication
+  (migration 0027 already added the table). When a game
+  goes `scheduled → live` or `live → final`, the slot
+  footer re-renders.
+- Inning / score updates piggyback on the game UPDATE
+  events too (if the webhook handler sets them).
+- Reduced-motion: no animation on state transitions —
+  direct text swap.
+
+### Acceptance
+
+- [ ] Slot footer shows the right state for pre/live/
+  final.
+- [ ] Opponent abbreviation + time in pre-game state.
+- [ ] Inning + score in live state.
+- [ ] Win/loss + final score in final state.
+- [ ] Updates reactively via Realtime game UPDATEs.
+
+### Trade-offs
+
+- **Vertical growth: ~14px per slot.** Diamond grid stays
+  readable; total page height grows by ~14px in the
+  bench + tokens row area. Acceptable.
+- **One slot = one game assumption.** A player in a
+  doubleheader day has two games; we show the next-
+  scheduled one. Fine for launch.
+
+---
+
+## 46. Card FP during live / final contests
+
+### Goal
+
+During live play, the card still shows career FP ("0 FP"
+for Schanuel despite live 3.0 FP scored this contest).
+Users expect the card to reflect today's contribution.
+
+### Scope
+
+- `LineupCardVM` gains `contestFp?: number | null`. When
+  set, the Card footer shows it instead of career FP —
+  with a distinct visual treatment (italic or different
+  color) so it reads as "contest-scoped."
+- Building state: `contestFp` is null, card shows career
+  FP as today.
+- Submitted / live / final: `contestFp = slot.liveFp +
+  slot.finalFp` (the same sum the Box Score uses).
+
+### Acceptance
+
+- [ ] Card footer shows career FP in building state.
+- [ ] Card footer shows contest FP (live or final) in
+  submitted/live/final states.
+- [ ] Small visual marker distinguishes the two (e.g.,
+  label "FP" for career, "LIVE" or "FINAL" abbrev for
+  contest).
+
+### Trade-offs
+
+- **Card gains a new state.** Keeps the component's
+  public API stable via an optional prop (`contestFp`);
+  null behavior is unchanged.
+
+---
+
+## 47. Event Feed — game start, game end, token triggers
+
+### Goal
+
+The feed currently narrates only per-player batting /
+pitching events. Users asked for broader contest context:
+game starts, game ends, token triggers / misses.
+
+### Scope
+
+- **Game start / end narration.** When a game in
+  `contestGameIds` transitions `scheduled → live` or
+  `live → final`, emit a FeedEvent with copy:
+  - Start: `⚾ Mets @ Dodgers · First pitch`
+  - End: `⚾ Mets @ Dodgers · Final 5-2`
+- **Token triggers.** When a `token_application.triggered`
+  flips from null to true/false (reconcile sets this),
+  emit a FeedEvent:
+  - Triggered: `🪙 QS bonus hit · Skubal +8 FP`
+  - Missed: `🪙 QS bonus missed · Skubal`
+- **New Realtime subscription:** `token_application`
+  UPDATEs. Needs migration 0029 — add to
+  `supabase_realtime` publication + `REPLICA IDENTITY
+  FULL`.
+
+### Behavior
+
+- `LiveEventsProvider` subscribes to three channels now:
+  - `game_event` INSERTs (existing)
+  - `game` UPDATEs (existing from Phase 12)
+  - `token_application` UPDATEs (new)
+- Game start/end events are synthesized client-side from
+  `game` UPDATE payloads — no server-side event row
+  needed.
+- Token trigger narration uses
+  `token_application.{triggered, bonus_fp_awarded}` from
+  the UPDATE payload.
+- No inning-switch events (spec §47 omits to match user
+  answer).
+
+### Acceptance
+
+- [ ] Feed shows a start line when first game goes live.
+- [ ] Feed shows an end line when last game goes final.
+- [ ] Feed shows token fire/miss when reconcile resolves
+  a token application.
+- [ ] Migration 0029 applied (token_application in
+  Realtime publication).
+- [ ] Existing player-event narration unchanged.
+
+### Trade-offs
+
+- **Three Realtime channels open.** Minimal websocket
+  overhead; Supabase handles channel multiplexing.
+- **Token triggers require the token_application table
+  in the publication.** That table is owner-scoped via
+  RLS, so Realtime authorizes per-user. Fine.
+
+---
+
+## 48. Box Score — game state per row
+
+### Goal
+
+The right sidebar Box Score lists each slot's FP. Users
+want the game-state context surfaced here too, matching
+the new slot-footer line.
+
+### Scope
+
+- Each row gains a small state chip after the position
+  label: `[1B] PRE`, `[1B] LIVE T5`, `[1B] FINAL`.
+- Chip color matches the slot footer palette (muted
+  grey / emerald / neutral).
+- No inning / score detail — that's for the slot footer
+  + status chip. Box Score stays compact.
+
+### Acceptance
+
+- [ ] Each row shows the chip.
+- [ ] Chip matches the slot footer's state in sync.
+- [ ] No layout shift when state updates.
+
+### Trade-offs
+
+- **Mild clutter.** Counterbalanced by giving the user
+  all the in-progress / final info they need without
+  leaving the sidebar.
+
+---
+
+## 49. Not in scope for v1.11
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Inning-switch events in the feed (user's interview
+  choice — feed stays cleaner).
+- Doubleheader second-game handling (single-game per
+  day assumption).
+- Auto-creation of MLB-only rows (still deferred).
+- Drift alerting on `missing_from_our_db`.
