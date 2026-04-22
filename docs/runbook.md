@@ -267,6 +267,43 @@ curl -s -H "Authorization: Bearer $CRON_SECRET" \
 Missing or wrong `Authorization` header → 401 `UNAUTHENTICATED`.
 Missing `BDL_API_KEY` → 500 with "BDL_API_KEY is not set".
 
+### Reconcile stale 40-man flags (Phase 16)
+
+BDL's `is_active_40_man` flag can drift out of sync with MLB's
+actual 40-man (players optioned / DFA'd / traded after BDL's
+last sync). Run this audit BEFORE re-running the mlbam
+backfill to clean the input data:
+
+```bash
+export CRON_SECRET=$(grep ^CRON_SECRET .env.local | cut -d= -f2- | tr -d '"')
+
+# Dry-run first to see what would change.
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  "https://draftdeck.com/api/cron/mlb-roster-audit?dry_run=true" | jq
+
+# If the counts look sensible, run for real.
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  "https://draftdeck.com/api/cron/mlb-roster-audit" | jq
+```
+
+Response shape: `{ teams_processed, roster_player_count,
+flagged_off, flagged_on, team_refreshed, missing_from_our_db,
+unchanged, dry_run }`.
+
+- `flagged_off` — rows flipped from `is_active_40_man=true`
+  to `false` (BDL stale).
+- `flagged_on` — rare; rows we missed that belong on the
+  40-man.
+- `team_refreshed` — traded players' `team_id` corrected.
+- `missing_from_our_db` — MLBAM ids on a 40-man we don't
+  have any `player` row for. Next `bdl-roster-sync` picks
+  them up.
+
+Idempotent — a clean run returns mostly zeros. Re-run after
+any significant roster event.
+
+---
+
 ### Backfill MLBAM ids (player photos)
 
 Card photos are derived at render time from `player.mlbam_id`.
