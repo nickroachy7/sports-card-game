@@ -3290,3 +3290,175 @@ the new slot-footer line.
   day assumption).
 - Auto-creation of MLB-only rows (still deferred).
 - Drift alerting on `missing_from_our_db`.
+
+---
+
+# Phase 19 batch — locked 2026-04-22
+
+Feel Pass v1.11.1. Three slate-robustness fixes surfaced by
+Phase 18 smoke testing:
+
+1. **Slate-date timezone.** `create_daily_contest(CURRENT_DATE)`
+   uses the Postgres server's UTC date; rolls over at 8 PM ET.
+   Between 8 PM ET and midnight ET, the lineup page shows
+   tomorrow's (empty) slate while tonight's games are still
+   playing.
+2. **Stale `included_game_ids`.** Fn caches the game set at
+   contest-creation time. If BDL's schedule-sync adds games
+   AFTER the contest is first created that day, the contest
+   doesn't pick them up.
+3. **`scheduled_start` is always NULL** because BDL doesn't
+   expose game start times. Pre-game slot footer shows "TBD"
+   and the backup lock predicate (`now() >= scheduled_start`)
+   never fires.
+
+---
+
+## 50. Slate date with 4 AM ET rollover
+
+### Goal
+
+Contest date is "today" from the perspective of MLB fans —
+late-night games on the West Coast that end 1 AM ET should
+still count as "last night's slate" until the next morning.
+DraftKings / FanDuel MLB convention: 4 AM ET rollover.
+
+### Scope
+
+- New SQL helper `public.current_slate_date()` returning the
+  ET-aware slate date with 4 AM pivot:
+  ```sql
+  (now() AT TIME ZONE 'America/New_York' - INTERVAL '4 hours')::date
+  ```
+- `create_daily_contest` default changes from `CURRENT_DATE`
+  to `public.current_slate_date()`.
+- `src/app/(app)/lineup/page.tsx` stops passing `CURRENT_DATE`
+  explicitly; lets the fn default do the right thing.
+- Constant exposed in `src/lib/mlb/slate.ts` so client-side
+  code (e.g., UI copy about "tomorrow's slate") derives the
+  same value.
+
+### Acceptance
+
+- [ ] At 7 PM ET Apr 22: slate date = Apr 22 ✓
+- [ ] At 10 PM ET Apr 22: slate date = Apr 22 ✓ (not 23)
+- [ ] At 2 AM ET Apr 23: slate date = Apr 22 ✓ (late-night
+      games still on "tonight's" slate)
+- [ ] At 5 AM ET Apr 23: slate date = Apr 23 ✓ (rolled over)
+- [ ] Previously-created contests stay on their original
+      dates — idempotent lookup still finds them.
+
+### Trade-offs
+
+- **4 AM ET is an opinionated choice.** If the user wants a
+  different pivot, change the `INTERVAL '4 hours'` constant.
+  Not exposed as config (overkill for the phase).
+- **Users in other timezones see the slate in ET.** Fine for
+  MLB-centric product; revisit if we ever add NBA/NFL.
+
+---
+
+## 51. `create_daily_contest` refreshes included_game_ids
+
+### Goal
+
+When `bdl-games-prefetch` or `schedule-sync` picks up a new
+game for today AFTER the daily contest has already been
+created, the contest's cached `included_game_ids` doesn't
+update. Fix: recompute on every call.
+
+### Scope
+
+- `create_daily_contest` fn body: after the reuse-existing
+  lookup, re-query games for the contest date + `UPDATE` the
+  contest row's `included_game_ids` if the set changed.
+- Kept idempotent — same inputs + same game set = no-op UPDATE.
+- `bdl-games-prefetch` cron already calls `create_daily_contest`
+  after syncing schedule; this change makes that call actually
+  refresh the cache.
+
+### Acceptance
+
+- [ ] Create a contest for today with N games.
+- [ ] Insert a new game for today directly.
+- [ ] Re-call `create_daily_contest(today)` → contest's
+      `included_game_ids` now includes the new game.
+- [ ] No-op case (no new games) doesn't churn the row's
+      updated_at unnecessarily (use `WHERE included_game_ids
+      IS DISTINCT FROM new_set`).
+
+### Trade-offs
+
+- **Refresh-on-every-read is chatty.** `lineup/page.tsx`
+  calls `create_daily_contest` on every page load; the
+  query + potential UPDATE runs every time. Cheap (index on
+  `game.date`) but worth noting.
+- **No back-reference from game → contest.** We can't
+  incrementally invalidate. Full recompute is simplest.
+
+---
+
+## 52. scheduled_start populated via MLB Stats API
+
+### Goal
+
+BDL's `MLBGame` type doesn't expose game start times. Pull
+from MLB Stats API's `/api/v1/schedule?date=X&sportId=1`
+during the same schedule-sync pass; map by MLBAM game id.
+
+### Scope
+
+- New helper `fetchMlbStatsSchedule(date)` in
+  `src/lib/mlb/mlb-stats-schedule.ts`. Hits
+  `statsapi.mlb.com/api/v1/schedule?sportId=1&date=YYYY-MM-DD`,
+  returns an array of `{ mlbamGameId, scheduledStart: ISO }`.
+- `syncScheduleHorizon()` augmented: for each date, after the
+  BDL fetch pass, also call `fetchMlbStatsSchedule(date)` and
+  UPDATE `public.game` rows by… **we don't have a `game.mlbam_id`
+  column.** Match by (date, home_team_mlbam_id, away_team_mlbam_id)
+  via the `player`-side MLBAM map; OR via team abbreviation +
+  date.
+- Alternative match key: MLB Stats teamIds (from the Phase 15
+  `MLB_STATS_TEAM_IDS` map) + date. Simple + reliable.
+- Schedule-sync summary response gains a
+  `scheduled_starts_updated` counter.
+
+### Acceptance
+
+- [ ] Post-run, today's + tomorrow's games have
+      `scheduled_start IS NOT NULL` for every scheduled
+      game.
+- [ ] Pre-game slot footer shows `vs LAD · 7:10p` instead
+      of `TBD`.
+- [ ] Schedule-sync summary includes the counter.
+
+### Trade-offs
+
+- **Two HTTP calls per date now (BDL + MLB Stats).** Polite
+  sleep between them; ~1s added runtime per date. Still
+  under the 60s Vercel limit for 2-day horizon.
+- **Team-abbreviation match instead of mlbam_id match.**
+  Safer than adding a new column; Phase 15's team-id map
+  covers 30 teams + aliases.
+- **MLB Stats API is free + public.** Same source Phase 15
+  uses for the 40-man roster. No new dependency.
+
+---
+
+## 53. Not in scope for v1.11.1
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Live inning tracking on `game` row (still blocked on
+  BDL data + webhook handling).
+- contest_entry_status enum collapse (Phase 18 open item).
+- Configurable slate-pivot hour via env var.
+- Non-ET timezones.
