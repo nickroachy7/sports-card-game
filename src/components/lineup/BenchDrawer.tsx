@@ -53,9 +53,15 @@ export function BenchDrawer({
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Bench</h2>
-          <span className="font-mono text-xs text-[var(--text-2)]">
-            {cards.length - assignedCardIds.size} available
-          </span>
+          {locked ? (
+            <span className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-[var(--text-3)]">
+              Locked
+            </span>
+          ) : (
+            <span className="font-mono text-xs text-[var(--text-2)]">
+              {cards.length - assignedCardIds.size} available
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <FilterButton label="All" active={filter === "all"} onClick={() => setFilter("all")} />

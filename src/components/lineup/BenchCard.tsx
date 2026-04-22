@@ -61,15 +61,22 @@ export function BenchCard({
         ref={(el) => {
           dragRef(el);
         }}
-        onClick={() => onOpenDetail(card.id)}
+        // Post-submit: spec §16 keeps bench cards visible but non-
+        // interactive — no drag + no click-to-detail.
+        onClick={locked ? undefined : () => onOpenDetail(card.id)}
         className={cn(
           "appearance-none border-0 bg-transparent p-0 transition-opacity",
           isDragging && "opacity-40",
-          assigned && "opacity-60",
-          disabled && "cursor-not-allowed",
-          !disabled && !isDragging && "cursor-grab active:cursor-grabbing",
+          !locked && assigned && "opacity-60",
+          locked && "cursor-not-allowed opacity-50",
+          !locked && disabled && "cursor-not-allowed",
+          !locked && !disabled && !isDragging && "cursor-grab active:cursor-grabbing",
         )}
-        aria-label={`${card.playerName}${assigned ? " (in lineup)" : ""} — click for detail`}
+        aria-label={
+          locked
+            ? `${card.playerName}${assigned ? " (in lineup)" : ""} — lineup locked`
+            : `${card.playerName}${assigned ? " (in lineup)" : ""} — click for detail`
+        }
       >
         <Card card={card} size="small" />
       </button>
