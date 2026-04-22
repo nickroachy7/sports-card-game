@@ -2200,3 +2200,169 @@ the card front.
 - Uploading photos to Supabase Storage. Phase 13 serves
   MLBAM CDN URLs directly.
 - Card detail panel cross-fade animation.
+
+---
+
+# Phase 14 batch — locked 2026-04-22
+
+Feel Pass v1.8. Three tied-to-recent-work polish items:
+
+1. Close the P13 backfill match-rate debt. 76% → target 90%+
+   via `hydrate=currentTeam` on the MLB Stats API call +
+   fuzzy Levenshtein matching on residuals.
+2. Cross-fade animation on the sidebar swap. ADR-0018's
+   parked "decide by smoke" item — the abrupt snap reads
+   more jarring than anticipated now that the pattern is
+   used daily.
+3. Per-slot contract-depletion glow — amber pulse when a
+   slot's starter loses a play. Parked for two phases as
+   natural sibling to P12's FP glow; enough signal now to
+   ship.
+
+---
+
+## 28. Backfill match-rate improvement
+
+### Goal
+
+Raise the `player.mlbam_id` match rate from ~76% (Phase 13's
+initial run) to ≥ 90%. Residuals are mostly two classes:
+
+- **Mid-season trades.** `player.team_id` points at a stale
+  team after a trade but before the next roster sync; team-
+  based disambiguation fails for same-name collisions.
+- **Name variants.** Middle-name insertion, nickname-as-first
+  (`Alex` vs `Alexander`), compound surnames, typos.
+
+### Scope
+
+- **`hydrate=currentTeam` on MLB Stats API.** Default search
+  response doesn't include team data; hydration populates it
+  so disambiguation checks MLB's source-of-truth team.
+- **Fuzzy-match fallback.** After exact + stripped passes
+  fail, retry with Levenshtein ≤ 2 on both first AND last
+  (normalized). Accept only single-candidate matches.
+- **`?retry_failed=true` param.** Ignores the skip-attempted
+  filter so the hardened matcher gets one more crack at the
+  residual 187.
+- **Response gains `strategies` counts.** `{ exact, stripped,
+  fuzzy, team_disambiguated, ambiguous, unmatched }`.
+
+### Acceptance
+
+- [ ] Post-run, `unmatched_total` drops below 80 on active
+  40-man.
+- [ ] Response includes the `strategies` breakdown.
+- [ ] Runbook updated with `?retry_failed=true`.
+
+### Trade-offs
+
+- **Fuzzy ≤ 2 can over-match short names.** Require
+  exactly-one candidate post-fuzzy; otherwise ambiguous.
+  Two false positives per ~500 retries acceptable (onError
+  fallback catches them visually).
+- **`hydrate=currentTeam` adds ~150ms per call.** Still
+  under serverless timeout at `?limit=40`.
+
+---
+
+## 29. Cross-fade on sidebar swap
+
+### Goal
+
+`<SelectedCardSidebar>` replaces the default sidebar in a
+single-frame snap. Gentle 200ms fade reads better.
+
+### Scope
+
+- Wrap the conditional sidebar branch in `<AnimatePresence
+  mode="wait">` on lineup + collection pages.
+- 200ms motion: opacity 0 → 1 + `y: 4 → 0` on enter,
+  reverse on exit.
+- `prefers-reduced-motion: reduce` skips.
+
+### Acceptance
+
+- [ ] Card click on both pages → visible 200ms fade.
+- [ ] Back produces matching reverse fade.
+- [ ] Reduced-motion kills the fade.
+- [ ] No layout shift mid-fade.
+
+### Trade-offs
+
+- **`mode="wait"` sequences exit then enter** (~400ms
+  total). If it reads slow, swap to `mode="popLayout"`.
+- **Card-to-card within the sidebar doesn't fade.** Only
+  mode transitions; same-mode swaps stay snappy.
+
+---
+
+## 30. Per-slot contract-depletion glow
+
+### Goal
+
+When a slot's starter loses a play, the slot pulses amber.
+Sibling to Phase 12's FP glow; closes the "wait, my card
+burned a play?" narrative on the diamond.
+
+### Scope
+
+- **Migration 0028** — `public.card` → `supabase_realtime`
+  publication + `REPLICA IDENTITY FULL`. Mirrors 0027 for
+  `game`.
+- **`useCardContractEvents(cardIds)` hook** — subscribes to
+  `public.card` UPDATEs, filters client-side to rostered
+  ids, fires only when `new.contract_plays_remaining <
+  old.contract_plays_remaining`.
+- **`<SlotContractGlow>`** — amber halo (1000ms) + floating
+  `-1 play` pill. Mirrors `<SlotFpGlow>`'s envelope.
+- **Wire in `LineupSlot`** — renders alongside SlotFpGlow,
+  same gates (post-submit, card present, reduced-motion).
+
+### Behavior
+
+- Reconcile decrements `contract_plays_remaining` →
+  Realtime UPDATE → slot glows amber with `-1 play`.
+- Color: amber `#D4A647` (matches contract-bar "low" warning
+  color). Not red — play consumed is expected, not alarming.
+- Multiple decrements in quick succession: each plays a
+  fresh 1000ms (keyed on UPDATE timestamp).
+- Composites cleanly with `<SlotFpGlow>` — both can fire on
+  the same slot in the same tick.
+- Building state: no glow (cards don't decrement).
+
+### Acceptance
+
+- [ ] Migration 0028 applied to prod.
+- [ ] After a real game reconciles, the starter's slot
+  glows amber with `-1 play`.
+- [ ] No conflict with FP glow on the same slot.
+- [ ] Building: no glow. Reduced-motion: no glow.
+
+### Trade-offs
+
+- **Separate Realtime channel from `<LiveEventsProvider>`.**
+  Different table, different event, separate concern.
+  Pattern matches `useGamesActive`.
+- **`REPLICA IDENTITY FULL` on `card`** emits the whole
+  row on UPDATE. `card` is a hot table; modest payload
+  increase but fine at our scale.
+- **Auto-sub backup decrement** won't glow (backup isn't on
+  the diamond). Event Feed still narrates; acceptable.
+
+---
+
+## 32. Not in scope for v1.9
+
+- Onboarding flow pass (next phase candidate).
+- Empty + error state sweep.
+- Accessibility audit (WCAG 2.1 AA).
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on the status chip.
+- Webhook retry observability dashboard.
+- CI integration for the fixture suite.
+- Sound cue on positive-FP events.
+- Manual-override column for unmatched MLBAM ids.
+- Card-to-card cross-fade inside the selected-card sidebar.
