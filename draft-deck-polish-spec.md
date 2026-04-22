@@ -1629,3 +1629,240 @@ bypasses RLS cleanly for test setup.
 - open_pack / apply_token / quick-sell / vault-midseason /
   destroy-vaulted integration tests (extend as needed when
   those fns get touched).
+
+---
+
+# Phase 12 batch — locked 2026-04-22
+
+Feel Pass v1.6. Two phases built the mechanics (Phase 9 real-
+game scoring) + the chrome (Phase 10 unified lineup view +
+Event Feed). The diamond itself still sits static during live
+play — events are narrated in the sidebar but the positions
+don't react. Phase 12 closes that loop: the diamond reacts to
+events in real time, and the status chip gets the narration
+detail that ADR-0015 deferred ("has a Phase 11+ home").
+
+Pure client-side work. No SQL, no migrations, no new cron,
+no new integration tests (animations are hard to test
+deterministically — same posture as the Event Feed itself).
+
+---
+
+## 21. Per-slot FP glow on the diamond
+
+### Goal
+
+Tie the Event Feed's narration back to the diamond visually.
+When a `game_event` fires for a player rostered in a user's
+lineup, the corresponding slot on the diamond briefly glows
+with the FP delta: green halo + floating `+N.N` for positive,
+red halo + `−N.N` for negative, nothing for zero. Quick,
+additive feedback; doesn't replace the Event Feed — complements
+it.
+
+### Scope
+
+- Single shared Realtime subscription at the `LineupView`
+  level (currently lives in `EventFeed`). Lifted into a
+  provider so both `EventFeed` and each `LineupSlot` read
+  from the same event stream.
+- Each `LineupSlot` subscribes to events for its slot's
+  starter player and plays a short motion whenever the latest
+  event's id changes.
+- Bench slots do not glow (bench cards don't score during the
+  contest).
+- Post-submit only (glow requires `entryStatus IN ('live',
+  'final')`). Building state: no events reaching the diamond.
+
+### Behavior
+
+**Visual (per slot):**
+
+- **Halo:** 1200ms animation. Emerald-400 at 60% opacity for
+  positive delta, `#C47262` at 60% for negative. Scales from
+  the slot edge outward ~8px, fades to 0. Matches the motion
+  envelope of the existing tier-up sparkle.
+- **Floating delta:** `+3.0` / `−2.0` pill centered ~20px
+  above the slot. Rises 16px, fades from 100% → 0% opacity
+  over 1200ms. Monospace tabular-nums so multi-digit deltas
+  don't shift layout.
+- **Zero delta (strikeout looking, foul-out, etc.):** no
+  animation. Event still appears in the feed.
+- **Reduced motion:** skip the halo + float entirely. Event
+  Feed remains the source of truth. (Matches the `prefers-
+  reduced-motion` posture established in ADR-0011 / §10.)
+
+**Event routing:**
+
+- Provider maintains `latestByPlayerId: Map<playerId,
+  FeedEvent>`. Updated on each Realtime INSERT that projects
+  to a known lineup player.
+- Each `LineupSlot` reads `useLatestPlayerEvent(playerId)`
+  and animates on id change.
+- Multiple events in quick succession on the same slot:
+  the latest event wins — if a new event arrives while the
+  prior animation is still playing, it replaces mid-flight.
+  Don't queue. Latest narrative is what matters.
+
+**Off-screen behavior:**
+
+- Same as Event Feed today — the `/lineup` page can be
+  backgrounded; animations play when the page is visible.
+  Browser throttling handles the rest. No manual visibility
+  hook needed.
+
+### Acceptance
+
+- [ ] Live game + test lineup: Meidroth walks → 2B slot
+  halos green with `+2.0` briefly.
+- [ ] Strikeout on a pitcher slot → glow is red with
+  `−0.0` / nothing (decide: treat `0` as no-glow, match the
+  Event Feed's grey-dash posture).
+- [ ] Bench cards do not glow when their player's events
+  fire (they're not in any slot's `starter_card_id`).
+- [ ] Building / submitted / locked states: no glow (no
+  events are reaching the diamond yet per policy).
+- [ ] `prefers-reduced-motion: reduce` disables halo +
+  float.
+- [ ] Event Feed continues to work unchanged (same events
+  feed it — both surfaces read from the shared provider).
+- [ ] Rapid-fire events on the same slot don't stack (last
+  one wins).
+
+### Dependencies
+
+- `eventFpDelta` + `eventActionLabel` (Phase 10) already
+  compute the delta from event_type + play_type + role.
+  Reused 1:1 — no new FP math.
+- `createBrowserClient` (ADR-0015's split) already exists.
+- `motion` (framer-motion) already in deps.
+- Reduced-motion posture matches ADR-0011's existing
+  global floor.
+
+### Trade-offs
+
+- **Shared provider, not a context lib like Jotai.** One
+  `<LiveEventsProvider>` + a small `useLatestPlayerEvent`
+  hook is enough; Jotai/Zustand would be overkill for a
+  single stream.
+- **No per-slot pulse for "same-side of play" events** —
+  e.g., a pitcher giving up an HR doesn't glow the pitcher
+  slot red. The event already projects with `role='pitcher'`
+  via `eventFpDelta`, so the red glow happens naturally.
+  Confirmed not a gap.
+- **No sound.** Sound cue on positive FP is spec'd but
+  parked again (same as ADR-0015). Phase 12 is visual-only.
+- **Latest-wins, not queue.** Accepts that a rapid triple
+  event sequence will only animate the last one. Feed is
+  authoritative for the narrative.
+
+---
+
+## 22. Status chip enrichment — inning + games-active count
+
+### Goal
+
+The status chip currently reads "Live · Games in progress".
+ADR-0015 deferred inning + games-active detail explicitly
+("each has a Phase 11+ home"). Phase 12 is that home. The
+chip should communicate *which* inning + *how many* of the
+user's contest games are currently live.
+
+### Scope
+
+- `<StatusChip>` (in `LineupSidebar.tsx`) gets two new
+  derived pieces of state:
+  - `latestInning: { inning: number; half: 'top' | 'bottom' } | null` — derived from the same shared event stream that P12.1 lifts up. Latest event wins.
+  - `gamesActive: number` — count of contest games in
+    `status='live'` at load time. Updated via a Realtime
+    subscription on `public.game` filtered to
+    `contestGameIds`.
+- Chip text becomes:
+  - `entryStatus='live'` + inning known: `"Live · Top 5th · 3 games active"`
+  - `entryStatus='live'` + no inning yet: `"Live · 3 games active"` (games started but no events yet)
+  - `entryStatus='live'` + gamesActive=0: `"Live · Games ending"` (reconcile is about to fire)
+  - `entryStatus='submitted' / 'locked' / 'final'`: unchanged from today.
+
+### Behavior
+
+**Inning formatting:**
+
+- `"Top 5th"`, `"Bottom 3rd"`, `"Top 1st"`, etc.
+- Ordinal suffixes: 1st/2nd/3rd, then *th*.
+- `half` values from `game_event.inning_half` are `'top'` /
+  `'bottom'` (schema); map to `'Top'` / `'Bottom'`.
+- If multiple games are live and events are firing for both,
+  the chip shows the most-recent-event's inning (not a
+  max-innings calc). Simpler + matches what a fan expects
+  (the chip narrates the most recent thing).
+
+**Games-active derivation:**
+
+- Initial fetch: `SELECT count(*) FROM game WHERE status='live'
+  AND id = ANY($contestGameIds)` on page load. Lightweight
+  client read via the browser Supabase client (RLS allows
+  game rows to authenticated users).
+- Realtime: subscribe to `public.game` UPDATE events for
+  any of `contestGameIds`; when a row's status flips, recompute
+  the count. Game table is not currently in the
+  `supabase_realtime` publication — we'll add it in a tiny
+  migration (0027). Same shape as the game_event migration
+  0024.
+- No backoff / no polling fallback. If Realtime drops, the
+  count is stale until page refresh. Acceptable for a
+  narration chip.
+
+### Acceptance
+
+- [ ] Pre-first-pitch: "Live · 3 games active" (or
+  whatever the user's contest size is).
+- [ ] First event fires → chip updates to include inning.
+- [ ] Game finalizes (status → 'final') → count decrements;
+  chip re-renders.
+- [ ] All games final: "Live · Games ending" (matches
+  reconcile-window perception).
+- [ ] Pre-game / submitted states unchanged.
+- [ ] Chip width doesn't jitter as inning changes
+  (reserve space with `min-w` + tabular nums if needed).
+
+### Dependencies
+
+- Shared event provider from §21 exposes `latestInning` (a
+  second consumer on the same stream — cheap).
+- Migration 0027 adds `public.game` to `supabase_realtime`.
+  No schema change; one `ALTER PUBLICATION` line.
+
+### Trade-offs
+
+- **Most-recent-event inning, not max-or-min across live
+  games.** A pedant could prefer "furthest along", but the
+  chip is narration, not scoreboard. Latest event = latest
+  narrative.
+- **No per-user score delta on the chip.** Already shown
+  by the Live Score section above; redundancy adds noise.
+- **No rank display yet.** ADR-0015 parked it ("needs
+  leaderboard query extension") — still parked; low
+  priority.
+- **Realtime for game-status changes, not polling.** If the
+  Realtime publication ever has a bug, the count goes stale.
+  Worth the trade for the live feel.
+
+---
+
+## 23. Not in scope for v1.7
+
+- Onboarding flow pass.
+- Empty + error state sweep.
+- Accessibility audit (WCAG 2.1 AA).
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on the status chip (needs leaderboard query
+  extension).
+- Webhook retry observability dashboard.
+- CI integration for the fixture suite.
+- Per-slot contract-depletion animation (a card losing a
+  play should arguably tick its contract bar; deferred
+  because it'd need another provider consumer + the `card`
+  table isn't in the Realtime publication).
+- Sound cue on positive-FP events (still parked per ADR-0015).
