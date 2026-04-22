@@ -2,9 +2,12 @@
 
 import { SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
 import { EventFeed } from "@/components/lineup/EventFeed";
+import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
+import { useGamesActive } from "@/components/lineup/useGamesActive";
 import { Button } from "@/components/ui/button";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
+import { type InningInfo, liveLabel } from "@/lib/lineup/status-chip-label";
 import type { LineupCardVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
@@ -119,6 +122,7 @@ function PostSubmitSidebar({
   liveScore,
   finalScore,
   lockCountdown,
+  contestGameIds,
 }: Props) {
   const isFinal = entryStatus === "final";
   const displayScore = isFinal
@@ -134,6 +138,9 @@ function PostSubmitSidebar({
   // The Event Feed + per-slot glow both consume <LiveEventsProvider>
   // higher up the tree — no subscription wiring happens here anymore.
 
+  const latestInning = useLatestInning();
+  const { count: gamesActive, ready: gamesReady } = useGamesActive(contestGameIds);
+
   return (
     <>
       <SidebarSection title={isFinal ? "Final Score" : "Live Score"}>
@@ -148,7 +155,13 @@ function PostSubmitSidebar({
         <p className="text-xs text-[var(--text-3)]">
           {entryStatus === "live" ? <>Live · {lockCountdown}</> : <>Locked · {lockCountdown}</>}
         </p>
-        <StatusChip entryStatus={entryStatus} displayScore={displayScore} />
+        <StatusChip
+          entryStatus={entryStatus}
+          displayScore={displayScore}
+          latestInning={latestInning}
+          gamesActive={gamesActive}
+          gamesReady={gamesReady}
+        />
       </div>
     </>
   );
@@ -202,9 +215,15 @@ function BoxScoreSection({
 function StatusChip({
   entryStatus,
   displayScore,
+  latestInning,
+  gamesActive,
+  gamesReady,
 }: {
   entryStatus: EntryStatus;
   displayScore: number;
+  latestInning: InningInfo | null;
+  gamesActive: number;
+  gamesReady: boolean;
 }) {
   let label: string;
   switch (entryStatus) {
@@ -215,7 +234,7 @@ function StatusChip({
       label = "Locked · Games starting";
       break;
     case "live":
-      label = "Live · Games in progress";
+      label = liveLabel(latestInning, gamesActive, gamesReady);
       break;
     case "final":
       label = `Final · ${displayScore.toFixed(1)} FP`;
@@ -224,7 +243,7 @@ function StatusChip({
       label = "Submitted";
   }
   return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-center text-xs font-medium text-[var(--text-2)]">
+    <div className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-center font-medium text-xs text-[var(--text-2)] tabular-nums">
       {label}
     </div>
   );
