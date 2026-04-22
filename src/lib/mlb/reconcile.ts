@@ -112,18 +112,24 @@ export async function reconcileGame(bdlGameId: number): Promise<{
     const fp = player.is_pitcher ? computePitcherFp(playerStats) : computeHitterFp(playerStats);
 
     // Update every rostered slot for this player in any contest touching this game.
+    // Postgres UPDATE-FROM can't join through the target alias in the FROM
+    // clause (`s.starter_card_id` isn't addressable from `JOIN ... ON`), so
+    // we resolve matching slots in a subquery and update by id.
     type SlotRow = { id: string; entry_id: string; token_application_id: string | null };
     const slotRows = await db.execute<SlotRow>(sql`
-      UPDATE public.contest_lineup_slot s
+      UPDATE public.contest_lineup_slot
       SET final_fp = ${fp}::numeric
-      FROM public.contest_entry ce
-      JOIN public.contest c ON c.id = ce.contest_id
-      JOIN public.card card ON card.id = s.starter_card_id
-      WHERE s.contest_entry_id = ce.id
-        AND card.player_id = ${player.id}::uuid
-        AND ${gameId}::uuid = ANY(c.included_game_ids)
-        AND ce.status IN ('live', 'final', 'submitted')
-      RETURNING s.id, ce.id AS entry_id, s.token_application_id
+      WHERE id IN (
+        SELECT s.id
+        FROM public.contest_lineup_slot s
+        JOIN public.contest_entry ce ON ce.id = s.contest_entry_id
+        JOIN public.contest c ON c.id = ce.contest_id
+        JOIN public.card card ON card.id = s.starter_card_id
+        WHERE card.player_id = ${player.id}::uuid
+          AND ${gameId}::uuid = ANY(c.included_game_ids)
+          AND ce.status IN ('live', 'final', 'submitted')
+      )
+      RETURNING id, contest_entry_id AS entry_id, token_application_id
     `);
     slotsUpdated += slotRows.rows.length;
 
