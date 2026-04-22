@@ -15,6 +15,7 @@ import {
 import { applyToken, removeToken } from "@/app/actions/tokens";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
+import { SidebarFadeSwap } from "@/components/layout/SidebarFadeSwap";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { DiamondGrid } from "@/components/lineup/DiamondGrid";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
@@ -340,32 +341,34 @@ export function LineupView(props: LineupViewProps) {
         />
       }
       sidebar={
-        detailCardId ? (
-          <SelectedCardSidebar
-            cardId={detailCardId}
-            onBack={() => setDetailCardId(null)}
-            lineupContext={{
-              slotted: detailSlotPosition !== null,
-              onRemoveFromSlot: handleRemoveFromSlot,
-              onVaulted: () => router.refresh(),
-            }}
-          />
-        ) : (
-          <LineupSidebar
-            slotFills={slotFills}
-            entryStatus={props.entryStatus}
-            liveScore={props.liveScore}
-            finalScore={props.finalScore}
-            contestGameIds={props.contestGameIds}
-            autoSubMode={mode}
-            onAutoSubModeChange={handleModeChange}
-            canSubmit={canSubmit}
-            submitting={submitting}
-            locked={locked}
-            lockCountdown={lockCountdown}
-            onSubmit={handleSubmit}
-          />
-        )
+        <SidebarFadeSwap modeKey={detailCardId ? "detail" : "default"}>
+          {detailCardId ? (
+            <SelectedCardSidebar
+              cardId={detailCardId}
+              onBack={() => setDetailCardId(null)}
+              lineupContext={{
+                slotted: detailSlotPosition !== null,
+                onRemoveFromSlot: handleRemoveFromSlot,
+                onVaulted: () => router.refresh(),
+              }}
+            />
+          ) : (
+            <LineupSidebar
+              slotFills={slotFills}
+              entryStatus={props.entryStatus}
+              liveScore={props.liveScore}
+              finalScore={props.finalScore}
+              contestGameIds={props.contestGameIds}
+              autoSubMode={mode}
+              onAutoSubModeChange={handleModeChange}
+              canSubmit={canSubmit}
+              submitting={submitting}
+              locked={locked}
+              lockCountdown={lockCountdown}
+              onSubmit={handleSubmit}
+            />
+          )}
+        </SidebarFadeSwap>
       }
       bench={
         <BenchDrawer

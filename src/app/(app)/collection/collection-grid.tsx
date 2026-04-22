@@ -9,6 +9,7 @@ import { Card, type CardViewModel } from "@/components/card/Card";
 import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
 import { CollectionShell } from "@/components/collection/CollectionShell";
 import { CollectionSummaryStats } from "@/components/collection/CollectionSummaryStats";
+import { SidebarFadeSwap } from "@/components/layout/SidebarFadeSwap";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -295,10 +296,14 @@ export function CollectionGrid({
     </div>
   );
 
-  const sidebar = detailCardId ? (
-    <SelectedCardSidebar cardId={detailCardId} onBack={closeDetail} />
-  ) : (
-    <CollectionSummaryStats cards={cards} collectionCap={collectionCap} />
+  const sidebar = (
+    <SidebarFadeSwap modeKey={detailCardId ? "detail" : "default"}>
+      {detailCardId ? (
+        <SelectedCardSidebar cardId={detailCardId} onBack={closeDetail} />
+      ) : (
+        <CollectionSummaryStats cards={cards} collectionCap={collectionCap} />
+      )}
+    </SidebarFadeSwap>
   );
 
   return <CollectionShell main={main} sidebar={sidebar} />;
