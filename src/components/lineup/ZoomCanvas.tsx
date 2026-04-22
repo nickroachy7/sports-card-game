@@ -59,17 +59,17 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
   const minScale = fitScale * MIN_FACTOR;
   const maxScale = fitScale * MAX_FACTOR;
 
-  const clampPan = useCallback(
-    (nextTx: number, nextTy: number, nextScale: number) => {
+  // Centered tx/ty for a given scale. Used for mount + Fit button. Pan
+  // gestures are unbounded — the user can drag the diamond anywhere;
+  // the Fit button snaps back.
+  const centeredAt = useCallback(
+    (nextScale: number) => {
       const contentW = natural.w * nextScale;
       const contentH = natural.h * nextScale;
-      const centeredTx = (paneSize.w - contentW) / 2;
-      const centeredTy = (paneSize.h - contentH) / 2;
-      if (contentW <= paneSize.w) nextTx = centeredTx;
-      else nextTx = clamp(nextTx, paneSize.w - contentW, 0);
-      if (contentH <= paneSize.h) nextTy = centeredTy;
-      else nextTy = clamp(nextTy, paneSize.h - contentH, 0);
-      return { tx: nextTx, ty: nextTy };
+      return {
+        tx: (paneSize.w - contentW) / 2,
+        ty: (paneSize.h - contentH) / 2,
+      };
     },
     [paneSize.w, paneSize.h, natural.w, natural.h],
   );
@@ -101,12 +101,12 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
     if (mounted) return;
     if (paneSize.w === 0 || paneSize.h === 0 || natural.w === 0 || natural.h === 0) return;
     const fit = Math.min(paneSize.w / natural.w, paneSize.h / natural.h);
+    const { tx: nt, ty: ny } = centeredAt(fit);
     setScale(fit);
-    const { tx: nt, ty: ny } = clampPan(0, 0, fit);
     setTx(nt);
     setTy(ny);
     setMounted(true);
-  }, [mounted, paneSize.w, paneSize.h, natural.w, natural.h, clampPan]);
+  }, [mounted, paneSize.w, paneSize.h, natural.w, natural.h, centeredAt]);
 
   const zoomAt = useCallback(
     (clientX: number, clientY: number, nextScale: number) => {
@@ -117,14 +117,14 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
       const py = clientY - rect.top;
       const clamped = clamp(nextScale, minScale, maxScale);
       const ratio = clamped / scale;
-      const candidateTx = px - (px - tx) * ratio;
-      const candidateTy = py - (py - ty) * ratio;
-      const clampedPan = clampPan(candidateTx, candidateTy, clamped);
+      // Unbounded zoom-at-cursor: the pan offset is a pure function of
+      // the new scale + cursor position + previous offset. Whatever the
+      // user's current pan, it's preserved (scaled) around the cursor.
       setScale(clamped);
-      setTx(clampedPan.tx);
-      setTy(clampedPan.ty);
+      setTx(px - (px - tx) * ratio);
+      setTy(py - (py - ty) * ratio);
     },
-    [scale, tx, ty, minScale, maxScale, clampPan],
+    [scale, tx, ty, minScale, maxScale],
   );
 
   // Centered zoom (for +/- buttons).
@@ -141,40 +141,35 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
   const fit = useCallback(() => {
     if (paneSize.w === 0 || paneSize.h === 0 || natural.w === 0 || natural.h === 0) return;
     const fitScale = Math.min(paneSize.w / natural.w, paneSize.h / natural.h);
+    const { tx: nt, ty: ny } = centeredAt(fitScale);
     setScale(fitScale);
-    const { tx: nt, ty: ny } = clampPan(0, 0, fitScale);
     setTx(nt);
     setTy(ny);
-  }, [paneSize.w, paneSize.h, natural.w, natural.h, clampPan]);
+  }, [paneSize.w, paneSize.h, natural.w, natural.h, centeredAt]);
 
-  // Wheel — zoom when ctrl/meta held or trackpad pinch (wheel with
-  // ctrlKey is how macOS emits pinch to JS). Plain wheel over the pane
-  // is blocked so the page doesn't scroll when the user expects to
-  // interact with the diamond.
+  // Wheel — scroll in any direction zooms around the cursor (no
+  // modifier required). Trackpad two-finger scroll and mouse wheel
+  // both emit wheel events with deltaY. preventDefault stops the page
+  // from scrolling when the pointer is over the pane.
   useEffect(() => {
     const pane = paneRef.current;
     if (!pane) return;
     const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        // deltaY negative = zoom in; positive = zoom out. macOS pinch
-        // sends small deltas, mouse wheel sends multiples of 100.
-        const intensity = Math.min(Math.abs(e.deltaY) * 0.01, 0.5);
-        const factor = e.deltaY < 0 ? 1 + intensity : 1 - intensity;
-        zoomAt(e.clientX, e.clientY, scale * factor);
-      } else {
-        // Block page scroll when the user expects to interact with the
-        // diamond. If they want to scroll, they can do so elsewhere.
-        e.preventDefault();
-      }
+      e.preventDefault();
+      // deltaY negative = zoom in; positive = zoom out. macOS pinch
+      // sends small deltas; mouse wheel sends multiples of ~100.
+      const intensity = Math.min(Math.abs(e.deltaY) * 0.01, 0.5);
+      const factor = e.deltaY < 0 ? 1 + intensity : 1 - intensity;
+      zoomAt(e.clientX, e.clientY, scale * factor);
     };
     pane.addEventListener("wheel", onWheel, { passive: false });
     return () => pane.removeEventListener("wheel", onWheel);
   }, [zoomAt, scale]);
 
-  // Pan — click-drag on pane background when zoomed past fit. Skip if
-  // the target is interactive (card, button, etc.) so react-dnd and
-  // button clicks still work.
+  // Pan — click-drag on pane background at any zoom level. Skip if the
+  // target is interactive (card, button, etc.) so react-dnd and button
+  // clicks still work. The user can drag the diamond anywhere (no
+  // bounds); the Fit button recenters.
   const panState = useRef<{
     pointerId: number;
     startX: number;
@@ -184,8 +179,6 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
   } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
-  const canPan = scale > fitScale + 0.001;
-
   function isInteractiveTarget(target: EventTarget | null): boolean {
     if (!(target instanceof Element)) return false;
     return !!target.closest(
@@ -194,7 +187,6 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
   }
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!canPan) return;
     if (isInteractiveTarget(e.target)) return;
     if (e.button !== 0) return;
     const pane = paneRef.current;
@@ -215,9 +207,8 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
     if (!state || state.pointerId !== e.pointerId) return;
     const dx = e.clientX - state.startX;
     const dy = e.clientY - state.startY;
-    const clamped = clampPan(state.baseTx + dx, state.baseTy + dy, scale);
-    setTx(clamped.tx);
-    setTy(clamped.ty);
+    setTx(state.baseTx + dx);
+    setTy(state.baseTy + dy);
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -233,8 +224,7 @@ export function ZoomCanvas({ children, className, naturalWidth, naturalHeight }:
       ref={paneRef}
       className={cn(
         "relative flex-1 overflow-hidden",
-        canPan && !isPanning && "cursor-grab",
-        isPanning && "cursor-grabbing",
+        isPanning ? "cursor-grabbing" : "cursor-grab",
         className,
       )}
       onPointerDown={handlePointerDown}
