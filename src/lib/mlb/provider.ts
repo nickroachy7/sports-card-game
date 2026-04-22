@@ -16,6 +16,13 @@ import { withBdlRetry } from "./retry";
 export interface MLBDataProvider {
   fetchTeams(): Promise<MLBTeam[]>;
   fetchActivePlayers(): AsyncIterable<MLBPlayer>;
+  /**
+   * Iterate every player BDL knows on the given team (no "active"
+   * filter). Polish spec §41 — `getActivePlayers` was too narrow
+   * (excluded 60-day IL + recently-optioned players that ARE on the
+   * 40-man). This path picks them up.
+   */
+  fetchPlayersByTeam(teamBdlId: number): AsyncIterable<MLBPlayer>;
   fetchPlayerInjuries(): Promise<MLBPlayerInjury[]>;
   fetchGamesByDate(date: Date): Promise<MLBGame[]>;
   fetchGame(gameId: number): Promise<MLBGame>;
@@ -37,6 +44,13 @@ class BallDontLieProvider implements MLBDataProvider {
   fetchActivePlayers(): AsyncIterable<MLBPlayer> {
     const bdl = getBdlClient();
     return paginate((cursor) => bdl.mlb.getActivePlayers({ cursor, per_page: 100 }));
+  }
+
+  fetchPlayersByTeam(teamBdlId: number): AsyncIterable<MLBPlayer> {
+    const bdl = getBdlClient();
+    return paginate((cursor) =>
+      bdl.mlb.getPlayers({ cursor, per_page: 100, team_ids: [teamBdlId] }),
+    );
   }
 
   async fetchPlayerInjuries(): Promise<MLBPlayerInjury[]> {

@@ -74,6 +74,9 @@ class FakeMLBProvider implements MLBDataProvider {
   fetchActivePlayers(): never {
     throw new Error("mock-provider: fetchActivePlayers not stubbed — add if a test needs it");
   }
+  fetchPlayersByTeam(): never {
+    throw new Error("mock-provider: fetchPlayersByTeam not stubbed — add if a test needs it");
+  }
   fetchPlayerInjuries(): never {
     throw new Error("mock-provider: fetchPlayerInjuries not stubbed — add if a test needs it");
   }

@@ -6,6 +6,7 @@ import { cronError, cronOk } from "@/lib/auth/cron-response";
 import { getDb } from "@/lib/db/client";
 import { asPgArray } from "@/lib/db/sql-helpers";
 import { getMLBProvider } from "@/lib/mlb/provider";
+import { type RosterAuditResult, runRosterAudit } from "@/lib/mlb/roster-audit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,9 +14,16 @@ export const runtime = "nodejs";
 /**
  * Daily roster sync — API spec §5.1, BDL integration §7.
  *
- * Pulls every active MLB player from BDL and upserts into `player`.
- * Also ensures `team` reference data exists before player upserts land
- * (since player.team_id FKs to team.id).
+ * Polish spec §41 (Phase 17): switched from BDL's
+ * `getActivePlayers` stream (narrow — excludes 60-day IL +
+ * recently-optioned players) to `getPlayers({ team_ids: [N] })`
+ * iterated per team. The earlier narrower path left a ~653-player
+ * gap vs. MLB's actual 40-man (surfaced by Phase 16's audit).
+ *
+ * Polish spec §42: after the BDL upsert pass, run the MLB
+ * roster-audit (from `@/lib/mlb/roster-audit`) to reconcile our
+ * `is_active_40_man` + `team_id` flags. Audit failure is logged +
+ * surfaced in the response but doesn't fail the cron.
  *
  * Idempotent. Designed to run at 04:00 ET daily via Vercel Cron.
  */
@@ -25,6 +33,7 @@ export async function GET(req: Request): Promise<Response> {
     const db = getDb();
     const provider = getMLBProvider();
 
+    // ── 1) Team reference data upsert. ──────────────────────────
     const teams = await provider.fetchTeams();
     for (const team of teams) {
       await db.execute(sql`
@@ -49,23 +58,59 @@ export async function GET(req: Request): Promise<Response> {
       `);
     }
 
+    // ── 2) Per-team player pull via `getPlayers`. ───────────────
     let upserts = 0;
     let skipped = 0;
-    for await (const p of provider.fetchActivePlayers()) {
+    let teamsProcessed = 0;
+    let bdlPlayersSeen = 0;
+
+    for (const team of teams) {
       try {
-        await upsertPlayer(p);
-        upserts += 1;
+        for await (const p of provider.fetchPlayersByTeam(team.id)) {
+          bdlPlayersSeen += 1;
+          try {
+            await upsertPlayer(p);
+            upserts += 1;
+          } catch (err) {
+            skipped += 1;
+            console.error(
+              "[bdl-roster-sync] skipping player",
+              { bdl_player_id: p.id, name: p.full_name },
+              err,
+            );
+          }
+        }
+        teamsProcessed += 1;
+        // Polite delay between team fetches.
+        await sleep(200);
       } catch (err) {
-        skipped += 1;
         console.error(
-          "[bdl-roster-sync] skipping player",
-          { bdl_player_id: p.id, name: p.full_name },
+          "[bdl-roster-sync] team fetch failed",
+          { team_id: team.id, abbr: team.abbreviation },
           err,
         );
       }
     }
 
-    return cronOk({ teams: teams.length, players_upserted: upserts, players_skipped: skipped });
+    // ── 3) Chain the MLB roster audit (polish spec §42). ────────
+    // Audit failure doesn't tank the sync; log + surface in response.
+    let audit: RosterAuditResult | { error: string };
+    try {
+      audit = await runRosterAudit(db, { dryRun: false });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[bdl-roster-sync] audit step failed", message);
+      audit = { error: message };
+    }
+
+    return cronOk({
+      teams: teams.length,
+      teams_processed: teamsProcessed,
+      bdl_players_seen: bdlPlayersSeen,
+      players_upserted: upserts,
+      players_skipped: skipped,
+      audit,
+    });
   } catch (err) {
     return cronError(err);
   }
@@ -139,4 +184,10 @@ async function upsertPlayer(p: MLBPlayer): Promise<void> {
       is_active_40_man = EXCLUDED.is_active_40_man,
       updated_at = now()
   `);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
