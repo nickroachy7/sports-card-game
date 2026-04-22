@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SidebarSection } from "@/components/layout/sidebar-card";
-import { createBrowserClient } from "@/lib/db/supabase";
+import { createBrowserClient } from "@/lib/db/supabase-browser";
 import {
   eventActionLabel,
   eventFpDelta,

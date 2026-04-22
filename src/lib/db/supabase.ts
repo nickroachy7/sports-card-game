@@ -1,23 +1,11 @@
-import {
-  createBrowserClient as createSsrBrowserClient,
-  createServerClient as createSsrServerClient,
-} from "@supabase/ssr";
+import { createServerClient as createSsrServerClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 import { getServerEnv } from "@/lib/env";
 
-/**
- * Browser-side Supabase client. Safe to call in "use client" components.
- * Reads session cookie set by the middleware; persists new ones via the
- * browser's Cookie Store.
- */
-export function createBrowserClient(): SupabaseClient {
-  return createSsrBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string,
-  );
-}
+// Browser client lives in `./supabase-browser` so importing it from a
+// "use client" module doesn't drag in `next/headers` (server-only).
 
 /**
  * Server-side Supabase client for Server Components, Server Actions, and
