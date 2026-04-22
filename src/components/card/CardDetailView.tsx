@@ -69,9 +69,10 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
     card.tokensApplied > 0 ? Math.round((card.tokensTriggered / card.tokensApplied) * 100) : null;
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-8 md:flex-row">
-      {/* Hero */}
-      <div className="flex flex-col items-center gap-4 md:items-start">
+    <div className="flex flex-col gap-4 px-2 py-3">
+      {/* Hero — medium card (160x224) fits the 288px sidebar with
+          margin. Polish spec §33. */}
+      <div className="flex flex-col items-center gap-3">
         <DissolveCard
           active={dissolving}
           onComplete={() => {
@@ -79,15 +80,15 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
             router.refresh();
           }}
         >
-          <Card card={card} size="large" />
+          <Card card={card} size="medium" />
         </DissolveCard>
       </div>
 
-      {/* Info panel */}
-      <section className="flex flex-1 flex-col gap-6">
-        <header className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <h1 className="font-sans text-2xl font-bold tracking-tight text-[var(--text)]">
+      {/* Info panel — single scrollable column below the card. */}
+      <section className="flex flex-col gap-4">
+        <header className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-bold font-sans text-[var(--text)] text-lg tracking-tight">
               {card.playerName}
             </h1>
             {card.position && (
@@ -101,9 +102,9 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
               </Badge>
             )}
           </div>
-          <div className="flex items-center gap-3 text-sm text-[var(--text-2)]">
+          <div className="flex flex-wrap items-center gap-2 text-[var(--text-2)] text-xs">
             <span
-              className="rounded px-2 py-0.5 text-xs font-bold uppercase tracking-wider"
+              className="rounded px-2 py-0.5 font-bold text-[10px] uppercase tracking-wider"
               style={{ backgroundColor: frame.accent, color: "var(--bg)" }}
             >
               {TIER_LABEL[card.tier]}
@@ -112,21 +113,25 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
               Contract {card.contractPlays}/{card.contractMax}
             </span>
             {card.extensionCount > 0 && (
-              <span className="text-[var(--text-3)]">
-                · {card.extensionCount} extension{card.extensionCount === 1 ? "" : "s"}
-              </span>
+              <span className="text-[var(--text-3)]">· {card.extensionCount} ext.</span>
             )}
           </div>
         </header>
 
-        <Tabs defaultValue="overview" className="flex flex-col gap-4">
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="tokens">Token Stats</TabsTrigger>
-            <TabsTrigger value="log">Game Log</TabsTrigger>
+        <Tabs defaultValue="overview" className="flex flex-col gap-3">
+          <TabsList className="w-full">
+            <TabsTrigger value="overview" className="flex-1 text-xs">
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="tokens" className="flex-1 text-xs">
+              Tokens
+            </TabsTrigger>
+            <TabsTrigger value="log" className="flex-1 text-xs">
+              Log
+            </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="overview" className="flex flex-col gap-5">
+          <TabsContent value="overview" className="flex flex-col gap-4">
             <section>
               <div className="mb-1 flex items-end justify-between">
                 <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">
@@ -169,10 +174,10 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
               </p>
             </section>
 
-            <section className="flex flex-col gap-3">
-              <h3 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Actions</h3>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <div className="flex-1">
+            <section className="flex flex-col gap-2">
+              <h3 className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">Actions</h3>
+              <div className="flex flex-col gap-2">
+                <div>
                   <ExtendContractModal
                     cardId={card.id}
                     playerName={card.playerName}
@@ -188,7 +193,7 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
                     }}
                   />
                 </div>
-                <div className="flex-1">
+                <div>
                   <QuickSellModal
                     cardId={card.id}
                     playerName={card.playerName}
@@ -234,10 +239,10 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
           </TabsContent>
 
           <TabsContent value="tokens" className="flex flex-col gap-3">
-            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <dl className="grid grid-cols-3 gap-2">
               <Stat label="Applied" value={card.tokensApplied.toLocaleString()} />
               <Stat label="Triggered" value={card.tokensTriggered.toLocaleString()} />
-              <Stat label="Success rate" value={successRate === null ? "—" : `${successRate}%`} />
+              <Stat label="Rate" value={successRate === null ? "—" : `${successRate}%`} />
             </dl>
             <p className="text-xs text-[var(--text-3)]">
               Per-type breakdown lands with live contests in Phase 3.
@@ -251,9 +256,8 @@ export function CardDetailView({ data }: { data: CardDetailData }) {
           </TabsContent>
         </Tabs>
 
-        <footer className="flex items-center gap-3 text-xs text-[var(--text-3)]">
+        <footer className="flex flex-col gap-0.5 text-[10px] text-[var(--text-3)]">
           <span>Tiers: {TIERS.map((t) => TIER_LABEL[t]).join(" → ")}</span>
-          <span>·</span>
           <span>Acquired {new Date(card.acquiredAt).toLocaleDateString()}</span>
         </footer>
       </section>
