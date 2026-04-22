@@ -2636,3 +2636,190 @@ no service-time filter.
 - `retry_failed=true` offset pagination.
 - `/collection/[cardId]` as a full-page experience (sidebar
   is canonical; route redirects).
+
+---
+
+# Phase 16 batch — locked 2026-04-22
+
+Feel Pass v1.9.6. Two items:
+
+1. Lineup-page shell: sidebar extends to viewport bottom,
+   matching the collection-page shape. Bench + tokens strip
+   narrows horizontally (loses ~288px) but stays in its
+   current vertical position. Closes the last visual
+   inconsistency between `/lineup` and `/collection`.
+2. Roster-sync audit against MLB Stats. Phase 15's ADR-0020
+   identified that BDL's `is_active_40_man` flag is stale
+   for ~130 players; matcher is now correct but upstream
+   data isn't. New `/api/cron/mlb-roster-audit` endpoint
+   reconciles flags + team_ids against MLB's actual 40-man,
+   then re-running the mlbam backfill unlocks the residual
+   matches.
+
+---
+
+## 38. Lineup shell — full-height sidebar
+
+### Goal
+
+On `/lineup`, the right sidebar currently extends only down
+to the top of the bench + tokens strip; the strip runs full
+page width below. Collection-page sidebar runs the full
+viewport height. Unify the two by letting the lineup sidebar
+also extend to the bottom; bench + tokens become confined
+to the left column (narrower by the sidebar width).
+
+### Scope
+
+- `<LineupShell>` restructure:
+  - Main flex row grows to full remaining height (as today).
+  - Left column becomes a vertical flex container holding
+    `{diamond (flex-1) → bench (shrink-0) → tokens (shrink-0)}`.
+  - Right sidebar fills full height of that row (as today
+    it does horizontally, now also vertically relative to
+    the main row — because it's in the same flex row the
+    bench strip is no longer above/below).
+- Bench + tokens render unchanged internally; they just sit
+  inside a narrower containing column.
+- The bench's horizontal-scroll already handles narrow
+  widths — nothing to re-code.
+
+### Behavior
+
+- At ≥ 1040px viewport: sidebar is 288px (w-72); diamond +
+  bench + tokens share the rest (min. ~752px).
+- At ~900–1040px: diamond compresses first (spec §24 kept
+  the 80px column min); bench gains horizontal scroll earlier.
+- Below 900px: the existing `<main>` wraps with
+  `overflow-auto`; sidebar may wrap below the left column
+  if needed (unchanged from today's `md:flex` gate).
+
+### Acceptance
+
+- [ ] Sidebar visible from header bottom all the way to the
+  viewport bottom at ≥ 1440px widths.
+- [ ] Bench strip ends at the sidebar's left edge (no longer
+  runs full page width).
+- [ ] Tokens strip same.
+- [ ] Diamond still fits + scrolls horizontally if compressed.
+- [ ] Sidebar content still scrolls independently (important
+  for the card-detail panel which can exceed viewport
+  height).
+- [ ] No regression to existing drag/drop, glow, slot click.
+
+### Trade-offs
+
+- **Bench loses ~288px of horizontal room.** At narrow
+  viewports fewer bench cards fit at once; horizontal
+  scroll compensates. Matches the aesthetic win.
+- **Sidebar height is now unbounded by the bench above.**
+  If detail content is short, the sidebar has more
+  breathing room. If it's long, the sidebar scrolls (it
+  already does). Either way cleaner than the cut-off
+  behavior.
+
+---
+
+## 39. MLB roster audit — fix stale is_active_40_man + team_id
+
+### Goal
+
+Phase 15's ADR-0020 closed with an honest finding: the
+~158-player residual from MLBAM backfill is a BDL roster-
+sync staleness problem, not a matcher problem. Our cached
+`is_active_40_man = true` flags are true for players MLB's
+actual 40-man doesn't include, and our `team_id` can point
+at a player's old team after a trade. Add an audit pass
+that reconciles our flags against MLB Stats + gives us a
+one-button fix before re-running the mlbam backfill.
+
+### Scope
+
+- **New endpoint** `/api/cron/mlb-roster-audit`,
+  `CRON_SECRET`-gated. For each of the 30 teams:
+  - Fetches `/api/v1/teams/{mlbStatsTeamId}/roster?rosterType=40Man&hydrate=person`.
+  - Collects the MLBAM ids in the roster set.
+- Global steps once all rosters fetched:
+  - **Turn flags OFF** for players where
+    `is_active_40_man = true` but their `mlbam_id` isn't in
+    any of the 30 rosters AND their normalized name
+    doesn't match any roster entry. Rationale: we might
+    not have an mlbam_id yet for a player who IS on a 40-
+    man; guard by name-fallback before flipping off.
+  - **Turn flags ON** for players where `is_active_40_man
+    = false` but they are in a 40-man roster (by mlbam_id
+    or name match). Rare but handles re-callups where BDL
+    is late.
+  - **Refresh `team_id`** for any player whose matched
+    roster belongs to a different team than `team_id`
+    currently points to. Accepts the MLB Stats team as
+    source of truth.
+- **Players on MLB's 40-man but absent from our
+  `public.player`**: log the count only. Creating those
+  rows would drift our data model away from BDL's shape
+  (we'd be missing BDL's per-player fields). Next
+  `bdl-roster-sync` picks them up.
+
+### Behavior
+
+- Response shape: `{ teams_processed, flagged_off,
+  flagged_on, team_refreshed, missing_from_our_db,
+  unchanged }`.
+- Idempotent: running it again after a clean run updates
+  nothing.
+- Re-running is cheap (30 HTTP calls).
+- Must be invoked manually via `curl` with
+  `Authorization: Bearer $CRON_SECRET`. No schedule
+  (Vercel Hobby cron budget).
+
+### Acceptance
+
+- [ ] First run shifts ~100+ players via `flagged_off`
+  (the P15 residual).
+- [ ] Subsequent run shows 0 changes.
+- [ ] Immediately after the audit, running
+  `mlbam-id-backfill?retry_failed=true` drops
+  `unmatched_total` close to 0 (now that the active set is
+  correct).
+- [ ] Runbook entry added.
+
+### Dependencies
+
+- `src/lib/mlb/mlb-stats-team-ids.ts` from Phase 15.
+- Same `normalizeName` + `levenshtein` from
+  `src/lib/mlb/name-match.ts`.
+- No schema change.
+
+### Trade-offs
+
+- **MLB Stats as source of truth for the flag/team.** BDL
+  remains source for row creation + per-player metadata
+  (positions, heights, etc.); MLB Stats corrects
+  operational state (is-on-40-man + current team).
+- **Name-fallback before flipping off** is a safety — a
+  player might genuinely be on a 40-man but we haven't
+  backfilled their mlbam_id yet. If the name matches a
+  roster entry, leave the flag on; if not, the player
+  really isn't there.
+- **No automatic mlbam_id backfill in the audit.** The
+  audit only corrects flags/teams. Backfill remains a
+  separate step so the responsibilities stay clean.
+
+---
+
+## 40. Not in scope for v1.10
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Auto-sub contract-depletion glow.
+- Auto-creation of player rows missed by BDL sync.
+- Scheduled roster-audit cron.
+- Card detail URL sync on lineup page.
