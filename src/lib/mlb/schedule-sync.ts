@@ -2,6 +2,8 @@ import { sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import { asPgArrayOrNull } from "@/lib/db/sql-helpers";
+import { fetchMlbStatsSchedule } from "@/lib/mlb/mlb-stats-schedule";
+import { MLB_STATS_TEAM_IDS } from "@/lib/mlb/mlb-stats-team-ids";
 import { getMLBProvider } from "@/lib/mlb/provider";
 import { withBdlRetry } from "@/lib/mlb/retry";
 
@@ -38,6 +40,11 @@ export type SyncSummary = {
   synced: number;
   /** Games skipped due to per-row errors (missing team, bad payload, etc). */
   skipped: number;
+  /**
+   * Game rows that got `scheduled_start` populated/refreshed from the
+   * MLB Stats API second-pass (polish spec §52).
+   */
+  scheduled_starts_updated: number;
   /** Date strings (YYYY-MM-DD) covered in this run. */
   days: string[];
   /** Human-readable notes for observability. Bounded at 20 entries. */
@@ -71,7 +78,25 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
   const provider = getMLBProvider();
   const db = getDb();
 
-  const summary: SyncSummary = { synced: 0, skipped: 0, days: [], errors: [] };
+  const summary: SyncSummary = {
+    synced: 0,
+    skipped: 0,
+    scheduled_starts_updated: 0,
+    days: [],
+    errors: [],
+  };
+
+  // Reverse map: MLB Stats teamId → our team.abbreviation. Built once
+  // and used to look up our team uuid in the scheduled_start UPDATE
+  // below. Handles BDL/our abbreviation aliases (OAK/ATH, CWS/CHW).
+  const teamAbbrByMlbStatsId = new Map<number, string>();
+  for (const [abbr, mlbId] of Object.entries(MLB_STATS_TEAM_IDS)) {
+    // Prefer the first-registered abbr for a given teamId (aliases
+    // come second in the const map). Won't fully matter since both
+    // abbreviations resolve to the same team in public.team via
+    // abbreviation lookup below.
+    if (!teamAbbrByMlbStatsId.has(mlbId)) teamAbbrByMlbStatsId.set(mlbId, abbr);
+  }
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -149,6 +174,32 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
         const tag = `${g.away_team?.abbreviation ?? "???"}@${g.home_team?.abbreviation ?? "???"}`;
         pushError(summary, `game ${g.id} (${tag} on ${iso}): ${msg}`);
       }
+    }
+
+    // Polish spec §52 — second pass: populate `scheduled_start` from
+    // MLB Stats API. BDL doesn't expose start times, so we'd be stuck
+    // with `scheduled_start IS NULL` forever without this.
+    try {
+      const schedule = await fetchMlbStatsSchedule(iso);
+      for (const entry of schedule) {
+        const homeAbbr = teamAbbrByMlbStatsId.get(entry.homeMlbStatsTeamId);
+        const awayAbbr = teamAbbrByMlbStatsId.get(entry.awayMlbStatsTeamId);
+        if (!homeAbbr || !awayAbbr) continue;
+        const res = await db.execute(sql`
+          UPDATE public.game
+          SET scheduled_start = ${entry.scheduledStartIso}::timestamptz,
+              updated_at = now()
+          WHERE date = ${iso}::date
+            AND home_team_id = (SELECT id FROM public.team WHERE abbreviation = ${homeAbbr})
+            AND away_team_id = (SELECT id FROM public.team WHERE abbreviation = ${awayAbbr})
+            AND (scheduled_start IS NULL
+                 OR scheduled_start IS DISTINCT FROM ${entry.scheduledStartIso}::timestamptz)
+        `);
+        summary.scheduled_starts_updated += res.rowCount ?? 0;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      pushError(summary, `mlb-stats schedule ${iso}: ${msg}`);
     }
   }
 

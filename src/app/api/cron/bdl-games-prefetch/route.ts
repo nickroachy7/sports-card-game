@@ -33,12 +33,14 @@ export async function GET(req: Request): Promise<Response> {
 
     // Auto-create today's daily contest bound to these games.
     // Idempotent — returns the existing contest id if one already
-    // exists for CURRENT_DATE.
+    // exists, and (polish spec §51) refreshes included_game_ids for
+    // the current set. Slate date driven by public.current_slate_date()
+    // (4 AM ET pivot — polish spec §50).
     const db = getDb();
     let contestId: string | null = null;
     try {
       const res = await db.execute<{ create_daily_contest: string }>(sql`
-        SELECT public.create_daily_contest(CURRENT_DATE) AS create_daily_contest
+        SELECT public.create_daily_contest() AS create_daily_contest
       `);
       contestId = res.rows[0]?.create_daily_contest ?? null;
     } catch (err) {
@@ -48,6 +50,7 @@ export async function GET(req: Request): Promise<Response> {
     return cronOk({
       synced: summary.synced,
       skipped: summary.skipped,
+      scheduled_starts_updated: summary.scheduled_starts_updated,
       days: summary.days,
       errors: summary.errors,
       contest_id: contestId,

@@ -24,8 +24,11 @@ export default async function LineupPage() {
   const db = getDb();
 
   // Ensure today's contest exists (idempotent) + get its id.
+  // Polish spec §50 — defaulting to public.current_slate_date() lets the
+  // fn pick the ET-aware slate (4 AM ET pivot). Also refreshes
+  // included_game_ids on each call (spec §51).
   const contestRes = await db.execute<{ create_daily_contest: string }>(sql`
-    SELECT public.create_daily_contest(CURRENT_DATE) AS create_daily_contest
+    SELECT public.create_daily_contest() AS create_daily_contest
   `);
   const contestId = contestRes.rows[0]?.create_daily_contest;
   if (!contestId) {

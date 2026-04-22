@@ -156,7 +156,7 @@ export async function runRosterAudit(
       });
       continue;
     }
-    if (inRoster && nameMatch && nameMatch.teamDbId && nameMatch.teamDbId !== p.team_id) {
+    if (inRoster && nameMatch?.teamDbId && nameMatch.teamDbId !== p.team_id) {
       deltas.push({
         kind: "team_refresh",
         id: p.id,
