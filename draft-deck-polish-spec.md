@@ -4815,3 +4815,244 @@ drawer. V1 scope: view email, change password.
 - Matchup-context side panels.
 - Baserunners / pitcher-on-mound.
 - Standard parked items.
+
+---
+
+# Phase 30 — v1.17 (Unified sidebar + card detail modal)
+
+User feedback after Phase 29: the building-state sidebar feels
+cluttered (too many sections competing for attention), and the
+Collection page has a different sidebar from Lineup which feels
+inconsistent. This phase unifies the sidebar across both pages and
+moves the card-detail interaction to a modal overlay instead of a
+sidebar swap.
+
+---
+
+## 88. Unified cross-page sidebar
+
+### Goal
+
+One sidebar component that renders on both `/lineup` and
+`/collection` with the same content, anchored around the user's
+team identity + the active contest state. Users get a stable "you
+are here" panel regardless of which page they're on.
+
+### Scope
+
+- New `AppSidebar` component (replacing `LineupSidebar` +
+  `CollectionSummaryStats` / `SelectedCardSidebar` swaps).
+- Three stacked sections:
+  1. **Team summary** (top) — team name, Vault Value Total
+     (sum of quick-sell values for all vaulted cards at their
+     final tier), Total FP (career FP lifetime), Vaulted Cards
+     count. Read from `manager_account` + aggregate query.
+  2. **Contest header** — active contest name + lock countdown
+     when `building`, status copy when `submitted / live / final`.
+     Unchanged from current `ContestHeaderCard` — just relocated.
+  3. **Contest state** — Live Score + Box Score + Event Feed
+     when `entryStatus !== 'building'`. When building, show
+     Readiness counter (x/10 slots filled) + warnings list +
+     compact Submit button. When no contest today, show a
+     minimal placeholder.
+- Card-click interactions on both pages STOP swapping the
+  sidebar. Sidebar stays locked to summary content.
+- Both `LineupShell` and `CollectionShell` accept this
+  `<AppSidebar>` the same way. Shell differences (bench + tokens
+  on lineup, grid content on collection) stay.
+- Building-state submit area: tighten vertical rhythm. Keep
+  Submit (still valuable — entry `building → submitted`
+  transition), tighten padding + line-height so it reads as one
+  compact block instead of scattered sections.
+
+### Acceptance
+
+- [ ] Navigating between `/lineup` and `/collection` shows the
+      same sidebar layout + content.
+- [ ] Team summary visible on both pages.
+- [ ] Live Score / Box Score / Event Feed render post-submit on
+      both pages (collection users see their contest state
+      even while browsing their collection).
+- [ ] Sidebar does NOT swap when a card is clicked.
+- [ ] Building-state sidebar is visibly tighter than before.
+
+### Trade-offs
+
+- **Collection loses its dedicated stats block.** The
+  `CollectionSummaryStats` (tier counts, collection-size-vs-cap,
+  near-cap warning) gets absorbed into either the team summary
+  (Vaulted Cards count covers part of it) OR deferred. Near-cap
+  warning stays on the collection page itself as an inline
+  banner (polish spec §25 already has this).
+- **Event Feed on Collection page** — a bit unusual to see
+  event feed while browsing collection, but the trade-off is
+  consistency. If users find it distracting we iterate.
+
+---
+
+## 89. Card detail modal
+
+### Goal
+
+Clicking any card (bench, slot, collection grid) opens a modal
+overlay with card detail + actions. Replaces the
+sidebar-swap behavior. Same interaction from both pages.
+
+### Scope
+
+- New `CardDetailModal` component using shadcn `dialog`
+  primitive. Centered overlay with card render + stats + context-
+  specific actions.
+- Context drives the action buttons:
+  - From Lineup slot: "Remove from slot" (drag-out alternative),
+    "Apply token" (token picker if no token applied), "Remove
+    token" (if one applied).
+  - From Lineup bench: "Add to slot" (if an open slot accepts
+    this card), "Apply token" / "Remove token."
+  - From Collection: "Quick-sell," "Vault (midseason)" if
+    eligible.
+- Closes on outside click, Escape key, or explicit close button.
+- URL param (`?card={id}`) preserves modal state so back/forward
+  navigation + shareable links work — same pattern used by the
+  previous detail-sidebar swap.
+- `SelectedCardSidebar` is removed after the modal fully
+  replaces its functionality.
+
+### Acceptance
+
+- [ ] Clicking a card on any page opens modal.
+- [ ] Modal shows card detail + context-appropriate actions.
+- [ ] Closing via outside click / Escape / X button all work.
+- [ ] `?card={id}` URL param reflects modal state.
+- [ ] Back/forward browser nav closes/opens the modal.
+
+### Trade-offs
+
+- **Modal has smaller screen-real estate than the full-height
+  sidebar** — card info has to be more compact. Acceptable
+  since most detail fits in a reasonable modal footprint.
+- **Collection's /collection/[cardId]/page.tsx route** stays
+  for deep-linkability (SEO + share) but the modal is the
+  primary interaction.
+
+---
+
+## 90. Not in scope for v1.17
+
+- Baserunners + pitcher-on-mound (Phase 31).
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Standard parked items.
+
+---
+
+# Phase 31 — v1.18 (Baserunners + pitcher-on-mound)
+
+Final live-game polish item for v1. Full stack: new DB columns,
+webhook handler parsing, per-slot UI.
+
+---
+
+## 91. Baserunners live tracking
+
+### Goal
+
+The live slot footer currently shows inning + outs + score when a
+game is in progress. Add a mini diamond icon that visualizes which
+bases are occupied so users can see at a glance if their player is
+batting with runners on.
+
+### Scope
+
+- **Migration 0038:** new columns on `public.game`:
+  - `baserunner_first uuid NULL` (player_id on 1B)
+  - `baserunner_second uuid NULL` (player_id on 2B)
+  - `baserunner_third uuid NULL` (player_id on 3B)
+  - All NULL when `status != 'live'`.
+- **Webhook handler:** parse `play.runners` (or equivalent) from
+  BDL webhook payloads. On each batter event, update all three
+  columns idempotently (IS DISTINCT FROM pattern already
+  established in P22).
+- **SlotGameInfo type:** add `baserunnerFirst / Second / Third`
+  as `string | null`.
+- **UI:** new `<BaserunnerDiamond>` component — a small inline
+  SVG (roughly 16×16) showing 4 corners (home + 3 bases) with
+  occupied corners filled. Renders inside the LIVE slot footer
+  pill after the outs indicator. Example: `LIVE · T5 2O · 2-1 ◆`
+  where the diamond shape highlights occupied bases.
+- **game_live_snapshot_on_game_update Realtime:** the existing
+  Realtime subscription on `public.game` will automatically
+  carry the new columns; no subscription changes needed.
+
+### Acceptance
+
+- [ ] Webhook payload with runners updates all three columns.
+- [ ] Live slot footer shows the baserunner diamond when
+      occupied; hidden when bases empty.
+- [ ] Diamond updates in real-time as play progresses.
+- [ ] No extra queries required — all data flows via Realtime
+      already.
+
+### Trade-offs
+
+- **Baserunner identity (which player is on 2B) isn't
+  displayed** — users just see "somebody on 2B." We store
+  `player_id` so future UX (hover tooltip?) could surface names.
+- **SVG over text** — a tiny diamond glyph reads faster than
+  "R: 2,3" text. Adds visual cost but the slot footer is
+  dense; the glyph integrates cleanly.
+
+---
+
+## 92. Pitcher-on-mound indicator
+
+### Goal
+
+Hitters facing a specific pitcher in real-time is interesting —
+users want to know "Judge vs. Gerrit Cole coming up." Show the
+current pitcher's name on hitter slots whose team is batting.
+
+### Scope
+
+- **Migration 0038 (same one as §91):** new column
+  `public.game.pitcher_player_id uuid NULL`.
+- **Webhook handler:** on each batter event, update the column
+  to the current pitcher's `player_id` (from the play payload).
+  Idempotent update pattern.
+- **SlotGameInfo type:** add `pitcherPlayerId: string | null` +
+  `pitcherName: string | null` (joined from `public.player` at
+  fetch time).
+- **UI:** live-state slot footer for hitter slots that are
+  currently batting (inning_half corresponds to their team)
+  shows a subtle second-line `vs [Pitcher Name]`. Only renders
+  when: (a) slot is a hitter, (b) game is live, (c) game's
+  `inning_half` means the hitter's team is at bat.
+- **`fetchSlotGameByCardId`** already joins game info; extend
+  to include `pitcher_name` via a LEFT JOIN with `public.player`.
+
+### Acceptance
+
+- [ ] New column populates from webhook.
+- [ ] Hitter slot footer shows `vs [Pitcher Name]` when their
+      team is batting.
+- [ ] No pitcher display when game is scheduled/final or when
+      the hitter's team is fielding.
+- [ ] Pitcher name updates in real-time as pitching changes
+      (bullpen swaps).
+
+### Trade-offs
+
+- **One extra JOIN** in `fetchSlotGameByCardId` — cheap, single
+  player lookup per contest-game.
+- **Doesn't surface pitcher quality / stats** — just the name.
+  Match-up analysis is future work.
+
+---
+
+## 93. Not in scope for v1.18
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Baserunner names (hover tooltip).
+- Pitcher stats / matchup analysis.
+- Standard parked items.
