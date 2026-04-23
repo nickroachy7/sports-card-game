@@ -176,24 +176,47 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
       }
     }
 
-    // Polish spec §52 — second pass: populate `scheduled_start` from
-    // MLB Stats API. BDL doesn't expose start times, so we'd be stuck
-    // with `scheduled_start IS NULL` forever without this.
+    // Polish spec §52 (Phase 19) + §65 (Phase 22) — second pass:
+    // populate `scheduled_start` + `game_number` from MLB Stats API.
+    // BDL doesn't expose start times or DH numbering.
+    //
+    // Matching strategy for DH days: MLB Stats may return 2 entries
+    // for a matchup (gameNumber 1 + 2). For each entry, UPDATE the
+    // FIRST unclaimed row that belongs to this matchup (claimed =
+    // game_number already set). For non-DH days (single entry) this
+    // matches the one row with a single UPDATE.
     try {
       const schedule = await fetchMlbStatsSchedule(iso);
-      for (const entry of schedule) {
+      // Process entries in gameNumber order so 1 lands before 2 and
+      // we don't race for the same NULL row.
+      const sorted = [...schedule].sort((a, b) => a.gameNumber - b.gameNumber);
+      for (const entry of sorted) {
         const homeAbbr = teamAbbrByMlbStatsId.get(entry.homeMlbStatsTeamId);
         const awayAbbr = teamAbbrByMlbStatsId.get(entry.awayMlbStatsTeamId);
         if (!homeAbbr || !awayAbbr) continue;
+        // Target the row that either has no game_number yet (fresh
+        // BDL insert) OR already has this game_number (re-run). If a
+        // different game_number is already set for this matchup we
+        // leave it alone — prevents clobbering DH1's data when
+        // processing a DH2 entry for the same matchup.
         const res = await db.execute(sql`
-          UPDATE public.game
+          UPDATE public.game AS g
           SET scheduled_start = ${entry.scheduledStartIso}::timestamptz,
+              game_number = ${entry.gameNumber}::smallint,
               updated_at = now()
-          WHERE date = ${iso}::date
-            AND home_team_id = (SELECT id FROM public.team WHERE abbreviation = ${homeAbbr})
-            AND away_team_id = (SELECT id FROM public.team WHERE abbreviation = ${awayAbbr})
-            AND (scheduled_start IS NULL
-                 OR scheduled_start IS DISTINCT FROM ${entry.scheduledStartIso}::timestamptz)
+          WHERE g.id = (
+            SELECT id FROM public.game
+            WHERE date = ${iso}::date
+              AND home_team_id = (SELECT id FROM public.team WHERE abbreviation = ${homeAbbr})
+              AND away_team_id = (SELECT id FROM public.team WHERE abbreviation = ${awayAbbr})
+              AND (game_number IS NULL OR game_number = ${entry.gameNumber}::smallint)
+            ORDER BY
+              (game_number = ${entry.gameNumber}::smallint) DESC,
+              created_at ASC
+            LIMIT 1
+          )
+          AND (scheduled_start IS DISTINCT FROM ${entry.scheduledStartIso}::timestamptz
+               OR game_number IS DISTINCT FROM ${entry.gameNumber}::smallint)
         `);
         summary.scheduled_starts_updated += res.rowCount ?? 0;
       }

@@ -118,31 +118,50 @@ function toneClass(status: SlotGameInfo["status"]): string {
 
 function renderFooter(info: SlotGameInfo): string | null {
   const vs = info.isHome ? "vs" : "@";
+  // Polish spec §65 (Phase 22). Append "(DH1)" / "(DH2)" only when
+  // THIS matchup has both DH games in our DB — a single-game matchup
+  // shouldn't suffix "(DH1)" just because MLB Stats returns
+  // gameNumber=1 by default for every non-DH game.
+  const dhMarker =
+    info.hasDoubleHeader && info.gameNumber !== null ? ` (DH${info.gameNumber})` : "";
+
   if (info.status === "scheduled") {
     const time = info.scheduledStart ? formatTime(info.scheduledStart) : "TBD";
-    return `${vs} ${info.opponentAbbr} · ${time}`;
+    return `${vs} ${info.opponentAbbr} · ${time}${dhMarker}`;
   }
   if (info.status === "live") {
-    // Polish spec §54 (Phase 20) — show "T5" / "B8" when populated
-    // by the webhook handler; fall back to just the score otherwise.
+    // Polish spec §54 (Phase 20) + §64 (Phase 22). Inning like
+    // "T5" / "B8" when populated; outs appended as "2O" when
+    // present. Score always appended if we have both team runs.
+    //   Examples: "LIVE · T5 2O · 2-1 (DH1)"  /  "LIVE · 2-1"
     const halfPrefix =
       info.currentInningHalf === "top" ? "T" : info.currentInningHalf === "bottom" ? "B" : null;
-    const inningPart =
+    const inningWord =
       halfPrefix !== null && info.currentInning !== null
-        ? ` · ${halfPrefix}${info.currentInning}`
-        : "";
+        ? `${halfPrefix}${info.currentInning}`
+        : null;
+    const outsWord = info.currentOuts !== null ? `${info.currentOuts}O` : null;
+    const innings =
+      inningWord && outsWord
+        ? `${inningWord} ${outsWord}`
+        : inningWord
+          ? inningWord
+          : outsWord
+            ? outsWord
+            : null;
+    const inningPart = innings ? ` · ${innings}` : "";
     const scorePart =
       info.homeRuns !== null && info.awayRuns !== null
         ? ` · ${info.homeRuns}-${info.awayRuns}`
         : "";
-    return `LIVE${inningPart}${scorePart}`;
+    return `LIVE${inningPart}${scorePart}${dhMarker}`;
   }
   if (info.status === "final") {
     const ourRuns = info.isHome ? info.homeRuns : info.awayRuns;
     const theirRuns = info.isHome ? info.awayRuns : info.homeRuns;
-    if (ourRuns === null || theirRuns === null) return "FINAL";
+    if (ourRuns === null || theirRuns === null) return `FINAL${dhMarker}`;
     const wl = ourRuns > theirRuns ? "W" : ourRuns < theirRuns ? "L" : "T";
-    return `FINAL ${wl} ${ourRuns}-${theirRuns}`;
+    return `FINAL ${wl} ${ourRuns}-${theirRuns}${dhMarker}`;
   }
   if (info.status === "postponed") return "POSTPONED";
   if (info.status === "suspended") return "SUSPENDED";

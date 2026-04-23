@@ -55,6 +55,16 @@ export type SlotGameInfo = {
   currentInning: number | null;
   /** 'top' | 'bottom' during live play, NULL otherwise. */
   currentInningHalf: "top" | "bottom" | null;
+  /** Polish spec §64 (Phase 22). 0-2 during live play, NULL when
+   *  scheduled or final. Webhook handler populates via play.outs. */
+  currentOuts: number | null;
+  /** Polish spec §65 (Phase 22). 1 or 2 for DHs; 1 (or null) for
+   *  single-game matchups. Drives the DH marker in the slot footer. */
+  gameNumber: number | null;
+  /** True when THIS matchup-date has both DH1 and DH2 rows in our DB.
+   *  Drives whether the slot-footer DH marker renders at all — a
+   *  single-game matchup shouldn't confuse users with "(DH1)". */
+  hasDoubleHeader: boolean;
 };
 
 export type LineupTokenVM = {

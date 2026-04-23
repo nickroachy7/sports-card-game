@@ -17,6 +17,9 @@ export type WebhookPayload = {
     score_value?: number;
     inning?: number;
     inning_half?: string;
+    /** Polish spec §64 — present on every batter event; used to
+     *  update public.game.current_outs. */
+    outs?: number;
     home_score?: number;
     away_score?: number;
   };
@@ -106,6 +109,8 @@ async function handleGameStarted(
         -- game.started delivery; don't stomp its value.
         current_inning = COALESCE(current_inning, 1),
         current_inning_half = COALESCE(current_inning_half, 'top'),
+        -- Polish spec §64 (Phase 22): seed outs to 0 likewise.
+        current_outs = COALESCE(current_outs, 0),
         updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
     RETURNING id
@@ -148,10 +153,11 @@ async function handleGameEnded(
     UPDATE public.game
     SET status = 'final'::game_status,
         ended_at = now(),
-        -- Polish spec §54 — clear live-inning state; FINAL footer
-        -- renders just the score, no trailing "T9".
+        -- Polish spec §54 + §64 — clear live-inning + outs state;
+        -- FINAL footer renders just the score, no trailing "T9 2O".
         current_inning = NULL,
         current_inning_half = NULL,
+        current_outs = NULL,
         updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
     RETURNING id
@@ -250,16 +256,24 @@ async function handleGameEvent(
   // IS DISTINCT FROM: Postgres only touches the row when the inning
   // or half actually changes, so Realtime broadcasts are the
   // signal-only set (~half-inning transitions, ~18/game).
-  if (inning !== null || inningHalf !== null) {
+  // Polish spec §64 (Phase 22) — same treatment for outs. BDL's
+  // play.outs is the inning-state count; handler uses IS DISTINCT
+  // FROM so reps with no out change are UPDATE-free.
+  const outs = payload.play?.outs ?? null;
+  if (inning !== null || inningHalf !== null || outs !== null) {
     await db.execute(sql`
       UPDATE public.game
-      SET current_inning = ${inning}::int,
-          current_inning_half = ${inningHalf},
+      SET current_inning = COALESCE(${inning}::int, current_inning),
+          current_inning_half = COALESCE(${inningHalf}, current_inning_half),
+          current_outs = COALESCE(${outs}::smallint, current_outs),
           updated_at = now()
       WHERE id = ${gameId}::uuid
         AND status = 'live'
-        AND (current_inning IS DISTINCT FROM ${inning}::int
-             OR current_inning_half IS DISTINCT FROM ${inningHalf})
+        AND (
+          (${inning}::int IS NOT NULL AND current_inning IS DISTINCT FROM ${inning}::int)
+          OR (${inningHalf}::text IS NOT NULL AND current_inning_half IS DISTINCT FROM ${inningHalf})
+          OR (${outs}::smallint IS NOT NULL AND current_outs IS DISTINCT FROM ${outs}::smallint)
+        )
     `);
   }
 

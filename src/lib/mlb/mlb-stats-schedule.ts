@@ -19,12 +19,22 @@ export type MlbStatsScheduleEntry = {
   homeMlbStatsTeamId: number;
   awayMlbStatsTeamId: number;
   scheduledStartIso: string;
+  /** Polish spec §65 (Phase 22). 1 or 2 for DHs; 1 otherwise. Used
+   *  to populate `public.game.game_number` so real DHs cohabit the
+   *  DB as distinct rows. */
+  gameNumber: number;
+  /** MLB Stats' doubleHeader code: 'N'=none, 'Y'=day-night,
+   *  'S'=split. Not used for routing (gameNumber is); surfaced for
+   *  debugging + potential future UI treatment. */
+  doubleHeader: string | null;
 };
 
 type RawResponse = {
   dates?: Array<{
     games?: Array<{
       gameDate?: string;
+      gameNumber?: number;
+      doubleHeader?: string;
       teams?: {
         home?: { team?: { id?: number } };
         away?: { team?: { id?: number } };
@@ -60,6 +70,9 @@ export async function fetchMlbStatsSchedule(date: string): Promise<MlbStatsSched
           homeMlbStatsTeamId: homeId,
           awayMlbStatsTeamId: awayId,
           scheduledStartIso: gameDate,
+          // MLB Stats returns 1 by default for non-DH games.
+          gameNumber: typeof g.gameNumber === "number" ? g.gameNumber : 1,
+          doubleHeader: typeof g.doubleHeader === "string" ? g.doubleHeader : null,
         });
       }
     }
