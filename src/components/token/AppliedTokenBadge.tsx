@@ -1,7 +1,6 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useState } from "react";
 
 import { TokenTooltipContent } from "@/components/token/TokenTooltipContent";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -12,9 +11,15 @@ import { cn } from "@/lib/utils";
 import { TokenBadge } from "./TokenBadge";
 
 /**
- * Applied-state corner badge. Click → inline "Remove?" confirm (same
- * pip dims + red X overlay). Click confirm fires onRemove; click
- * anywhere else cancels.
+ * Applied-state corner badge.
+ *
+ * Click = remove. A small X glyph sits in the top-right of the pip
+ * so the "click to remove" affordance is visible on hover; the
+ * tooltip (via wrapped <Tooltip>) explains what the token does.
+ * Tokens aren't destroyed when removed — they snap back to the tray
+ * — so no confirm step is needed. The old two-click "confirming"
+ * pattern was harder to use than it saved accidents for, per user
+ * feedback.
  *
  * Placement is the caller's responsibility — wrap this in a relative
  * container and position it absolutely in the card's bottom-right,
@@ -29,23 +34,11 @@ type Props = {
 };
 
 export function AppliedTokenBadge({ tokenType, bonusFp, onRemove, disabled, className }: Props) {
-  const [confirming, setConfirming] = useState(false);
-
   function handleClick(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     if (disabled) return;
-    if (confirming) {
-      onRemove();
-      setConfirming(false);
-    } else {
-      setConfirming(true);
-    }
-  }
-
-  function handleBlur() {
-    // Give time for the confirm click to land before collapsing.
-    window.setTimeout(() => setConfirming(false), 150);
+    onRemove();
   }
 
   return (
@@ -54,26 +47,24 @@ export function AppliedTokenBadge({ tokenType, bonusFp, onRemove, disabled, clas
         <button
           type="button"
           onClick={handleClick}
-          onBlur={handleBlur}
           disabled={disabled}
-          aria-label={
-            confirming
-              ? `Confirm remove ${TOKEN_LONG_LABEL[tokenType]} token`
-              : `Remove ${TOKEN_LONG_LABEL[tokenType]} token`
-          }
+          aria-label={`Remove ${TOKEN_LONG_LABEL[tokenType]} token`}
           className={cn(
-            "relative block appearance-none border-0 bg-transparent p-0",
+            "group/applied-token relative block appearance-none border-0 bg-transparent p-0",
             disabled ? "cursor-not-allowed" : "cursor-pointer",
             className,
           )}
         >
           <TokenBadge tokenType={tokenType} bonusFp={bonusFp} size="applied" />
-          {confirming && (
+          {!disabled && (
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-[#C47262]/90 text-[var(--text)] shadow-md ring-2 ring-[#C47262]"
+              className={cn(
+                "pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex size-4 items-center justify-center rounded-full bg-[#C47262] text-[var(--text)] shadow opacity-0 transition-opacity",
+                "group-hover/applied-token:opacity-100 group-focus-visible/applied-token:opacity-100",
+              )}
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="size-2.5" strokeWidth={3} />
             </span>
           )}
         </button>

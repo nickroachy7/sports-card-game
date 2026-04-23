@@ -324,13 +324,32 @@ export function LineupView(props: LineupViewProps) {
         return;
       }
 
+      // Polish spec §113 follow-up (Phase 38). When a remove
+      // happens (cardId === null), any token currently applied to
+      // the card being removed also detaches — user expectation is
+      // "both the card and the token go back to their sections."
+      // Swaps (handled above) keep the token since the card is
+      // still in the lineup, just in a different slot.
+      const appliedAtPosition = cardId === null ? slotFills[position].appliedToken : null;
+
       // Bench → slot (or explicit remove with cardId=null).
       applyOptimisticPatch({ position, cardId });
-      const result = await updateLineupSlot({
-        entryId: props.entryId,
-        position,
-        starterCardId: cardId,
-      });
+      const [result, tokenResult] = await Promise.all([
+        updateLineupSlot({
+          entryId: props.entryId,
+          position,
+          starterCardId: cardId,
+        }),
+        appliedAtPosition
+          ? removeToken({ tokenApplicationId: appliedAtPosition.applicationId })
+          : Promise.resolve({ ok: true } as const),
+      ]);
+      if (!tokenResult.ok) {
+        // Log but don't block the slot update — slot removal
+        // already succeeded; token detach failure is recoverable
+        // on next refresh.
+        toast.error(`Token detach failed: ${tokenResult.error.message}`);
+      }
       if (!result.ok) {
         toast.error(result.error.message);
         return;
@@ -621,12 +640,24 @@ export function LineupView(props: LineupViewProps) {
 
   async function handleRemoveFromSlot() {
     if (!detailSlotPosition) return;
+    // Phase 38 follow-up. Detach any applied token alongside the
+    // slot clear so the card + token both go back to their
+    // sections — matches the × button path in handleCardDropped.
+    const applied = slotFills[detailSlotPosition].appliedToken;
     applyOptimisticPatch({ position: detailSlotPosition, cardId: null });
-    const result = await updateLineupSlot({
-      entryId: props.entryId,
-      position: detailSlotPosition,
-      starterCardId: null,
-    });
+    const [result, tokenResult] = await Promise.all([
+      updateLineupSlot({
+        entryId: props.entryId,
+        position: detailSlotPosition,
+        starterCardId: null,
+      }),
+      applied
+        ? removeToken({ tokenApplicationId: applied.applicationId })
+        : Promise.resolve({ ok: true } as const),
+    ]);
+    if (!tokenResult.ok) {
+      toast.error(`Token detach failed: ${tokenResult.error.message}`);
+    }
     if (!result.ok) {
       toast.error(result.error.message);
       return;
