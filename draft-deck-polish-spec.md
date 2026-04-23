@@ -5672,3 +5672,323 @@ explainer paragraph takes up ~5 rows.
   over cap).
 - Building-state sidebar mobile / tablet layout.
 - Baserunners + pitcher-on-mound (still Phase 31 spec).
+
+---
+
+# Phase 36 — v1.21 (Cards header + /shop kill + pack reveal redesign)
+
+Three coordinated changes that all touch the lineup page.
+
+1. **Cards section header**. Compact today's three-row
+   header (count / filters / chips) into a single row.
+2. **Kill `/shop`**. Replace with a floating action button
+   on /lineup and a buy-packs modal with Daily + Standard
+   × 1 / × 5 / × 10.
+3. **Pack reveal redesign**. All purchased cards stacked
+   as a deck; tap the top to flip + slide into a revealed
+   row; per-card Quick-sell / Add-to-vault + Done button
+   when all are revealed.
+
+---
+
+## 108. Cards/Tokens section header — single row
+
+### Goal
+
+Today's layout stacks three rows of chrome above the cards
+grid: `CARDS X available · Y in lineup | ALL | HITTERS |
+PITCHERS | Search | Select` on row 1, tier chips on row 2,
+game-state chips on row 3. A visible screenshot showed the
+header eating ~120px before any cards render. Condense to a
+single row.
+
+### Layout
+
+```
+CARDS 22·6   ALL|HITTERS|PITCHERS   [Tier ▼]   [State ▼]   🔍 Search…   Select
+```
+
+- **Count**: `CARDS 22·6` (dot-separator between available
+  + in-lineup). Full copy moves to a `title=""` tooltip if
+  needed; the dot version is unambiguous in context.
+- **Position**: segmented pill trio stays as-is — it's
+  already compact and visible at a glance.
+- **Tier**: collapse to a dropdown-style pill: `Tier`
+  label + current selection + count badge. Click opens a
+  small popover with the current chips (ALL / Bronze /
+  Silver / Gold / Diamond w/ counts). Same interaction as
+  today, just hidden when not in use.
+- **State**: same pattern as Tier — collapsed pill +
+  popover. Current selection label appears on the pill
+  (e.g. `State: Live`) so you always see what's active.
+- **Search + Select** end the row, unchanged.
+
+### Wrap behavior
+
+- Row wraps naturally on narrow viewports (< 900px)
+  rather than overflowing. Order is left-to-right as
+  written above; wrap can push Search + Select to a second
+  line, but Tier + State dropdowns stay inline with the
+  count + position pills.
+
+### Files
+
+- `src/components/lineup/CardsPanel.tsx` — header refactor;
+  the existing `TierChip` + `GameStateChip` components move
+  into popover content (a new `FilterPopover` wrapper
+  handles the pill + popover pattern).
+- (`src/components/ui/popover.tsx` — if the Radix popover
+  primitive doesn't exist yet, add a thin shadcn wrapper
+  over `@radix-ui/react-popover`.)
+
+### Out of scope
+
+- Icon-only filter pills (we keep labels; icons alone feel
+  opaque for new users).
+- Hiding the count when the collection is empty — unchanged.
+
+---
+
+## 109. Kill `/shop`; lineup floating action button + buy modal
+
+### Goal
+
+The `/shop` page exists as a standalone route, but the
+user's only regular action there is "open a pack." That's
+a single CTA per pack type. A full page for it is
+over-indexed. Replace with an entry-point on /lineup.
+
+### Changes
+
+- **Delete `/shop`**.
+  - Remove `src/app/(app)/shop/page.tsx` +
+    `shop-client.tsx`.
+  - Remove `/shop` from the nav sidebar
+    (`src/components/layout/sidebar.tsx`).
+  - Remove the shop link + Package icon (+ its gold-pulse
+    daily-ready indicator) from
+    `src/components/layout/header.tsx`.
+  - Keep the header's coin-balance display.
+
+- **Add `BuyPacksFab`** — bottom-right floating action
+  button on /lineup.
+  - 56px circle, `var(--tier-gold)` bg, Package icon,
+    subtle elevation shadow.
+  - Pulses gold when `daily_pack_ready` is true (migrated
+    from the header's pulse logic).
+  - Hidden while pack reveal is active (no overlap with
+    the modal).
+  - Stays visible in all other lineup states (building /
+    submitted / live / final). Packs aren't contest-
+    locked; nothing prevents buying mid-live-contest.
+  - Positioned above the cards grid using
+    `position: fixed` so scrolling doesn't move it.
+
+- **`BuyPacksModal`** — opens on FAB click. Contents:
+  - Header row: coin balance + close (×).
+  - **Daily pack** section (top). Visible when
+    `daily_pack_ready === true`; otherwise shows
+    countdown. Single `Claim daily pack` button.
+  - **Standard packs** section (bottom). Three quantity
+    pills: `× 1 (N coins)`, `× 5 (N×5 coins)`,
+    `× 10 (N×10 coins)`. No bundle discount in v1 — flat
+    multiplication. Quantity pills are mutually exclusive
+    radios; confirm button beneath reads
+    `Buy 5 packs (500 coins)` with live total.
+  - Coin-balance-check: confirm button disabled when
+    balance < total, with subtitle `Need N more coins`.
+  - Confirming closes the modal and drops straight into
+    pack reveal (§111).
+
+### Daily-pack eligibility wiring
+
+- Page layout already computes `isDailyPackReady` and
+  passes it to the header. Route that prop to
+  `LineupView` → `BuyPacksFab` + `BuyPacksModal` instead
+  of the header. Header keeps coins; everything else moves.
+
+### Files
+
+- `src/components/pack/BuyPacksFab.tsx` (new).
+- `src/components/pack/BuyPacksModal.tsx` (new). Adapts
+  the shop-client's pack-card grid into a compact modal.
+- `src/app/(app)/layout.tsx` — pass `dailyPackReady` to
+  `LineupView` (new prop; plumbing only).
+- `src/app/(app)/lineup/lineup-view.tsx` — state for
+  modal open/closed + pack-reveal cards; renders the FAB
+  + modal + reveal orchestrator.
+- `src/components/layout/header.tsx` — remove shop link +
+  pulse logic.
+- `src/components/layout/sidebar.tsx` — remove /shop nav.
+- `src/app/(app)/shop/page.tsx`, `shop-client.tsx` —
+  delete.
+
+### Out of scope
+
+- Premium pack type — stays in the DB + the `open_pack`
+  SQL fn, but drops out of the buy-modal surface for v1.
+  Can reintroduce as a third section later.
+- Purchasing UI animation beyond the normal modal fade.
+
+---
+
+## 110. `openPacksBatch` server action
+
+### Goal
+
+Opening 5 or 10 packs in one purchase should hit the
+server once, not N times. A batched server action loops
+the existing `open_pack` SQL fn and aggregates the card
+IDs + dupe metadata, matching the P35 bulk-quick-sell
+pattern.
+
+### Signature
+
+```ts
+// src/app/actions/packs.ts
+
+export type OpenPacksBatchResult = {
+  openings: Array<{
+    openingId: string;
+    cardIds: string[];
+    cardResults: OpenPackCardResult[]; // existing type
+    tokenIds: string[];
+    coinCost: number;
+    duplicateCount: number;
+    coinsFromDupes: number;
+  }>;
+  totalCoinCost: number;
+  balanceAfter: number;
+  failures: Array<{ index: number; code: string; message: string }>;
+};
+
+export async function openPacksBatch(input: {
+  packType: "daily" | "standard";
+  quantity: 1 | 5 | 10;
+}): Promise<ActionResult<OpenPacksBatchResult>>;
+```
+
+### Behavior
+
+- Validate input (zod). Max `quantity === 1` for
+  `packType === "daily"`.
+- Pre-flight coin check: `quantity × pack_prices_coins[packType]`
+  against `user_season_state.coins`. Return early with a
+  friendly error if short.
+- Loop `open_pack` SQL fn serially inside the action. If
+  pack K fails (insufficient coins due to drift, collection
+  cap, etc.), record the failure and stop the loop — don't
+  continue opening after the first failure; the user's
+  expectation is "all or part."
+- `balanceAfter` is the last successful call's balance; if
+  zero successes, pull the current balance.
+- Revalidate `/lineup` layout on success (per-card opens
+  already revalidate individually; this is a guard).
+
+### Dupe handling
+
+- Per-pack dupes (pre-existing on the card table) still
+  go through the dupe-resolution flow in the reveal UI.
+  The action returns each opening's dupe metadata intact;
+  reveal UI stitches them together.
+
+---
+
+## 111. Pack reveal redesign — stack → peel → row
+
+### Goal
+
+Current reveal is a carousel that shows one face-down
+card at a time, centered. User ask: show all N cards as
+a stacked deck; tap the top to peel it off; it flips in
+place then slides to its target position in a revealed
+row below; repeat until the deck is empty; then show
+per-card actions + a `Done` button.
+
+### Stages
+
+1. **Deck**. Stack of N face-down `PackCardFlip`s
+   z-stacked at center, each offset by 2px down + 1px
+   right for depth. Top card is the active tap target.
+2. **Peel**. Clicking the top card:
+   - Kicks off the existing 3D flip (back → face).
+   - Simultaneously translates the card from the stack
+     position to its target slot in the revealed row.
+   - Next card-back becomes top of stack + active.
+3. **Revealed row**. Below the deck, an empty row grows
+   as cards slide in. Grid layout with fixed slot
+   positions so cards always land in consistent spots.
+4. **Actions enabled**. Once the deck is empty:
+   - Under each revealed card: two outline buttons —
+     `Quick-sell (N coins)` and `Add to vault`.
+   - `Done` button centered below everything, primary
+     variant, enabled only when stack is empty.
+5. **Dupe branch**. If a card is a dupe, after its flip
+   lands in the row we show the dupe resolution inline
+   under that card (compact — new vs existing, pick one,
+   ghost the other). The Done button waits for all dupe
+   decisions before enabling.
+
+### Layout rationale
+
+- Stack at center keeps the reveal focused; the row
+  below visually fills in as progress.
+- Per-card actions avoid forcing the user to bounce back
+  to the cards grid to triage a big pull.
+- Done button is the only exit — clicking it refreshes
+  `/lineup` and dismisses the overlay.
+
+### Celebration integration
+
+- `StarPullBurst` keeps firing on flip-reveal for
+  Gold/Diamond (star tier) and Silver (starter tier).
+  Trigger point moves from the carousel reveal callback
+  to the per-card flip-complete callback; no other
+  changes.
+
+### Exit rules
+
+- Done button: only exit. Escape / click-outside are
+  disabled while reveal is active.
+- If the tab unloads mid-reveal, cards are already in
+  the DB — user sees them in `/lineup` on next load.
+  Reveal state does NOT survive reload (acceptable).
+
+### Files
+
+- `src/components/pack/PackOpenerModal.tsx` — major
+  rewrite around the new stage machine. Reuses
+  `PackCardFlip` + `StarPullBurst` + `PackDupePanel`
+  (possibly re-styled for inline use).
+- `src/components/pack/PackRevealStack.tsx` (new) —
+  deck + peel behavior.
+- `src/components/pack/PackRevealRow.tsx` (new) —
+  revealed-row grid + per-card action rows.
+- `src/app/(app)/lineup/lineup-view.tsx` — owns the
+  reveal overlay's open state; renders modal when cards
+  are queued.
+
+### Out of scope
+
+- Sound effects on flip (no audio pipeline yet).
+- Particle trails between stack and row.
+- Double-tap "reveal-all" shortcut. User can click
+  through in rhythm; shortcut comes later if requested.
+
+---
+
+## 112. Not in scope for v1.21
+
+- Premium pack type in the buy modal (code path stays
+  wired; UI hidden).
+- Bundle discounts for 5×/10× (flat multiplication in
+  v1; economy tuning later).
+- Shop archival history / receipts — no persistent buy
+  log surface.
+- Opening packs outside /lineup (FAB lives only there).
+- Baserunners + pitcher-on-mound (still Phase 31 spec).
+- Virtualization of pack reveal for very large pulls
+  (> 50 cards). Current max is 10 × 5 = 50, which fits
+  in a row at reasonable card size.
+- Daily pack notification on other surfaces; header
+  chime stays owned by the header only.
