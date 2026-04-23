@@ -5429,3 +5429,246 @@ collision with the P33 code references in `LineupShell.tsx`
 and `use-autoscroll-on-drag.ts`. Code tagged `§100 (Phase 34)`
 covers the sidebar rewrite + the Back-button detail wrapper;
 `§101 (Phase 34)` covers the scrollbar fade behavior.
+
+---
+
+# Phase 35 — v1.20 (Pre-live sidebar + multi-select + scrollbar + detail cleanup)
+
+Four coordinated changes to the lineup page. Phase 34 gave
+the post-submit sidebar a clean three-block layout
+(ScoreHeadline / BoxScore / EventFeed); this phase brings
+the pre-submit sidebar to structural parity. It also adds
+multi-select to the cards grid (bulk quick-sell + vault),
+hides scrollbars completely everywhere on the lineup page,
+and cleans up duplicate buttons in the card detail panel.
+
+---
+
+## 103. Pre-live sidebar mirrors live layout
+
+### Goal
+
+The current building-state sidebar stacks Readiness +
+Projected + Auto-sub + Submit as four roughly-equivalent
+chunks. The post-submit sidebar has a clear hierarchy:
+headline → detail → feed/actions. Bring building state to
+the same structure so the sidebar layout doesn't shift
+when you submit, and so you can watch the roster fill in
+as you draft.
+
+### Three blocks
+
+Building-state sidebar maps to the same three spatial
+roles as post-submit:
+
+- **DraftingHeadline** (top). Parallels `ScoreHeadline`.
+  - Label: `DRAFTING` (uppercase, tracked).
+  - Status line: `X / 10 slots filled`.
+  - Big number: projected FP (sum of career-FP-average across
+    filled slots, or just `—` if we don't have projections
+    wired yet — v1 can start with slots-filled count as the
+    big number and get fancier later).
+- **RosterSection** (middle). Parallels `BoxScoreSection`.
+  - One row per slot in canonical order (C / 1B / 2B / 3B /
+    SS / OF1 / OF2 / OF3 / SP1 / SP2).
+  - Filled row: position chip · player name · tier badge ·
+    contract plays (e.g. `14/15`).
+  - Empty row: position chip · `Drag a {position}` placeholder
+    in `text-3` color. Dashed-border feel so empty vs. filled
+    is obvious at a glance.
+  - Scrollable with hidden scrollbar (§105).
+  - Rows are not draggable; they're just a readout.
+- **SubmitSection** (bottom). Parallels `EventFeed` spatial
+  role but does action work.
+  - Auto-sub toggle (`Off` · `Injury only` · `Injury + late
+    scratch`).
+  - Submit button — primary when `readiness === 'ready'`,
+    ghosted when incomplete, with tooltip `X slots remaining`.
+
+### State transitions
+
+- `entry.status === 'building'` → the three blocks above.
+- Any other status → unchanged post-submit layout from
+  Phase 34 (ScoreHeadline / BoxScore / EventFeed).
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — new
+  `DraftingHeadline` + `RosterSection` subcomponents;
+  building-state render uses them.
+- (Existing `BoxScoreSection` / `EventFeed` / `ScoreHeadline`
+  untouched.)
+
+---
+
+## 104. Multi-select on cards grid
+
+### Goal
+
+Bulk card actions. Users should be able to select multiple
+cards at once and act on the whole batch — primarily for
+quick-selling a pile of 0-FP rookies at season start, or
+vaulting a batch at season end.
+
+### Entry / exit
+
+- A `Select` chip sits in the cards grid's filter row, next
+  to `ALL / HITTERS / PITCHERS`. Click it to toggle select
+  mode on.
+- While select mode is on, the chip becomes `Done`. Clicking
+  exits and clears the selection.
+- `Esc` also exits.
+- Exiting preserves nothing; next entry starts empty.
+
+### Selection UX
+
+- Click a card to add to selection; click again to remove.
+- Selected cards get two signals: checkmark badge in the
+  top-right corner + a 2px border in `var(--tier-gold)` or
+  `var(--text)` (tier-agnostic; don't conflict with tier
+  frame).
+- Slotted cards ARE selectable. Their "IN LINEUP" overlay
+  stays visible on top of the selection visuals.
+- Drag-and-drop is disabled in select mode to avoid
+  conflicts with click-to-toggle.
+
+### Sidebar selection panel
+
+When `selectionMode === true`, the sidebar swaps from
+`AppSidebar` (or `DetailSidebar`) to a `SelectionPanel`:
+
+- Top: count + action totals. Example:
+  `3 selected · 30 coins quick-sell · 2 lineup slots will clear`
+- List: compact rows — position chip · player name · tier
+  badge · contract plays. Same style as the roster block.
+- Bottom: action buttons stacked.
+  - **Quick-sell (X coins)** — confirm dialog. If any
+    selected cards are slotted, dialog warns: `2 of these
+    are in your lineup and will be removed`. Then fires a
+    per-card quick-sell in a transaction.
+  - **Add to vault (X)** — confirm dialog. Blocks + errors
+    if the batch would exceed the 10-slot cap.
+  - **Clear** — ghost button; same as `Esc` / `Done`.
+
+### State scope
+
+- Multi-select lives in component state on LineupView;
+  doesn't persist across navigation or reloads.
+- URL doesn't track it; the `?card=id` detail route still
+  wins if present (no conflict since you'd have to
+  explicitly enter select mode).
+
+### Files
+
+- `src/components/lineup/CardsPanel.tsx` — add `Select`
+  chip + select-mode prop + click-to-select handler.
+- `src/components/lineup/BenchCard.tsx` (the per-card
+  component inside the grid) — accept `isSelected` /
+  `selectMode` props, render checkmark + border.
+- `src/components/lineup/SelectionPanel.tsx` (new) —
+  sidebar swap contents.
+- `src/app/(app)/lineup/lineup-view.tsx` — owns
+  `selectionMode` + `selectedIds` state; wires to
+  CardsPanel and sidebar swap; routes Quick-sell via a
+  new `quickSellCards` server action (batches into a
+  single SQL fn call) and Vault via the existing
+  `vault_cards` path called per id inside a transaction.
+- `src/app/actions/cards.ts` — add `quickSellCards(ids[])`
+  batch wrapper around the existing per-card quick-sell
+  SQL fn.
+- `src/app/actions/vault.ts` — add `addCardsToVault(ids[])`
+  batch wrapper.
+
+### Out of scope
+
+- Select-all / select-by-filter shortcuts (v2).
+- Bulk tier-up / extend contract (v2).
+
+---
+
+## 105. Invisible scrollbars on lineup page
+
+### Goal
+
+Scrollbars on the lineup page add visual noise without
+earning their horizontal real estate. Phase 34 made them
+auto-fade; the fade still briefly reserves width during the
+fade transition, and the visible state during scroll is
+persistent enough to feel heavy. Hide completely.
+
+### Behavior
+
+- On `[data-scroll]` containers inside `<main>` (left column
+  `lineup-main`, right column `lineup-sidebar`), hide the
+  scrollbar entirely — Webkit via
+  `::-webkit-scrollbar { display: none }`, Firefox via
+  `scrollbar-width: none`.
+- Scroll functionality itself is preserved — wheel, trackpad,
+  keyboard arrows, spacebar all still work.
+- The P34 `useScrollFade` hook becomes a no-op for these
+  containers; either delete the hook entirely or keep it
+  available for future surfaces (e.g. long-form modals)
+  that might want the auto-fade.
+- Global rules from P34 stay; this phase overrides them
+  inside the lineup page.
+
+### Files
+
+- `src/app/globals.css` — override `[data-scroll]` styles
+  within `main[data-scroll-surface="lineup"]` (or the
+  equivalent scoping selector) to hide completely. Keep
+  the P34 rules as a general default.
+- `src/components/lineup/LineupShell.tsx` — add the scoping
+  `data-scroll-surface="lineup"` attribute to the shell
+  root so the scoped CSS targets only this page.
+- `src/app/(app)/lineup/lineup-view.tsx` — remove the
+  `useScrollFade()` call; leave the hook file for now but
+  comment out the call with a back-reference.
+
+---
+
+## 106. Card detail cleanup
+
+### Goal
+
+The card detail panel currently shows an **ACTIONS** block
+(Extend contract / Quick-sell / Add to vault) AND a
+**LINEUP ACTIONS** block with a duplicate `Add to vault`
+button. Extend contract is styled as a text row while
+Quick-sell and Add-to-vault are buttons. A long vault
+explainer paragraph takes up ~5 rows.
+
+### Changes
+
+- Remove the `LINEUP ACTIONS` block entirely. Single
+  Actions block.
+- Style **Extend Contract** as a button to match Quick-sell
+  + Add-to-vault. Stack all three as equally-weighted
+  outline buttons.
+- Vault explainer text (`Vaulting freezes a card for the
+  season — it can't play again. Counts toward the 10-card
+  vault cap. Destroying a vaulted card returns ~15% of its
+  quick-sell value.`) moves behind a small `(?)` info icon
+  next to the Add-to-vault button. Popover reveals the
+  paragraph; panel stays tight.
+- Action button ordering (top → bottom): Extend Contract →
+  Quick-sell → Add to vault.
+
+### Files
+
+- `src/components/card/CardDetailPanel.tsx` (or whichever
+  file owns the Actions + Lineup-Actions sections).
+
+---
+
+## 107. Not in scope for v1.20
+
+- Pre-live projected FP — if the projection isn't already
+  wired, the DraftingHeadline big number can fall back to
+  slots-filled count. Full projection comes later.
+- Select-all or filter-driven multi-select shortcuts.
+- Bulk tier-up / bulk contract extend.
+- Bulk-vault overflow rebalancing (today just errors if
+  over cap).
+- Building-state sidebar mobile / tablet layout.
+- Baserunners + pitcher-on-mound (still Phase 31 spec).
