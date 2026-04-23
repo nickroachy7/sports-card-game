@@ -10,6 +10,7 @@ import { dragResult } from "@/components/card/drag-layer-state";
 import { useCardDepleteEvent } from "@/components/lineup/CardContractEventsProvider";
 import { SlotContractGlow } from "@/components/lineup/SlotContractGlow";
 import { SlotFpGlow } from "@/components/lineup/SlotFpGlow";
+import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
@@ -62,17 +63,13 @@ function LineupSlotInner({
   card,
   appliedToken,
   locked,
+  gameInfo,
   onCardDropped,
   onTokenDropped,
   onRemoveToken,
   onOpenDetail,
   depleteEvent,
 }: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
-  // Note: `gameInfo` prop is still accepted for forward compatibility
-  // (LineupGrid + LineupView wiring don't change) but is no longer
-  // rendered inside the slot — Phase 26 dropped the SlotGameState
-  // pill to reclaim vertical space. Game state is surfaced via the
-  // card footer (LIVE/FINAL contestFp) + Box Score sidebar.
   const isPitcher = isPitcherSlot(position);
 
   // Card drop target — accepts any hitter card for hitter slots, any pitcher for SP slots.
@@ -199,7 +196,7 @@ function LineupSlotInner({
         tokenDropRef(el);
       }}
       className={cn(
-        "relative rounded-md transition-colors",
+        "relative flex flex-col items-center gap-1 rounded-md transition-colors",
         isTokenOver && canTokenDrop && "ring-2 ring-[var(--tier-gold,#D4A647)]",
         isCardOver && canCardDrop && "ring-2 ring-[var(--text)]",
         isCardOver && !canCardDrop && "ring-2 ring-[#C47262]",
@@ -235,6 +232,12 @@ function LineupSlotInner({
           </div>
         )}
       </div>
+      {/* Polish spec §45 game-state footer, restored in Phase 27 after
+          being temporarily dropped in P26. Tone-washed pill under the
+          card — muted for scheduled / off, emerald for live, neutral
+          surface for final. The at-a-glance game signal belongs here,
+          below the card, not buried in the box score. */}
+      <SlotGameState info={gameInfo} />
     </section>
   );
 }
