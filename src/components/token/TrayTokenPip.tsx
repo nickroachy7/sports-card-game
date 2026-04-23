@@ -62,9 +62,15 @@ export function TrayTokenPip({ token, disabled }: Props) {
           disabled={unusable}
           aria-label={`${TOKEN_LONG_LABEL[token.tokenType]} token, ${applied ? "applied" : "available"}`}
           className={cn(
-            "appearance-none border-0 bg-transparent p-0",
+            "appearance-none border-0 bg-transparent p-0 transition-opacity",
             !unusable && "cursor-grab active:cursor-grabbing",
             unusable && "cursor-not-allowed",
+            // Polish spec §117 (Phase 38). Source token pip hides
+            // fully while dragging; the TokenDragLayer renders the
+            // in-flight ghost. Previously the source stayed visible
+            // (the TokenBadge's isDragging prop only dimmed the
+            // ghost, not the tray chip).
+            isDragging && "pointer-events-none opacity-0",
           )}
         >
           <TokenBadge

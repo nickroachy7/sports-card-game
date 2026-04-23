@@ -44,7 +44,10 @@ type Props = {
   resolveCard: (cardId: string) => CardViewModel | null;
 };
 
-const SPRING = { stiffness: 400, damping: 30, mass: 1 } as const;
+// Polish spec §116 (Phase 38). Spring tightened: stiffer + lighter
+// mass = less trailing, more "held-in-hand" feel. Damping nudged up
+// so the tighter spring still settles cleanly on stop.
+const SPRING = { stiffness: 700, damping: 34, mass: 0.7 } as const;
 // Reduced-motion: stiffer, damped-critical spring jumps to the target
 // essentially instantly — no trailing, no tilt, no shake.
 const REDUCED_SPRING = { stiffness: 10000, damping: 200, mass: 1 } as const;
@@ -109,8 +112,10 @@ export function CardDragLayer({ accepts, resolveCard }: Props) {
     x.set(currentOffset.x);
     y.set(currentOffset.y);
     if (!reduced) {
+      // Phase 38: slightly bumped velocity coefficient so the tilt
+      // reacts to fast drags; still capped ±3°.
       const vx = x.getVelocity();
-      rotate.set(Math.max(-3, Math.min(3, vx * 0.003)));
+      rotate.set(Math.max(-3, Math.min(3, vx * 0.004)));
     }
     lastPointer.current = { x: currentOffset.x, y: currentOffset.y };
   }, [currentOffset, reduced, x, y, rotate]);
@@ -153,22 +158,21 @@ type BounceBackProps = {
   onComplete: () => void;
 };
 
+/**
+ * Polish spec §118 (Phase 38). Fast 150ms snap-back on invalid
+ * drop. Old version used a 0.55s shake that felt sluggish; now
+ * it's a short easeOut straight from last-pointer to source,
+ * with a 60ms fade so the ghost doesn't linger at the origin.
+ */
 function BounceBack({ card, from, to, onComplete }: BounceBackProps) {
   const motionProps: HTMLMotionProps<"div"> = {
     initial: { x: from.x, y: from.y, opacity: 1 },
     animate: {
-      x: [from.x, to.x, to.x - 6, to.x + 6, to.x - 3, to.x + 3, to.x],
-      y: [from.y, to.y, to.y, to.y, to.y, to.y, to.y],
-      transition: {
-        x: {
-          times: [0, 0.55, 0.68, 0.8, 0.9, 0.96, 1],
-          duration: 0.55,
-          ease: ["easeOut", "linear", "linear", "linear", "linear", "linear"],
-        },
-        y: { duration: 0.55, ease: "easeOut" },
-      },
+      x: to.x,
+      y: to.y,
+      transition: { duration: 0.15, ease: "easeOut" },
     },
-    exit: { opacity: 0, transition: { duration: 0.08 } },
+    exit: { opacity: 0, transition: { duration: 0.06 } },
   };
   return (
     <motion.div

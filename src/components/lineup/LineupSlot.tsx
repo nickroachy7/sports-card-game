@@ -1,7 +1,8 @@
 "use client";
 
 import { Lock, X } from "lucide-react";
-import { useEffect } from "react";
+import { motion, useAnimate, useReducedMotion } from "motion/react";
+import { useEffect, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { getEmptyImage } from "react-dnd-html5-backend";
 
@@ -78,6 +79,24 @@ function LineupSlotInner({
   depleteEvent,
 }: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
   const isPitcher = isPitcherSlot(position);
+  const reducedMotion = useReducedMotion();
+
+  // Polish spec §119 (Phase 38). Drop-in settle bounce. Every
+  // accepted drop (card or token) increments this counter; a
+  // useEffect below kicks off the scale-pulse animation on the
+  // slot's inner card element. Start at 0 so the initial mount
+  // doesn't animate.
+  const [dropSettleKey, setDropSettleKey] = useState(0);
+  const [settleScope, animateSettle] = useAnimate();
+
+  useEffect(() => {
+    if (dropSettleKey === 0 || reducedMotion || !settleScope.current) return;
+    animateSettle(
+      settleScope.current,
+      { scale: [0.92, 1.03, 1] },
+      { duration: 0.18, times: [0, 0.5, 1], ease: "easeOut" },
+    );
+  }, [dropSettleKey, reducedMotion, animateSettle, settleScope]);
 
   // Card drop target — accepts any hitter card for hitter slots, any pitcher for SP slots.
   // Self-drop (dragging from this slot back to itself) is rejected so the
@@ -92,6 +111,7 @@ function LineupSlotInner({
       canDrop: (item) => !locked && item.isPitcher === isPitcher && item.fromPosition !== position,
       drop: (item) => {
         onCardDropped(item.cardId, item.fromPosition ?? null);
+        setDropSettleKey((k) => k + 1);
       },
       collect: (monitor) => ({
         isCardOver: monitor.isOver(),
@@ -146,6 +166,7 @@ function LineupSlotInner({
       canDrop: (item) => !locked && !!card && item.isPitcherToken === isPitcher,
       drop: (item) => {
         onTokenDropped(item.tokenId);
+        setDropSettleKey((k) => k + 1);
       },
       collect: (monitor) => ({
         isTokenOver: monitor.isOver(),
@@ -207,9 +228,17 @@ function LineupSlotInner({
         ref={(el) => {
           slotDragRef(el);
         }}
-        className={cn("relative", isDragging && "opacity-40")}
+        // Polish spec §117 (Phase 38). Source fully hidden while
+        // dragging — motion ghost in CardDragLayer is authoritative.
+        className={cn("relative", isDragging && "pointer-events-none opacity-0")}
       >
-        <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
+        {/* Polish spec §119 (Phase 38). `settleScope` receives the
+            drop-in scale pulse whenever a new card or token lands on
+            this slot. Wrapper needs to stay mounted across drops so
+            the ref is stable. */}
+        <motion.div ref={settleScope} className="relative inline-block">
+          <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
+        </motion.div>
         {/* Polish spec §113 (Phase 37). One-click remove. Sits in
             the card's top-left, fades in on slot hover. Hidden
             entirely while the slot is locked (the lock glyph owns

@@ -32,7 +32,15 @@ export function CardPhoto({ photoUrl, initials, fontSize }: Props) {
       <img
         src={photoUrl ?? undefined}
         alt=""
+        // Polish spec §120 (Phase 38). Default `object-position:
+        // center` was cropping top + bottom equally; MLBAM headshots
+        // have a bit of head-room above and shoulders below, so the
+        // chin was ending up at the edge of the photo window. Shift
+        // the crop up (top ~25%) so faces sit higher in frame and
+        // chins don't get clipped when the card's photo-area aspect
+        // ratio is shorter than the source's 1:1.5 portrait.
         className="h-full w-full object-cover"
+        style={{ objectPosition: "center 25%" }}
         loading="lazy"
         onError={() => setFailed(true)}
       />

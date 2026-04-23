@@ -115,7 +115,10 @@ export function BenchCard({
           onClick={locked ? undefined : handleClick}
           className={cn(
             "appearance-none border-0 bg-transparent p-0 transition-opacity",
-            isDragging && "opacity-40",
+            // Polish spec §117 (Phase 38). Source fully hidden while
+            // dragging — the motion ghost in <CardDragLayer> IS the
+            // card in flight; no stale copy at source.
+            isDragging && "pointer-events-none opacity-0",
             !locked && assigned && !selectMode && "opacity-60",
             !locked && selectMode && !isSelected && "opacity-80",
             locked && "cursor-not-allowed opacity-50",

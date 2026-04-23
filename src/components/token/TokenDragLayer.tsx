@@ -34,7 +34,9 @@ type Props = {
   resolveToken: (tokenId: string) => TokenMeta | null;
 };
 
-const SPRING = { stiffness: 400, damping: 30, mass: 1 } as const;
+// Polish spec §116 (Phase 38). Matches CardDragLayer's tightened
+// spring so tokens and cards feel identical to drag.
+const SPRING = { stiffness: 700, damping: 34, mass: 0.7 } as const;
 const REDUCED_SPRING = { stiffness: 10000, damping: 200, mass: 1 } as const;
 
 export function TokenDragLayer({ resolveToken }: Props) {
@@ -134,22 +136,19 @@ type BounceBackProps = {
   onComplete: () => void;
 };
 
+/**
+ * Polish spec §118 (Phase 38). Fast 150ms snap-back, no shake —
+ * matches CardDragLayer.
+ */
 function BounceBack({ meta, from, to, onComplete }: BounceBackProps) {
   const motionProps: HTMLMotionProps<"div"> = {
     initial: { x: from.x, y: from.y, opacity: 1 },
     animate: {
-      x: [from.x, to.x, to.x - 5, to.x + 5, to.x - 2, to.x + 2, to.x],
-      y: [from.y, to.y, to.y, to.y, to.y, to.y, to.y],
-      transition: {
-        x: {
-          times: [0, 0.55, 0.68, 0.8, 0.9, 0.96, 1],
-          duration: 0.5,
-          ease: ["easeOut", "linear", "linear", "linear", "linear", "linear"],
-        },
-        y: { duration: 0.5, ease: "easeOut" },
-      },
+      x: to.x,
+      y: to.y,
+      transition: { duration: 0.15, ease: "easeOut" },
     },
-    exit: { opacity: 0, transition: { duration: 0.08 } },
+    exit: { opacity: 0, transition: { duration: 0.06 } },
   };
   return (
     <motion.div
