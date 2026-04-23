@@ -440,13 +440,46 @@ export function LineupView(props: LineupViewProps) {
       toast.error("Drop the token on a filled slot.");
       return;
     }
-    // Optimistic apply — badge appears on the card + tray pip hides
+    // If the card already has a token, swap — old token goes back
+    // to the tray, new one applies. Matches the card drop behavior
+    // (drag a card onto an occupied slot → swap via
+    // swap_lineup_slots). Short-circuit if the existing app is
+    // still an optimistic placeholder: we don't have a real UUID
+    // yet to send to removeToken, so bail instead of inventing
+    // bad state.
+    const existing = fill.appliedToken;
+    if (existing?.applicationId.startsWith("optimistic-")) {
+      toast.info("Previous token still applying — try again in a moment.");
+      return;
+    }
+    // No-op if the user drops the same token that's already on the
+    // card (can't really happen since applied tokens aren't
+    // draggable, but belt-and-suspenders).
+    if (existing && tokensById.get(tokenId)?.id === existing.applicationId) return;
+
+    // Optimistic apply — badge swaps on the card + tray pips update
     // immediately. Rebases on the next server refresh. The temp id
     // is swapped for the real one as soon as applyToken resolves so
     // a subsequent remove click sends a valid UUID.
     const tempAppId = `optimistic-${tokenId}-${card.id}`;
     startTransition(async () => {
+      if (existing) {
+        patchApps({ type: "remove", applicationId: existing.applicationId });
+      }
       patchApps({ type: "apply", cardId: card.id, tokenId, applicationId: tempAppId });
+
+      // Server: remove the old one first so the "card already has a
+      // token" constraint doesn't trip the apply.
+      if (existing) {
+        const removeResult = await removeToken({
+          tokenApplicationId: existing.applicationId,
+        });
+        if (!removeResult.ok && removeResult.error.code !== "NOT_FOUND") {
+          toast.error(`Couldn't swap token: ${removeResult.error.message}`);
+          return;
+        }
+      }
+
       const result = await applyToken({
         tokenId,
         cardId: card.id,
