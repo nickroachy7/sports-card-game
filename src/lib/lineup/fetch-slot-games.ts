@@ -114,33 +114,3 @@ export async function fetchSlotGameByCardId(
   }
   return out;
 }
-
-/**
- * Polish spec §63 (Phase 22) — shared enumeration for bench + collection
- * game-state filter chips.
- *
- * - `pre` — scheduled (actionable: tokens, swaps)
- * - `live` — game in progress
- * - `final` — game done for the day
- * - `off` — player has no game in today's contest (key missing from
- *   the slotGame map, OR status is postponed/suspended/canceled).
- */
-export type GameStateFilter = "all" | "pre" | "live" | "final" | "off";
-
-/** True if `info` matches the chip `filter`. `null` info means off-day. */
-export function matchesGameStateFilter(
-  info: SlotGameInfo | null,
-  filter: GameStateFilter,
-): boolean {
-  if (filter === "all") return true;
-  if (!info) return filter === "off";
-  if (filter === "pre") return info.status === "scheduled";
-  if (filter === "live") return info.status === "live";
-  if (filter === "final") return info.status === "final";
-  if (filter === "off") {
-    // Player has a contest game today, but it's unplayable (postponed
-    // / suspended / canceled). Group with OFF for the filter chip.
-    return info.status !== "scheduled" && info.status !== "live" && info.status !== "final";
-  }
-  return true;
-}

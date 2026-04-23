@@ -14,7 +14,7 @@ import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
-import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/fetch-slot-games";
+import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/game-state-filter";
 import type { SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 

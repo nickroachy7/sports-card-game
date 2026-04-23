@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
 import { Input } from "@/components/ui/input";
-import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/fetch-slot-games";
+import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/game-state-filter";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 import { BenchCard } from "./BenchCard";
