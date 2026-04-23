@@ -5992,3 +5992,85 @@ per-card actions + a `Done` button.
   in a row at reasonable card size.
 - Daily pack notification on other surfaces; header
   chime stays owned by the header only.
+
+---
+
+# Phase 37 — v1.22 (Remove-from-slot + token hover tooltips)
+
+Two small lineup-polish asks. Both are discoverability fixes.
+
+1. Add a one-click remove affordance on filled lineup slots
+   so users don't have to drag a card off to free the slot.
+2. Put hover tooltips on tokens (both in the tray and when
+   applied to a lineup card) so users know what each one
+   does without memorizing the short labels.
+
+---
+
+## 113. Remove-from-slot button
+
+### Goal
+
+Free a lineup slot with one click. Today's only option is
+drag-and-drop the card away, which works but isn't obvious
+and requires a decent amount of pointer travel.
+
+### Scope
+
+- Small circular **×** button in the **top-left** corner of
+  every filled `<LineupSlot>`. Hidden by default, fades in
+  on slot hover.
+- Click → instant remove (no confirm). Optimistic update
+  flows through the existing `handleCardDropped(position,
+  null, null)` path in `LineupView`.
+- Only rendered when the slot is unlocked (building state
+  OR post-submit but the slot's game hasn't started). Locked
+  slots show the lock icon instead — no remove affordance.
+- Keyboard accessible (button element, focus ring).
+
+### Files
+
+- `src/components/lineup/LineupSlot.tsx` — add the remove
+  button; accept a new `onRemoveStarter?: () => void` prop.
+- `src/components/lineup/LineupGrid.tsx` — pass through the
+  handler per slot.
+- `src/app/(app)/lineup/lineup-view.tsx` — wire to
+  `handleCardDropped(pos, null, null)`.
+
+---
+
+## 114. Token hover tooltips (tray + applied)
+
+### Goal
+
+Tokens show as compact pips with short labels (QS, K8, HR,
+2H). New users can't tell what they do. Hover should
+surface the full name + trigger condition + bonus FP.
+
+### Scope
+
+- New `src/components/ui/tooltip.tsx` — shadcn-style
+  Radix Tooltip wrapper using real project tokens (matches
+  the P36 dialog/alert-dialog fix pattern).
+- New `src/components/token/TokenTooltipContent.tsx` —
+  reusable body: token name (bold) · bonus FP chip · one-
+  line rule text from the existing `tokenRuleText()` helper.
+- Wrap `TrayTokenPip` in `TokenTray` with the tooltip.
+- Wrap `AppliedTokenBadge` with the same tooltip so the
+  hover UX is identical whether the token is floating in the
+  tray or attached to a lineup card.
+
+### Out of scope
+
+- Applied-to-player-name line in the tooltip (user didn't
+  ask for it; can add later if useful).
+- Tooltip on hover for cards themselves — different scope.
+
+---
+
+## 115. Not in scope for v1.22
+
+- Touch-device tap-to-reveal tooltip pattern (web desktop
+  launch; hover-only is fine).
+- Bulk remove from multiple slots at once.
+- Baserunners + pitcher-on-mound (still Phase 31 spec).
