@@ -118,7 +118,14 @@ export function BenchCard({
             // Polish spec §117 (Phase 38). Source fully hidden while
             // dragging — the motion ghost in <CardDragLayer> IS the
             // card in flight; no stale copy at source.
-            isDragging && "pointer-events-none opacity-0",
+            //
+            // NB: NEVER add `pointer-events-none` here. HTML5 drag
+            // fires dragstart → our state flips isDragging=true →
+            // re-render. If the source then becomes pointer-events-
+            // none, the browser treats the drag source as
+            // unreachable and cancels the drag. Kept as opacity-0
+            // only; the cursor is on the ghost anyway.
+            isDragging && "opacity-0",
             !locked && assigned && !selectMode && "opacity-60",
             !locked && selectMode && !isSelected && "opacity-80",
             locked && "cursor-not-allowed opacity-50",

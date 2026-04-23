@@ -67,10 +67,10 @@ export function TrayTokenPip({ token, disabled }: Props) {
             unusable && "cursor-not-allowed",
             // Polish spec §117 (Phase 38). Source token pip hides
             // fully while dragging; the TokenDragLayer renders the
-            // in-flight ghost. Previously the source stayed visible
-            // (the TokenBadge's isDragging prop only dimmed the
-            // ghost, not the tray chip).
-            isDragging && "pointer-events-none opacity-0",
+            // in-flight ghost. Only opacity-0 (no
+            // pointer-events-none) — the HTML5 drag cancels if the
+            // source becomes unreachable mid-drag.
+            isDragging && "opacity-0",
           )}
         >
           <TokenBadge

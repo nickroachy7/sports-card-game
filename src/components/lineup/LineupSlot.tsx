@@ -230,7 +230,10 @@ function LineupSlotInner({
         }}
         // Polish spec §117 (Phase 38). Source fully hidden while
         // dragging — motion ghost in CardDragLayer is authoritative.
-        className={cn("relative", isDragging && "pointer-events-none opacity-0")}
+        // Keep only opacity-0; pointer-events-none would cancel the
+        // HTML5 drag (browser treats an unreachable source as
+        // aborted). The cursor is on the ghost, not the source.
+        className={cn("relative", isDragging && "opacity-0")}
       >
         {/* Polish spec §119 (Phase 38). `settleScope` receives the
             drop-in scale pulse whenever a new card or token lands on

@@ -111,9 +111,14 @@ export function Card({
           borderRadius: sz.radius,
         }}
       />
-      {/* Inner panel — charcoal surface photo canvas. */}
+      {/* Inner panel — charcoal surface photo canvas. Phase 38
+          restructure: flex-column layout so the photo fills ALL
+          available space above the stats banner. The old absolute
+          photo area (fixed %) left a charcoal dead zone between
+          photo-bottom and banner-top when the banner's content
+          height didn't line up with 100% minus photo %. */}
       <div
-        className="absolute overflow-hidden"
+        className="absolute flex flex-col overflow-hidden"
         style={{
           top: sz.border,
           bottom: sz.border,
@@ -123,71 +128,70 @@ export function Card({
           backgroundColor: "var(--surface)",
         }}
       >
-        {/* Photo area. Polish spec §2 — matches Medium proportions at
-            every size so Small reads as "Medium anatomy, scaled." */}
-        <div
-          className="absolute inset-x-0 top-0 flex items-center justify-center text-[var(--text-3)]"
-          style={{ height: isSmall ? "58%" : isLarge ? "62%" : "60%" }}
-        >
+        {/* Photo area — grows to fill the gap above the stats
+            banner. Tags (position, team, status pill) sit
+            absolutely within this container. */}
+        <div className="relative flex flex-1 items-center justify-center overflow-hidden text-[var(--text-3)]">
           <CardPhoto
             photoUrl={card.photoUrl ?? null}
             initials={initials}
             fontSize={isSmall ? 20 : isLarge ? 72 : 36}
           />
+
+          {/* Position tag — top-left. */}
+          {card.position && (
+            <span
+              className="absolute rounded bg-[var(--surface-2)] font-sans font-semibold uppercase tracking-wider text-[var(--text)]"
+              style={{
+                left: isSmall ? 4 : 8,
+                top: isSmall ? 4 : 8,
+                padding: isSmall ? "1px 3px" : "2px 6px",
+                fontSize: isSmall ? 8 : isLarge ? 12 : 10,
+                border: "1px solid var(--border)",
+              }}
+            >
+              {positionShortLabel(card.position)}
+            </span>
+          )}
+
+          {/* Team chip — top-right. */}
+          {card.teamAbbreviation && (
+            <span
+              className="absolute rounded bg-[var(--surface-2)] font-mono font-semibold uppercase tracking-wider text-[var(--text)]"
+              style={{
+                right: isSmall ? 4 : 8,
+                top: isSmall ? 4 : 8,
+                padding: isSmall ? "1px 3px" : "2px 6px",
+                fontSize: isSmall ? 8 : isLarge ? 11 : 9,
+                border: "1px solid var(--border)",
+              }}
+            >
+              {card.teamAbbreviation}
+            </span>
+          )}
+
+          {/* Status pill — top-center (sits over photo area). */}
+          {pill && (
+            <span
+              className={cn(
+                "absolute left-1/2 flex -translate-x-1/2 items-center rounded font-sans font-semibold uppercase tracking-wider",
+                isSmall
+                  ? "top-4 h-3.5 px-1 text-[8px]"
+                  : isLarge
+                    ? "top-3 h-5 px-2 text-[12px]"
+                    : "top-2.5 h-4 px-2 text-[10px]",
+              )}
+              style={{ backgroundColor: pill.bg, color: pill.text }}
+            >
+              {pill.label}
+            </span>
+          )}
         </div>
 
-        {/* Position tag — top-left. */}
-        {card.position && (
-          <span
-            className="absolute rounded bg-[var(--surface-2)] font-sans font-semibold uppercase tracking-wider text-[var(--text)]"
-            style={{
-              left: isSmall ? 4 : 8,
-              top: isSmall ? 4 : 8,
-              padding: isSmall ? "1px 3px" : "2px 6px",
-              fontSize: isSmall ? 8 : isLarge ? 12 : 10,
-              border: "1px solid var(--border)",
-            }}
-          >
-            {positionShortLabel(card.position)}
-          </span>
-        )}
-
-        {/* Team chip — top-right. */}
-        {card.teamAbbreviation && (
-          <span
-            className="absolute rounded bg-[var(--surface-2)] font-mono font-semibold uppercase tracking-wider text-[var(--text)]"
-            style={{
-              right: isSmall ? 4 : 8,
-              top: isSmall ? 4 : 8,
-              padding: isSmall ? "1px 3px" : "2px 6px",
-              fontSize: isSmall ? 8 : isLarge ? 11 : 9,
-              border: "1px solid var(--border)",
-            }}
-          >
-            {card.teamAbbreviation}
-          </span>
-        )}
-
-        {/* Status pill — top-center (sits over photo area). */}
-        {pill && (
-          <span
-            className={cn(
-              "absolute left-1/2 flex -translate-x-1/2 items-center rounded font-sans font-semibold uppercase tracking-wider",
-              isSmall
-                ? "top-4 h-3.5 px-1 text-[8px]"
-                : isLarge
-                  ? "top-3 h-5 px-2 text-[12px]"
-                  : "top-2.5 h-4 px-2 text-[10px]",
-            )}
-            style={{ backgroundColor: pill.bg, color: pill.text }}
-          >
-            {pill.label}
-          </span>
-        )}
-
-        {/* Stats footer. Polish spec §2 — now rendered at every size. */}
+        {/* Stats banner — shrink-0, takes only its content height.
+            Border-t separates from the photo above. */}
         <div
-          className="absolute inset-x-0 bottom-0 flex flex-col border-t border-[var(--border)] bg-[var(--surface-2)]"
+          className="flex shrink-0 flex-col border-t border-[var(--border)] bg-[var(--surface-2)]"
           style={{
             padding: isSmall ? "3px 5px" : isLarge ? "8px 12px" : "4px 8px",
             gap: isSmall ? 0 : 2,
