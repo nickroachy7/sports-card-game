@@ -163,16 +163,24 @@ export function LineupView(props: LineupViewProps) {
     return byCardId;
   }, [optimisticApps]);
 
-  // Tokens list with optimistic applied-state pushed in so the
-  // TokenTray hides tokens that are "applied" during a pending
-  // transition, not just after the server refresh settles.
+  // Tokens list with `appliedToCardId` derived entirely from
+  // `optimisticApps`. This handles both directions of the optimistic
+  // overlay in one pass:
+  //   - Apply: new entry → `appliedToCardId = <cardId>` so the tray
+  //     hides the pip immediately.
+  //   - Remove: entry gone → `appliedToCardId = null` so the pip
+  //     reappears in the tray instantly, without waiting for the
+  //     server refresh to clear the real `appliedToCardId`.
+  // Prior version only handled adds; removes had a visible lag
+  // until the router.refresh() landed.
   const effectiveTokens = useMemo(() => {
-    const appliedTokenIds = new Set(optimisticApps.map((a) => a.tokenId));
-    return props.tokens.map((t) =>
-      appliedTokenIds.has(t.id) && t.appliedToCardId === null
-        ? { ...t, appliedToCardId: "optimistic" as const }
-        : t,
-    );
+    const cardByTokenId = new Map<string, string>();
+    for (const a of optimisticApps) cardByTokenId.set(a.tokenId, a.cardId);
+    return props.tokens.map((t) => {
+      const effectiveCard = cardByTokenId.get(t.id) ?? null;
+      if (effectiveCard === t.appliedToCardId) return t;
+      return { ...t, appliedToCardId: effectiveCard };
+    });
   }, [props.tokens, optimisticApps]);
 
   // Optimistic slot overlay. A pending bench→slot drop immediately
