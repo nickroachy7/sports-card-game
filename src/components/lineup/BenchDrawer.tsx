@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
+import { HorizontalScroller } from "@/components/ui/horizontal-scroller";
 import { Input } from "@/components/ui/input";
 import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/game-state-filter";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
@@ -182,7 +183,7 @@ export function BenchDrawer({
             : "No bench cards match the filter."}
         </div>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-1">
+        <HorizontalScroller innerClassName="pb-1">
           {filtered.map((card) => (
             <BenchCard
               key={card.id}
@@ -196,7 +197,7 @@ export function BenchDrawer({
               locked={locked}
             />
           ))}
-        </div>
+        </HorizontalScroller>
       )}
     </section>
   );

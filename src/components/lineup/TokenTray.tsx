@@ -1,6 +1,7 @@
 "use client";
 
 import { TrayTokenPip } from "@/components/token/TrayTokenPip";
+import { HorizontalScroller } from "@/components/ui/horizontal-scroller";
 import type { LineupTokenVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
@@ -40,11 +41,14 @@ export function TokenTray({ tokens, locked }: Props) {
       </header>
 
       {unapplied.length > 0 && (
-        <div className={cn("flex items-center gap-3 overflow-x-auto py-1", locked && "opacity-50")}>
+        <HorizontalScroller
+          className={cn(locked && "opacity-50")}
+          innerClassName="items-center py-1"
+        >
           {unapplied.map((token) => (
             <TrayTokenPip key={token.id} token={token} disabled={locked} />
           ))}
-        </div>
+        </HorizontalScroller>
       )}
     </section>
   );
