@@ -20,13 +20,13 @@ call-out from user feedback.
 
 | ID    | Milestone                                  | Target   | Outcome |
 |-------|--------------------------------------------|----------|---------|
-| P22.1 | Tone-washed pill treatment                 | 0.2 day  | `<SlotGameState>` footer + bench variants render inside tone-washed pills. Slot diamond + bench bench read uniformly. |
-| P22.2 | Game-state filter chips                    | 0.4 day  | Bench + collection get chip rows. Collection gains schedule-join server query. |
-| P22.3 | Outs tracking (migration 0034)             | 0.2 day  | `public.game.current_outs`. Webhook handler + SlotGameInfo + LIVE copy. |
-| P22.4 | Doubleheader support (migration 0035)      | 0.4 day  | `game_number` column + unique index + MLB Stats gameNumber pull + DH marker. |
-| P22.5 | `contest_status` enum cleanup (0036)       | 0.2 day  | Drop 'locked'; rebuild enum + dependents per P20 recipe. |
-| P22.6 | Deploy + verify                            | 0.1 day  | Apply 3 migrations; deploy; smoke. |
-| P22.7 | ADR-0027                                   | 0.1 day  | Standard retro. |
+| P22.1 | Tone-washed pill treatment                 | 0.2 day  | ✅ Shipped. `<SlotGameState>` footer + bench variants wrap body in a tone-washed pill. Slot diamond + bench read uniformly. |
+| P22.2 | Game-state filter chips                    | 0.4 day  | ✅ Shipped. Bench + collection both gained a chip row (All · Pre · Live · Final · Off) with counts. Collection page now uses the shared `fetchSlotGameByCardId` helper. |
+| P22.3 | Outs tracking (migration 0034)             | 0.2 day  | ✅ Shipped. `public.game.current_outs` + webhook handler idempotent UPDATE + SlotGameInfo + LIVE copy (`T5 2O`). Migration applied to prod. |
+| P22.4 | Doubleheader support (migration 0035)      | 0.4 day  | ✅ Shipped. Real schema change: nullable `game_number` + partial unique index + MLB Stats second pass + DH marker only when `has_double_header`. Dedup backfill kept the BDL-authoritative (event-richest) partner, re-parented any stragglers. |
+| P22.5 | `contest_status` enum cleanup (0036)       | 0.2 day  | ✅ Shipped. P20 recipe; only dependency was `vault_card_midseason` (narrowed to `co.status = 'live'`). Enum now `pending / live / final / canceled`. |
+| P22.6 | Deploy + verify                            | 0.1 day  | Migrations 0034/0035/0036 live in prod. Next: `vercel --prod` + `bdl-games-prefetch`. |
+| P22.7 | ADR-0027                                   | 0.1 day  | Pending (post-deploy). |
 
 ---
 
