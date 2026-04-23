@@ -35,3 +35,35 @@ export const onboardingSchema = z.object({
 });
 
 export type OnboardingInput = z.infer<typeof onboardingSchema>;
+
+/**
+ * Polish spec §85 (Phase 29). Team customization uses the same shape
+ * as onboarding — name + two colors + logo id. Shared schema avoids
+ * drift between the onboarding flow and the post-onboarding edit
+ * surface.
+ */
+export const updateTeamProfileSchema = onboardingSchema;
+export type UpdateTeamProfileInput = z.infer<typeof updateTeamProfileSchema>;
+
+/**
+ * Preset color swatches surfaced in both onboarding and the team
+ * customization page. Users can also enter custom hex; presets are a
+ * fast path to visually-coherent choices.
+ */
+export const PRESET_PRIMARY_COLORS: readonly string[] = [
+  "#2A5CAA",
+  "#C5322B",
+  "#1F7A3D",
+  "#D4A647",
+  "#6E3BC4",
+  "#E07A2B",
+];
+
+export const PRESET_SECONDARY_COLORS: readonly string[] = [
+  "#F5F1E8",
+  "#1A1816",
+  "#C9C3B5",
+  "#8A8478",
+  "#A57248",
+  "#A8DDE2",
+];

@@ -14,17 +14,26 @@ export const revalidate = 60;
  * API spec §4.2 — public leaderboard endpoint.
  *
  * GET /api/leaderboards/[type] where type ∈
- *   manager-level | season-fp | card-prestige | vault-prestige.
+ *   manager-level | season-fp | cards | vault-prestige.
  *
- * Response:
+ * Response (discriminated on `kind`):
  *   {
  *     data: {
  *       type,
- *       seasonId,      // null for non-seasonal boards
- *       top:  [ { rank, userId, teamName, managerLevel, metricValue } ],
+ *       kind: "user" | "card",
+ *       seasonId,
+ *       top:  [ <row shape per kind> ],
  *       you:  <same shape> | null
  *     }
  *   }
+ *
+ * User rows: `{ kind, rank, userId, teamName, managerLevel, metricValue }`.
+ * Card rows: `{ kind, rank, cardId, playerName, tier, teamAbbreviation,
+ *               careerFp, ownerUserId, ownerTeamName }`.
+ *
+ * The `cards` type (polish spec §83, Phase 29) ranks individual cards
+ * across the community, replacing the old `card-prestige` user-based
+ * ranking.
  *
  * Cache: s-maxage=60, stale-while-revalidate=30 per spec.
  */
@@ -58,13 +67,21 @@ export async function GET(
   }
 
   try {
-    const { seasonId, top, you } = await getLeaderboard(type as LeaderboardType, {
+    const result = await getLeaderboard(type as LeaderboardType, {
       userId,
       limit,
     });
 
     return NextResponse.json(
-      { data: { type, seasonId, top, you } },
+      {
+        data: {
+          type,
+          kind: result.kind,
+          seasonId: result.seasonId,
+          top: result.top,
+          you: result.you,
+        },
+      },
       {
         headers: {
           "Cache-Control": "s-maxage=60, stale-while-revalidate=30",

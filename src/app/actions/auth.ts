@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 
 import { signInSchema, signUpSchema } from "@/lib/contracts/auth";
 import { createServerClient } from "@/lib/db/supabase";
@@ -10,6 +11,76 @@ import { captureServerEvent } from "@/lib/observability/action";
 type ActionResult<T = undefined> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
+
+/**
+ * Polish spec §86 (Phase 29). Password change — current + new. We
+ * re-verify the current password via signInWithPassword before
+ * calling updateUser so stolen sessions can't reset the password.
+ */
+const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Enter your current password."),
+    newPassword: z
+      .string()
+      .min(8, "New password must be at least 8 characters.")
+      .max(72, "New password must be at most 72 characters."),
+    confirmPassword: z.string().min(1),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "New passwords don't match.",
+    path: ["confirmPassword"],
+  });
+
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<ActionResult<undefined>> {
+  const parsed = changePasswordSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        code: "VALIDATION",
+        message: parsed.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
+
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.email) {
+    return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+  }
+
+  // Re-authenticate to verify the current password. If this fails
+  // the user typed it wrong — NOT a permissions issue.
+  const { error: reauthError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: parsed.data.currentPassword,
+  });
+  if (reauthError) {
+    return {
+      ok: false,
+      error: { code: "UNAUTHENTICATED", message: "Current password is incorrect." },
+    };
+  }
+
+  const { error: updateError } = await supabase.auth.updateUser({
+    password: parsed.data.newPassword,
+  });
+  if (updateError) {
+    return {
+      ok: false,
+      error: { code: "INTERNAL", message: updateError.message },
+    };
+  }
+
+  await captureServerEvent(user.id, "password_changed", {});
+  return { ok: true, data: undefined };
+}
 
 export async function signInWithPassword(
   formData: FormData,
