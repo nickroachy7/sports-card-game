@@ -4520,3 +4520,115 @@ visible at all reasonable viewport sizes.
 - Collection multi-day schedule view.
 - Onboarding flow pass.
 - Standard parked items.
+
+---
+
+# Phase 25 — Feel Pass v1.15.1 (Match bench size, revert fluid scaling)
+
+User feedback after Phase 24 shipped:
+
+> "My bad if I misunderstood what you were saying but a lot
+> of people are going to use our web app at a smaller
+> normal laptop size. Ideally, all the cards in the lineup
+> would always remain the same size as the cards in the
+> bench. We can do better here as this does not look nice."
+
+Phase 24's fit-to-pane math was over-aggressive about
+reserving per-slot chrome; at normal laptop heights (900px,
+etc.) it computed card widths *smaller* than the bench's
+fixed 96×134, producing the exact inconsistency the user
+flagged: lineup cards tiny, bench cards larger, floating in
+an otherwise empty pane. Simpler + correct goal: lineup
+cards == bench cards.
+
+One slice. Pure revert + polish.
+
+---
+
+## 76. Fixed lineup card size, label alignment
+
+### Goal
+
+Lineup cards always render at the same size as bench cards
+(`<Card size="small" />` = 96×134). The diamond/scaling
+experiments from Phases 23–24 taught us the row-based
+layout is right; now pin the sizing so the drag-from-bench-
+to-slot motion has zero size shift, and the lineup reads as
+a structured roster instead of tiny cards in a void.
+
+### Scope
+
+- **Revert P24 scaling** in `LineupSlot.tsx`. Drop the
+  scaling shell, `shellStyle`, `scaledInnerStyle`, and any
+  reliance on `--card-w-px` / `--card-scale` CSS vars. Empty
+  slots go back to `h-[134px] w-[96px]`; filled slots render
+  `<Card size="small" />` directly inside the drag source
+  container.
+- **Rewrite `LineupGrid.tsx`** to a fixed-layout shape:
+  - Drop the `ResizeObserver` + `useEffect` + `useState`
+    for card width.
+  - Drop the `LAYOUT` constants block + `computeCardWidth`
+    helper.
+  - Drop the CSS custom properties on the grid root.
+  - Wrap the three RoleRows in a **shared-width inner
+    container** (544px — infield row's natural width = 5
+    cards × 96 + 4 gaps × 16). Rotation and Outfield rows
+    center-justify their cards within that container.
+  - Each row's label sits flush-left of the shared
+    container (a block-level `<h3>`). All three labels
+    align to the same x-coordinate across rows because
+    they share the container's left edge. This is the
+    user's "labels aligned left to the card group" pick.
+  - Outer grid: `flex h-full w-full flex-col items-center
+    justify-center gap-6 p-6`. Centers the shared container
+    horizontally + vertically in the available pane.
+- **Revert `LineupShell.tsx`** grid-pane overflow. Keep
+  `flex-1 min-h-0` but drop the P24 `overflow-hidden`.
+  Grid content at fixed size (~620px tall) fits in
+  realistic laptop pane heights; if an extreme-short
+  viewport is used, browser defaults apply (mild overflow
+  rather than internal scroll).
+
+### Acceptance
+
+- [ ] At any typical viewport (13" laptop and up), lineup
+      cards render at 96×134 — identical to bench cards.
+- [ ] No internal scroll on the lineup grid area.
+- [ ] Row labels align flush-left to the infield row's
+      left edge; all three labels at the same x.
+- [ ] Rotation (2 cards) + Outfield (3 cards) rows center-
+      justify within the shared 544px container.
+- [ ] Drag-from-bench-to-slot has zero visual size shift
+      during the drag → drop animation.
+- [ ] Bench + token carousel unaffected.
+- [ ] Sidebar + contest header unaffected.
+
+### Trade-offs
+
+- **Loses fit-to-pane dream.** On very wide or very short
+  viewports, cards don't grow/shrink. That was Phase 24's
+  ambition; Phase 25 accepts the trade because consistency
+  with the bench beats horizontal-space optimization.
+- **Wide-screen extra space returns.** On a 4K monitor,
+  the 544px grid sits centered with ample empty gutter.
+  Acknowledged; future deep sidebar / matchup-context
+  work can fill that space productively.
+- **Short-viewport overflow.** Viewports below ~780px tall
+  may see the outfield row partially below fold. Either
+  the page scrolls (expected behavior for a desktop app
+  with a reasonable minimum viewport), or a follow-on
+  phase can compress chrome further. Not optimizing for
+  this edge case now.
+
+---
+
+## 77. Not in scope for v1.15.1
+
+- Card.tsx internal refactor.
+- Deep sidebar reorganization.
+- Matchup-context side panels on wide screens.
+- Baserunners live tracking.
+- Pitcher-on-mound indicator.
+- Collection multi-day schedule view.
+- Onboarding flow pass.
+- Standard parked items.
