@@ -4385,3 +4385,138 @@ reorganization planned post-v1.14.
 - Pitcher-on-mound indicator.
 - Collection multi-day schedule view.
 - Onboarding flow pass.
+
+---
+
+# Phase 24 — Feel Pass v1.15 (Fluid lineup layout)
+
+User feedback after Phase 23 shipped:
+
+> "I don't love the canvas treatment we are giving the lineup
+> section. When the screen is huge, there is wasted space,
+> when it's smaller you have to scroll to see other players
+> in that section."
+
+The three-role-row layout (§68) solved the diamond-metaphor
+problem, but cards stayed at a fixed 96×134 small size with
+a `max-w-5xl` container cap. On wide viewports, that left
+hundreds of px of empty gutter on each side; on narrow/short
+viewports, the three rows overflowed vertically and forced
+scroll.
+
+User-picked recommendations from the interview:
+- **Fit-to-pane:** all 10 cards always visible, no scroll.
+- **Keep card aspect ratio:** width and height scale together
+  (96:134 ≈ 0.72:1).
+- **Cap card width:** scale up with the pane until a sensible
+  max, then let extra space become breathing room.
+
+One phase, one slice.
+
+---
+
+## 74. Fluid lineup layout (fit-to-pane)
+
+### Goal
+
+The lineup grid fills its available pane in both dimensions.
+Cards scale up to fill wide-screen real estate (capped at a
+reasonable max) and scale down to fit narrow/short viewports
+without vertical scroll. Card aspect ratio preserved; the
+three-role-row structure from §68 preserved; all 10 cards
+visible at all reasonable viewport sizes.
+
+### Scope
+
+- **Measurement:** LineupGrid is already a client component;
+  add a `ResizeObserver` on its root element. On every resize
+  recompute the optimal card width + scale and set two CSS
+  custom properties: `--card-w-px` (length) and
+  `--card-scale` (unitless number).
+- **Sizing math:**
+  ```
+  card_w = min(
+    CAP,                                     // cap at ~200px
+    (paneW - paddingX - 4·cardGapX) / 5,      // 5-across infield constraint
+    (paneH - paddingY
+           - 2·rowGapY
+           - 3·rowLabelH
+           - 3·slotChromeH) / 3 / (134/96)    // 3-rows-fit vertical constraint
+  )
+  card_scale = card_w / 96
+  ```
+  Clamp at a sensible floor (~60px) so extreme micro-
+  viewports still render readable-ish shapes.
+- **Scaling mechanism:** keep `<Card size="small" />`
+  unchanged. Wrap it (and the dashed empty-slot box) in a
+  two-div shell:
+  - Outer: `width: var(--card-w-px); height: calc(var(--card-w-px) * 134 / 96); position: relative`.
+  - Inner: absolute, `width: 96px; height: 134px; transform: scale(var(--card-scale)); transform-origin: top left`.
+  - Visual scale follows the CSS var without touching Card's
+    internals. At integer-ish scales text stays crisp;
+    slight blur at fractional scales is acceptable given the
+    alternative is a much larger Card refactor.
+- **LineupShell:** the grid pane container switches from
+  `overflow-auto + items-start` to `overflow-hidden +
+  items-stretch` so the grid fills its parent. The grid
+  handles its own overflow (which with the math above,
+  shouldn't happen).
+- **Slot chrome:** the per-slot position label (SP1, C, 1B,
+  …), SlotGameState pill, and "remove" button stay at their
+  natural text sizes — they're legibility-critical and
+  scaling-them would look strange. Only the card visual
+  scales.
+- **Retire the max-w-5xl container:** LineupGrid's root uses
+  `w-full`. Padding + gaps are consistent constants that
+  the sizing math can reference.
+
+### Acceptance
+
+- [ ] At 1920×900 viewport: cards scale up near the cap
+      (~180-200px wide); no wasted side gutter beyond
+      intentional padding.
+- [ ] At 1280×800 viewport: cards fit without internal
+      vertical scroll.
+- [ ] At 1024×720 viewport (minimum supported): cards
+      shrink but all 10 are visible; no vertical scroll.
+- [ ] Card aspect ratio preserved at every scale.
+- [ ] Drag/drop targets still work (transform: scale
+      preserves hit-boxes).
+- [ ] Bench + tokens layout unaffected.
+- [ ] Sidebar + contest header card unaffected.
+
+### Trade-offs
+
+- **`transform: scale()` over refactoring Card internals.**
+  Card.tsx has every inner measurement hardcoded in inline
+  pixel styles driven by a 3-tier size enum. Rewriting it to
+  accept fluid dimensions is a ~50-line diff with
+  cross-tier risk. The scale-wrapper approach is ~20 lines
+  isolated to LineupSlot/LineupGrid. If visual quality
+  proves insufficient at scale extremes, the proper
+  refactor is still available.
+- **ResizeObserver adds JS measurement.** One observer on
+  the grid root, not per-slot. Cheap.
+- **Single CSS-var channel for all 10 slots.** LineupGrid
+  sets `--card-w-px` + `--card-scale` once; all slots
+  inherit. No per-slot JS.
+- **Chrome stays at natural text sizes.** Means the visible
+  card can look proportionally bigger than its labels at
+  max scale (card 200px wide, label 9px). Looks fine —
+  users' eyes expect fixed label chrome.
+- **Minimum-viewport floor at ~60px card width.** Below
+  that cards are illegible; we'd rather let them clip with
+  a min than render unreadable. Realistic viewports won't
+  hit this.
+
+---
+
+## 75. Not in scope for v1.15
+
+- Card.tsx internal refactor to truly fluid sizing.
+- Deep sidebar reorganization.
+- Baserunners live tracking.
+- Pitcher-on-mound indicator.
+- Collection multi-day schedule view.
+- Onboarding flow pass.
+- Standard parked items.
