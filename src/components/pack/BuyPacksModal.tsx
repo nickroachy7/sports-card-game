@@ -1,6 +1,6 @@
 "use client";
 
-import { Coins, Package, X } from "lucide-react";
+import { Coins, Package } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -103,17 +103,18 @@ export function BuyPacksModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader className="flex-row items-center justify-between gap-4">
+      <DialogContent className="max-w-md">
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Package className="size-5 text-[var(--tier-gold)]" aria-hidden="true" />
             Buy packs
           </DialogTitle>
-          <div className="mr-6 flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1">
+          <div className="flex items-center gap-1.5 pt-1 text-xs text-[var(--text-2)]">
             <Coins className="size-3.5 text-[var(--tier-gold)]" aria-hidden="true" />
-            <span className="font-mono text-xs font-bold text-[var(--text)]">
+            <span className="font-mono font-bold text-[var(--text)]">
               {coinBalance.toLocaleString()}
             </span>
+            <span className="text-[var(--text-3)]">coins</span>
           </div>
         </DialogHeader>
 
@@ -179,14 +180,8 @@ export function BuyPacksModal({
           )}
         </section>
 
-        <button
-          type="button"
-          onClick={() => onOpenChange(false)}
-          aria-label="Close"
-          className="absolute top-3 right-3 rounded-md p-1 text-[var(--text-3)] transition-colors hover:text-[var(--text)]"
-        >
-          <X className="size-4" />
-        </button>
+        {/* Dialog primitive renders its own close (X) button in the
+            top-right; no need for a custom one here. */}
       </DialogContent>
     </Dialog>
   );

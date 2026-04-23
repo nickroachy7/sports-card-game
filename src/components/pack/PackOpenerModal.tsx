@@ -223,7 +223,11 @@ export function PackOpenerModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-5xl">
+      {/* sm:max-w-5xl force-overrides the Dialog primitive's
+          sm:max-w-lg default so the reveal has room for a row of
+          revealed cards. Close button hidden until canDone so the
+          user can't bail mid-reveal. */}
+      <DialogContent className="sm:max-w-5xl" showCloseButton={canDone}>
         <DialogHeader>
           <DialogTitle className="uppercase tracking-wider">Pack opened</DialogTitle>
           {summary && <p className="text-sm text-[var(--text-2)]">{summary}</p>}
@@ -232,10 +236,10 @@ export function PackOpenerModal({
         {cards.length === 0 ? (
           <div className="py-12 text-center text-sm text-[var(--text-3)]">No cards to reveal.</div>
         ) : (
-          <div className="flex flex-col gap-6 py-2">
+          <div className="relative flex flex-col items-center gap-5 py-2">
             {/* Stack — disappears once the last card is peeled. */}
             {!allPeeled && (
-              <div className="flex flex-col items-center gap-3">
+              <div className="flex flex-col items-center gap-2">
                 <StackZone
                   activeIdx={peelIndex}
                   remaining={stackRemaining}
@@ -245,13 +249,15 @@ export function PackOpenerModal({
                   onFlipComplete={handleFlipComplete}
                   celebrating={celebratingIdx === peelIndex}
                 />
-                <p className="text-xs uppercase tracking-wider text-[var(--text-3)]">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
                   {stackRemaining} remaining · Tap the top card
                 </p>
               </div>
             )}
 
-            {/* Revealed row — fills in as cards are peeled. */}
+            {/* Revealed row — fills in as cards are peeled. Only
+                renders revealed cards (no ghost placeholders) so the
+                row visually grows as you peel. */}
             <RevealedRow
               cards={cards}
               cardResults={result?.cardResults ?? []}
@@ -263,6 +269,18 @@ export function PackOpenerModal({
               onQuickSell={handlePerCardQuickSell}
               onVault={handlePerCardVault}
             />
+
+            {/* Dupe resolution modal-within-modal. Parks the peel flow
+                until the user decides; then advances. */}
+            {dupePayload && (
+              <DupeResolutionOverlay
+                newCard={dupePayload.newCard}
+                existingCard={dupePayload.existing}
+                pending={pending}
+                onKeepNew={() => handleKeepNew(dupePayload.idx)}
+                onKeepExisting={() => handleKeepExisting(dupePayload.idx)}
+              />
+            )}
           </div>
         )}
 
@@ -275,18 +293,6 @@ export function PackOpenerModal({
                 : "Reveal all cards to continue"}
           </Button>
         </DialogFooter>
-
-        {/* Dupe resolution modal-within-modal. Parks the peel flow
-            until the user decides; then advances. */}
-        {dupePayload && (
-          <DupeResolutionOverlay
-            newCard={dupePayload.newCard}
-            existingCard={dupePayload.existing}
-            pending={pending}
-            onKeepNew={() => handleKeepNew(dupePayload.idx)}
-            onKeepExisting={() => handleKeepExisting(dupePayload.idx)}
-          />
-        )}
       </DialogContent>
     </Dialog>
   );
@@ -356,11 +362,14 @@ function StackZone({
 }
 
 /**
- * RevealedRow — the grid that fills in as cards are peeled. Each slot
- * renders a placeholder until its card's flip lands; then the card
- * + per-card action buttons appear. Per-card buttons only enable
- * once the whole stack is peeled AND all dupes resolved (driven by
- * `actionsEnabled`).
+ * RevealedRow — flex-wrap grid that fills in as cards are peeled.
+ * Only renders revealed cards (no ghost placeholders) so the row
+ * visually grows outward from the center as each card settles.
+ *
+ * Per-card Quick-sell / Vault buttons stay disabled until the whole
+ * stack is peeled AND all dupes are resolved (`actionsEnabled`).
+ * Before then the buttons show as placeholders so the layout
+ * doesn't shift once they become available.
  */
 function RevealedRow({
   cards,
@@ -383,85 +392,74 @@ function RevealedRow({
   onQuickSell: (idx: number) => void;
   onVault: (idx: number) => void;
 }) {
+  const anyRevealed = flipped.some(Boolean);
+  if (!anyRevealed) return null;
   return (
-    <div className="mx-auto w-full max-w-[1040px] overflow-x-auto">
-      <div
-        className="grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${Math.max(cards.length, 1)}, minmax(140px, 1fr))` }}
-      >
-        {cards.map((card, i) => {
-          const isRevealed = flipped[i] ?? false;
-          const action = perCardAction[i];
-          const dupeRes = cardResults[i]?.isDupe ? resolution[i] : null;
-          const hidden = dupeRes === "kept_existing" || action === "quickSold";
-          return (
-            <div
-              key={card.id}
-              className={cn(
-                "flex flex-col items-center gap-2 transition-opacity",
-                !isRevealed && "opacity-0",
-                hidden && "opacity-40",
-              )}
-            >
-              {isRevealed ? (
-                <div className="relative">
-                  <PackCardFlip card={card} faceUp={true} onFlip={() => {}} />
-                  {action === "vaulted" && (
-                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
-                      <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--tier-gold)]">
-                        <Archive className="size-3" aria-hidden="true" />
-                        Vaulted
-                      </span>
-                    </div>
-                  )}
-                  {action === "quickSold" && (
-                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
-                      <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--text-2)]">
-                        <Check className="size-3" aria-hidden="true" />
-                        Sold
-                      </span>
-                    </div>
-                  )}
+    <div className="flex w-full flex-wrap items-start justify-center gap-x-3 gap-y-4">
+      {cards.map((card, i) => {
+        const isRevealed = flipped[i] ?? false;
+        if (!isRevealed) return null;
+        const action = perCardAction[i];
+        const dupeRes = cardResults[i]?.isDupe ? resolution[i] : null;
+        const hidden = dupeRes === "kept_existing" || action === "quickSold";
+        return (
+          <div
+            key={card.id}
+            className={cn(
+              "flex w-[160px] flex-col items-center gap-2 transition-opacity",
+              hidden && "opacity-40",
+            )}
+          >
+            <div className="relative">
+              <PackCardFlip card={card} faceUp={true} onFlip={() => {}} />
+              {action === "vaulted" && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
+                  <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--tier-gold)]">
+                    <Archive className="size-3" aria-hidden="true" />
+                    Vaulted
+                  </span>
                 </div>
-              ) : (
-                <div
-                  aria-hidden="true"
-                  className="rounded-[10px] border border-dashed border-[var(--border)]"
-                  style={{ width: 160, height: 224 }}
-                />
               )}
-              <div className="flex w-full flex-col items-stretch gap-1.5 px-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onQuickSell(i)}
-                  disabled={!actionsEnabled || pending || action !== null || hidden}
-                  className="h-7 text-[11px]"
-                >
-                  Quick-sell ({card.quickSellValue.toLocaleString()})
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onVault(i)}
-                  disabled={
-                    !actionsEnabled ||
-                    pending ||
-                    action !== null ||
-                    hidden ||
-                    card.isExpired ||
-                    card.hasAppliedToken
-                  }
-                  className="h-7 text-[11px]"
-                >
-                  <Archive className="mr-1 size-3" aria-hidden="true" />
-                  Vault
-                </Button>
-              </div>
+              {action === "quickSold" && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
+                  <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--text-2)]">
+                    <Check className="size-3" aria-hidden="true" />
+                    Sold
+                  </span>
+                </div>
+              )}
             </div>
-          );
-        })}
-      </div>
+            <div className="flex w-full flex-col items-stretch gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onQuickSell(i)}
+                disabled={!actionsEnabled || pending || action !== null || hidden}
+                className="h-7 px-2 text-[11px]"
+              >
+                Sell ({card.quickSellValue.toLocaleString()})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onVault(i)}
+                disabled={
+                  !actionsEnabled ||
+                  pending ||
+                  action !== null ||
+                  hidden ||
+                  card.isExpired ||
+                  card.hasAppliedToken
+                }
+                className="h-7 px-2 text-[11px]"
+              >
+                <Archive className="mr-1 size-3" aria-hidden="true" />
+                Vault
+              </Button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
