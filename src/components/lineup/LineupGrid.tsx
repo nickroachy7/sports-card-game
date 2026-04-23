@@ -29,6 +29,12 @@ type Props = {
   onTokenDropped: (position: LineupPosition, tokenId: string) => void;
   onRemoveToken: (applicationId: string) => void;
   onOpenDetail: (cardId: string) => void;
+  /**
+   * Polish spec §113 (Phase 37). One-click remove from a lineup
+   * slot. Passes the position so LineupView can route to the shared
+   * `handleCardDropped(pos, null, null)` removal path.
+   */
+  onRemoveStarter: (position: LineupPosition) => void;
 };
 
 /**
@@ -92,6 +98,7 @@ export function LineupGrid({
   onTokenDropped,
   onRemoveToken,
   onOpenDetail,
+  onRemoveStarter,
 }: Props) {
   const [rowMode, setRowMode] = useState<"three" | "two">("three");
 
@@ -121,6 +128,7 @@ export function LineupGrid({
           onTokenDropped={onTokenDropped}
           onRemoveToken={onRemoveToken}
           onOpenDetail={onOpenDetail}
+          onRemoveStarter={onRemoveStarter}
         />
       ))}
     </div>
@@ -136,6 +144,7 @@ function RoleRow({
   onTokenDropped,
   onRemoveToken,
   onOpenDetail,
+  onRemoveStarter,
 }: {
   label: string;
   positions: readonly LineupPosition[];
@@ -145,6 +154,7 @@ function RoleRow({
   onTokenDropped: Props["onTokenDropped"];
   onRemoveToken: Props["onRemoveToken"];
   onOpenDetail: Props["onOpenDetail"];
+  onRemoveStarter: Props["onRemoveStarter"];
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -168,6 +178,7 @@ function RoleRow({
               onTokenDropped={(tokenId) => onTokenDropped(position, tokenId)}
               onRemoveToken={onRemoveToken}
               onOpenDetail={onOpenDetail}
+              onRemoveStarter={() => onRemoveStarter(position)}
             />
           );
         })}

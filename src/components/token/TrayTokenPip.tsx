@@ -6,6 +6,8 @@ import { getEmptyImage } from "react-dnd-html5-backend";
 
 import { dragResult } from "@/components/card/drag-layer-state";
 import { DRAG_TYPES, type TokenDragItem } from "@/components/lineup/drag-types";
+import { TokenTooltipContent } from "@/components/token/TokenTooltipContent";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { LineupTokenVM } from "@/lib/lineup/types";
 import { TOKEN_LONG_LABEL } from "@/lib/token/display";
 import { cn } from "@/lib/utils";
@@ -50,26 +52,33 @@ export function TrayTokenPip({ token, disabled }: Props) {
   }, [preview]);
 
   return (
-    <button
-      type="button"
-      ref={(el) => {
-        dragRef(el);
-      }}
-      disabled={unusable}
-      aria-label={`${TOKEN_LONG_LABEL[token.tokenType]} token, ${applied ? "applied" : "available"}`}
-      className={cn(
-        "appearance-none border-0 bg-transparent p-0",
-        !unusable && "cursor-grab active:cursor-grabbing",
-        unusable && "cursor-not-allowed",
-      )}
-    >
-      <TokenBadge
-        tokenType={token.tokenType}
-        bonusFp={token.bonusFp}
-        size="tray"
-        dim={applied}
-        isDragging={isDragging}
-      />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          ref={(el) => {
+            dragRef(el);
+          }}
+          disabled={unusable}
+          aria-label={`${TOKEN_LONG_LABEL[token.tokenType]} token, ${applied ? "applied" : "available"}`}
+          className={cn(
+            "appearance-none border-0 bg-transparent p-0",
+            !unusable && "cursor-grab active:cursor-grabbing",
+            unusable && "cursor-not-allowed",
+          )}
+        >
+          <TokenBadge
+            tokenType={token.tokenType}
+            bonusFp={token.bonusFp}
+            size="tray"
+            dim={applied}
+            isDragging={isDragging}
+          />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <TokenTooltipContent tokenType={token.tokenType} bonusFp={token.bonusFp} />
+      </TooltipContent>
+    </Tooltip>
   );
 }

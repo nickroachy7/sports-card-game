@@ -649,6 +649,7 @@ export function LineupView(props: LineupViewProps) {
           onTokenDropped={handleTokenDropped}
           onRemoveToken={handleRemoveToken}
           onOpenDetail={handleOpenDetail}
+          onRemoveStarter={(position) => handleCardDropped(position, null, null)}
         />
       }
       sidebar={

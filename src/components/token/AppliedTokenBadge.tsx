@@ -3,6 +3,8 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 
+import { TokenTooltipContent } from "@/components/token/TokenTooltipContent";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TokenType } from "@/lib/contracts/cards";
 import { TOKEN_LONG_LABEL } from "@/lib/token/display";
 import { cn } from "@/lib/utils";
@@ -47,31 +49,38 @@ export function AppliedTokenBadge({ tokenType, bonusFp, onRemove, disabled, clas
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      onBlur={handleBlur}
-      disabled={disabled}
-      aria-label={
-        confirming
-          ? `Confirm remove ${TOKEN_LONG_LABEL[tokenType]} token`
-          : `Remove ${TOKEN_LONG_LABEL[tokenType]} token`
-      }
-      className={cn(
-        "relative block appearance-none border-0 bg-transparent p-0",
-        disabled ? "cursor-not-allowed" : "cursor-pointer",
-        className,
-      )}
-    >
-      <TokenBadge tokenType={tokenType} bonusFp={bonusFp} size="applied" />
-      {confirming && (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-[#C47262]/90 text-[var(--text)] shadow-md ring-2 ring-[#C47262]"
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={handleClick}
+          onBlur={handleBlur}
+          disabled={disabled}
+          aria-label={
+            confirming
+              ? `Confirm remove ${TOKEN_LONG_LABEL[tokenType]} token`
+              : `Remove ${TOKEN_LONG_LABEL[tokenType]} token`
+          }
+          className={cn(
+            "relative block appearance-none border-0 bg-transparent p-0",
+            disabled ? "cursor-not-allowed" : "cursor-pointer",
+            className,
+          )}
         >
-          <X className="h-3.5 w-3.5" />
-        </span>
-      )}
-    </button>
+          <TokenBadge tokenType={tokenType} bonusFp={bonusFp} size="applied" />
+          {confirming && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-[#C47262]/90 text-[var(--text)] shadow-md ring-2 ring-[#C47262]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </span>
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <TokenTooltipContent tokenType={tokenType} bonusFp={bonusFp} />
+      </TooltipContent>
+    </Tooltip>
   );
 }

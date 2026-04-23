@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock } from "lucide-react";
+import { Lock, X } from "lucide-react";
 import { useEffect } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { getEmptyImage } from "react-dnd-html5-backend";
@@ -48,6 +48,12 @@ type Props = {
   onTokenDropped: (tokenId: string) => void;
   onRemoveToken: (applicationId: string) => void;
   onOpenDetail: (cardId: string) => void;
+  /**
+   * Polish spec §113 (Phase 37). One-click remove. Fires when the
+   * user clicks the × button in the top-left corner of a filled,
+   * unlocked slot. Routes through the same path as a null-drop.
+   */
+  onRemoveStarter?: () => void;
 };
 
 export function LineupSlot(props: Props) {
@@ -68,6 +74,7 @@ function LineupSlotInner({
   onTokenDropped,
   onRemoveToken,
   onOpenDetail,
+  onRemoveStarter,
   depleteEvent,
 }: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
   const isPitcher = isPitcherSlot(position);
@@ -189,7 +196,7 @@ function LineupSlotInner({
         tokenDropRef(el);
       }}
       className={cn(
-        "relative flex flex-col items-center gap-1 rounded-md transition-colors",
+        "group/slot relative flex flex-col items-center gap-1 rounded-md transition-colors",
         isTokenOver && canTokenDrop && "ring-2 ring-[var(--tier-gold,#D4A647)]",
         isCardOver && canCardDrop && "ring-2 ring-[var(--text)]",
         isCardOver && !canCardDrop && "ring-2 ring-[#C47262]",
@@ -203,6 +210,29 @@ function LineupSlotInner({
         className={cn("relative", isDragging && "opacity-40")}
       >
         <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
+        {/* Polish spec §113 (Phase 37). One-click remove. Sits in
+            the card's top-left, fades in on slot hover. Hidden
+            entirely while the slot is locked (the lock glyph owns
+            the top-right). */}
+        {!locked && onRemoveStarter && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRemoveStarter();
+            }}
+            aria-label={`Remove ${card.playerName} from ${position}`}
+            className={cn(
+              "absolute -left-1.5 -top-1.5 z-20 flex size-5 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-2)] opacity-0 shadow transition-opacity",
+              "group-hover/slot:opacity-100 focus-visible:opacity-100",
+              "hover:border-[#C47262] hover:text-[#C47262]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-2)]",
+            )}
+          >
+            <X className="size-3" aria-hidden="true" />
+          </button>
+        )}
         {/* Per-slot FP glow — post-submit only. Polish spec §21. */}
         <SlotFpGlow playerId={card.playerId} enabled={locked} />
         {/* Per-slot contract-depletion glow — post-submit only. Polish spec §30. */}
