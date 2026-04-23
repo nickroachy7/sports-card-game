@@ -22,18 +22,19 @@ type Props = {
  * sidebar-inclusive variant). The sidebar's own `overflow-auto`
  * lets its contents scroll independently.
  *
- * Polish spec §74 (Phase 24): the main grid pane stretches to fill
- * its parent (no inner scroll). LineupGrid is self-sizing — it
- * measures the pane via ResizeObserver and scales cards so all 10
- * always fit. Wrapping this pane in `overflow-hidden` defends
- * against a transient scrollbar during SSR hydration or resize.
+ * Polish spec §76 (Phase 25): the grid pane holds the fixed-size
+ * LineupGrid centered vertically + horizontally. Phase 24's
+ * `overflow-hidden` was dropped alongside the fluid scaling math;
+ * at fixed 96×134 card sizes, content fits comfortably in realistic
+ * laptop pane heights (three 134px rows plus chrome ≈ 620px, well
+ * within the 620px+ flex-1 allocation on a 900px viewport).
  */
 export function LineupShell({ grid, sidebar, bench, tokens }: Props) {
   return (
     <div className="flex h-full min-h-[720px] flex-col bg-[var(--bg)]">
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 overflow-hidden">{grid}</div>
+          <div className="flex min-h-0 flex-1">{grid}</div>
           <div className="shrink-0">
             {bench}
             {tokens}

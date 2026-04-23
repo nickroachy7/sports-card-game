@@ -148,27 +148,14 @@ function LineupSlotInner({
     [locked, isPitcher, card, onTokenDropped],
   );
 
-  // Polish spec §74 (Phase 24). Layout-box dimensions for the scaling
-  // shell — driven by CSS vars set on LineupGrid's root. Both filled
-  // and empty slots use the same outer dimensions so the flex row
-  // reserves consistent space per slot regardless of fill state.
-  const shellStyle: React.CSSProperties = {
-    width: "var(--card-w-px, 96px)",
-    height: "calc(var(--card-w-px, 96px) * 134 / 96)",
-  };
-  // Inner scaled layer — the 96×134 box Card.tsx paints into. The
-  // outer shell reserves the scaled dimensions; this layer applies
-  // the scale via transform. transform-origin:top-left keeps the
-  // scaled content pinned to the shell's top-left corner.
-  const scaledInnerStyle: React.CSSProperties = {
-    width: "96px",
-    height: "134px",
-    transform: "scale(var(--card-scale, 1))",
-    transformOrigin: "top left",
-  };
-
+  // Polish spec §76 (Phase 25). Fixed 96×134 matching the bench.
+  // Phase 24's transform-scale shell was reverted — the fit-to-pane
+  // math computed card widths smaller than bench on typical laptop
+  // viewports, producing visual inconsistency with the bench cards
+  // the user drags FROM. Matching sizes exactly means drag-to-drop
+  // has zero size transition.
   const ringClass = cn(
-    "relative flex h-full w-full flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors",
+    "relative flex h-[134px] w-[96px] flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors",
     isCardOver && canCardDrop && "border-[var(--text)] bg-[var(--surface-2)]",
     isCardOver && !canCardDrop && "border-[#C47262] bg-[#C4726222]",
     isTokenOver && canTokenDrop && "border-[var(--tier-gold,#D4A647)]",
@@ -176,30 +163,20 @@ function LineupSlotInner({
   );
 
   if (!card) {
-    // Empty slot: dashed drop-target shell that ALSO scales with the
-    // row. The drop ref attaches to the outer shell (layout-box the
-    // react-dnd monitor sees); the inner scaled layer holds the
-    // visual chrome. Text inside scales too — acceptable for an
-    // empty-state placeholder.
     return (
       <section
         ref={(el) => {
           cardDropRef(el);
         }}
-        className="relative"
-        style={shellStyle}
+        className={ringClass}
         aria-label={`${position} slot, empty`}
       >
-        <div className="absolute left-0 top-0" style={scaledInnerStyle}>
-          <div className={ringClass}>
-            <span className="font-sans text-xs font-semibold uppercase tracking-wider text-[var(--text-3)]">
-              {position}
-            </span>
-            <span className="mt-1 text-[9px] uppercase tracking-wider text-[var(--text-3)]">
-              Drag {isPitcher ? "a pitcher" : "a hitter"}
-            </span>
-          </div>
-        </div>
+        <span className="font-sans text-xs font-semibold uppercase tracking-wider text-[var(--text-3)]">
+          {position}
+        </span>
+        <span className="mt-1 text-[9px] uppercase tracking-wider text-[var(--text-3)]">
+          Drag {isPitcher ? "a pitcher" : "a hitter"}
+        </span>
       </section>
     );
   }
@@ -222,46 +199,36 @@ function LineupSlotInner({
       <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--text-3)]">
         {position}
       </span>
-      {/* Polish spec §74 (Phase 24). Scaling shell: outer div reserves
-          the computed layout-width (from --card-w-px); inner absolute
-          layer holds the 96×134 Card and scales via transform. Drag
-          source attaches to the outer shell so react-dnd sees the
-          correct layout-box. */}
       <div
         ref={(el) => {
           slotDragRef(el);
         }}
         className={cn("relative", isDragging && "opacity-40")}
-        style={shellStyle}
       >
-        <div className="absolute left-0 top-0" style={scaledInnerStyle}>
-          <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
-          {/* Per-slot FP glow — post-submit only. Polish spec §21. */}
-          <SlotFpGlow playerId={card.playerId} enabled={locked} />
-          {/* Per-slot contract-depletion glow — post-submit only. Polish spec §30. */}
-          <SlotContractGlow depleteEvent={depleteEvent} enabled={locked} />
-          {appliedToken && (
-            <div className="-right-2 -bottom-2 absolute z-10">
-              <AppliedTokenBadge
-                tokenType={appliedToken.type as TokenType}
-                bonusFp={appliedToken.bonusFp}
-                onRemove={() => onRemoveToken(appliedToken.applicationId)}
-                disabled={locked}
-              />
-            </div>
-          )}
-          {/* Per-slot lock glyph — polish spec §44. Shows when the
-              slot is gated because its player's game has started. */}
-          {locked && (
-            <div className="absolute top-1 right-1 z-10 rounded-full bg-black/60 p-0.5 text-[var(--text-2)]">
-              <Lock className="size-2.5" aria-hidden="true" />
-            </div>
-          )}
-        </div>
+        <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
+        {/* Per-slot FP glow — post-submit only. Polish spec §21. */}
+        <SlotFpGlow playerId={card.playerId} enabled={locked} />
+        {/* Per-slot contract-depletion glow — post-submit only. Polish spec §30. */}
+        <SlotContractGlow depleteEvent={depleteEvent} enabled={locked} />
+        {appliedToken && (
+          <div className="-right-2 -bottom-2 absolute z-10">
+            <AppliedTokenBadge
+              tokenType={appliedToken.type as TokenType}
+              bonusFp={appliedToken.bonusFp}
+              onRemove={() => onRemoveToken(appliedToken.applicationId)}
+              disabled={locked}
+            />
+          </div>
+        )}
+        {/* Per-slot lock glyph — polish spec §44. Shows when the
+            slot is gated because its player's game has started. */}
+        {locked && (
+          <div className="absolute top-1 right-1 z-10 rounded-full bg-black/60 p-0.5 text-[var(--text-2)]">
+            <Lock className="size-2.5" aria-hidden="true" />
+          </div>
+        )}
       </div>
-      {/* Game-state footer — polish spec §45. Outside the scaling
-          shell so the pill stays at natural text size regardless of
-          card scale. */}
+      {/* Game-state footer — polish spec §45. */}
       <SlotGameState info={gameInfo} />
       {!locked && (
         <button
