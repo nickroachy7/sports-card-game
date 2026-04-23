@@ -100,6 +100,30 @@
 }
 
 /*
+ * Polish spec §105 (Phase 35). The lineup page is scrollbar-free.
+ * P34's auto-fade still applied a thin visible track on hover + a
+ * brief fade-in during scroll; the user's ask was for zero visual
+ * noise from scrollbars while preserving wheel/trackpad scrolling.
+ *
+ * `LineupShell` tags its root with `data-scroll-surface="lineup"`,
+ * and these rules override the P34 defaults anywhere inside that
+ * scope. Other surfaces still get the auto-fade.
+ */
+[data-scroll-surface="lineup"] [data-scroll] {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+[data-scroll-surface="lineup"] [data-scroll]::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+[data-scroll-surface="lineup"] [data-scroll]::-webkit-scrollbar-track,
+[data-scroll-surface="lineup"] [data-scroll]::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+/*
  * Global reduced-motion floor — polish spec §1 / §5 / §7.
  *
  * Framer-motion surfaces (CardDragLayer, TokenDragLayer, DissolveCard)

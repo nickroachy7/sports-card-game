@@ -1,16 +1,15 @@
 "use client";
 
-import { Archive, X } from "lucide-react";
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { getCardDetail } from "@/app/actions/cards";
-import { vaultCardMidseason } from "@/app/actions/vault";
 import { type CardDetailData, CardDetailView } from "@/components/card/CardDetailView";
 import { Button } from "@/components/ui/button";
 
 export type LineupContext = {
-  /** If the card is currently in a slot, the panel shows Remove-from-slot. */
+  /** If the card is currently in a slot, the detail view renders a
+   *  Remove-from-slot button inside its Actions section. */
   slotted: boolean;
   /** Called when the user picks Remove from slot. */
   onRemoveFromSlot: () => Promise<void> | void;
@@ -29,21 +28,22 @@ type Props = {
 };
 
 /**
- * Polish spec §25 (Phase 13) — card detail rendered as a sidebar panel
- * (not a drawer). Extracted from the former <CardDetailDrawer> so the
- * same content can live flush in a 288px sidebar column.
+ * Polish spec §25 (Phase 13) + §106 (Phase 35) — card detail
+ * rendered as a sidebar panel (not a drawer).
  *
- * Fetches detail on `cardId` change, renders <CardDetailView> (the
- * pure content shared with the collection detail page), and tacks on
- * lineup-specific actions (Remove from slot / Add to vault) if
- * `lineupContext` is provided.
+ * Phase 35 cleanup: the separate "Lineup Actions" footer that used
+ * to live here (with a duplicate Add-to-vault button) was removed.
+ * Remove-from-slot folded into CardDetailView's Actions section via
+ * `lineupContext`, producing a single Actions block inside the
+ * detail view itself.
+ *
+ * Fetches detail on `cardId` change and renders <CardDetailView>.
  */
 export function CardDetailPanel({ cardId, lineupContext, onClose }: Props) {
   const [data, setData] = useState<CardDetailData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [removing, startRemove] = useTransition();
-  const [vaulting, startVault] = useTransition();
 
   useEffect(() => {
     if (!cardId) {
@@ -82,20 +82,6 @@ export function CardDetailPanel({ cardId, lineupContext, onClose }: Props) {
     });
   }
 
-  function handleAddToVault() {
-    if (!cardId) return;
-    startVault(async () => {
-      const res = await vaultCardMidseason({ cardId });
-      if (!res.ok) {
-        toast.error(res.error.message);
-        return;
-      }
-      toast.success("Added to vault.");
-      onClose?.();
-      lineupContext?.onVaulted?.();
-    });
-  }
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
@@ -114,45 +100,21 @@ export function CardDetailPanel({ cardId, lineupContext, onClose }: Props) {
             )}
           </div>
         )}
-        {data && !loading && <CardDetailView data={data} />}
+        {data && !loading && (
+          <CardDetailView
+            data={data}
+            lineupContext={
+              lineupContext
+                ? {
+                    slotted: lineupContext.slotted,
+                    onRemoveFromSlot: handleRemoveFromSlot,
+                    removing,
+                  }
+                : undefined
+            }
+          />
+        )}
       </div>
-
-      {data && lineupContext && (
-        <footer className="flex shrink-0 flex-col gap-2 border-[var(--border)] border-t bg-[var(--surface-2)] px-3 py-3">
-          <span className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-            Lineup actions
-          </span>
-          <div className="flex flex-col gap-2">
-            {lineupContext.slotted && (
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={handleRemoveFromSlot}
-                disabled={removing}
-              >
-                <X className="mr-1 size-3.5" aria-hidden="true" />
-                {removing ? "Removing…" : "Remove from slot"}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={handleAddToVault}
-              disabled={vaulting || data.card.isExpired || data.card.hasAppliedToken}
-              title={
-                data.card.isExpired
-                  ? "Expired cards can't be vaulted"
-                  : data.card.hasAppliedToken
-                    ? "Remove the applied token first"
-                    : undefined
-              }
-            >
-              <Archive className="mr-1 size-3.5" aria-hidden="true" />
-              {vaulting ? "Vaulting…" : "Add to vault"}
-            </Button>
-          </div>
-        </footer>
-      )}
     </div>
   );
 }

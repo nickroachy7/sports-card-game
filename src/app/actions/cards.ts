@@ -99,6 +99,77 @@ async function quickSellCardImpl(input: QuickSellInput): Promise<ActionResult<Qu
 
 export const quickSellCard = wrapAction(quickSellCardImpl, { name: "quickSellCard" });
 
+/**
+ * Polish spec §104 (Phase 35). Bulk quick-sell wrapper. Iterates the
+ * per-card SQL fn server-side; each card is independent, so partial
+ * failures are reported rather than rolled back. Returns per-card
+ * results so the UI can toast "sold 4 / failed 1".
+ */
+export type BulkQuickSellResult = {
+  soldCount: number;
+  totalCoinsEarned: number;
+  balanceAfter: number;
+  failures: { cardId: string; code: string; message: string }[];
+};
+
+async function quickSellCardsImpl(input: {
+  cardIds: string[];
+}): Promise<ActionResult<BulkQuickSellResult>> {
+  if (!Array.isArray(input.cardIds) || input.cardIds.length === 0) {
+    return { ok: false, error: { code: "VALIDATION", message: "No cards selected." } };
+  }
+  if (input.cardIds.length > 100) {
+    return { ok: false, error: { code: "VALIDATION", message: "Max 100 cards per batch." } };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  const db = getDb();
+  const failures: BulkQuickSellResult["failures"] = [];
+  let totalCoinsEarned = 0;
+  let balanceAfter = 0;
+  let soldCount = 0;
+
+  for (const cardId of input.cardIds) {
+    try {
+      const res = await db.execute<{
+        quick_sell_card: { coins_earned: number; balance_after: number | string; tier: string };
+      }>(sql`
+        SELECT public.quick_sell_card(${user.id}::uuid, ${cardId}::uuid) AS quick_sell_card
+      `);
+      const raw = res.rows[0]?.quick_sell_card;
+      if (!raw) {
+        failures.push({ cardId, code: "INTERNAL", message: "Empty result." });
+        continue;
+      }
+      soldCount += 1;
+      totalCoinsEarned += Number(raw.coins_earned);
+      balanceAfter = Number(raw.balance_after);
+      await captureServerEvent(user.id, "card_quick_sold", {
+        card_id: cardId,
+        tier: raw.tier,
+        coins_earned: Number(raw.coins_earned),
+        balance_after: Number(raw.balance_after),
+        batch: true,
+      });
+    } catch (err) {
+      const mapped = mapDbError(err);
+      failures.push({ cardId, code: mapped.code, message: mapped.message });
+    }
+  }
+
+  revalidatePath("/lineup", "layout");
+  return {
+    ok: true,
+    data: { soldCount, totalCoinsEarned, balanceAfter, failures },
+  };
+}
+
+export const quickSellCards = wrapAction(quickSellCardsImpl, { name: "quickSellCards" });
+
 /** API spec §3.3 extendCardContract. Wraps public.extend_card(user_id, card_id, plays). */
 async function extendCardContractImpl(
   input: ExtendContractInput,

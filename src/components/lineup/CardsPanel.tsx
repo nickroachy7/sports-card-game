@@ -29,6 +29,12 @@ type Props = {
   slotGameByCardId: Record<string, SlotGameInfo>;
   onRemoveToken: (applicationId: string) => void;
   onOpenDetail: (cardId: string) => void;
+  /** Polish spec §104 (Phase 35). Multi-select mode state; owned by
+   *  LineupView so the sidebar swap can read the same selection. */
+  selectMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelectMode: () => void;
+  onToggleSelect: (cardId: string) => void;
   locked: boolean;
 };
 
@@ -61,6 +67,10 @@ export function CardsPanel({
   slotGameByCardId,
   onRemoveToken,
   onOpenDetail,
+  selectMode,
+  selectedIds,
+  onToggleSelectMode,
+  onToggleSelect,
   locked,
 }: Props) {
   const [positionFilter, setPositionFilter] = useState<PositionFilter>("all");
@@ -175,6 +185,25 @@ export function CardsPanel({
             placeholder="Search…"
             className="h-7 w-36 text-xs"
           />
+          {/* Polish spec §104 (Phase 35). Select chip toggles multi-
+              select mode; sidebar swaps to <SelectionPanel> while
+              it's on. Hidden when locked (post-submit — no point
+              selecting anything you can't act on). */}
+          {!locked && (
+            <button
+              type="button"
+              onClick={onToggleSelectMode}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs font-medium uppercase tracking-wider transition-colors",
+                selectMode
+                  ? "border-[var(--tier-gold)] bg-[var(--tier-gold)] text-[var(--bg)]"
+                  : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:border-[var(--text-2)]",
+              )}
+              aria-pressed={selectMode}
+            >
+              {selectMode ? `Done (${selectedIds.size})` : "Select"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -280,6 +309,9 @@ export function CardsPanel({
                   gameInfo={slotGameByCardId[card.id] ?? null}
                   onRemoveToken={onRemoveToken}
                   onOpenDetail={onOpenDetail}
+                  selectMode={selectMode}
+                  isSelected={selectedIds.has(card.id)}
+                  onToggleSelect={onToggleSelect}
                   disabled={locked || card.isExpired}
                   locked={locked}
                 />

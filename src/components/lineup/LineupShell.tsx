@@ -38,7 +38,14 @@ type Props = {
  */
 export function LineupShell({ grid, sidebar, tokens, cards }: Props) {
   return (
-    <div className="flex h-full flex-col bg-[var(--bg)]">
+    <div
+      className="flex h-full flex-col bg-[var(--bg)]"
+      // Polish spec §105 (Phase 35). Scrollbars are invisible across
+      // the lineup surface; wheel/trackpad still scrolls. The scope
+      // attribute lets globals.css override the P34 auto-fade rules
+      // without affecting other pages.
+      data-scroll-surface="lineup"
+    >
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto" data-scroll="lineup-main">
           {grid}

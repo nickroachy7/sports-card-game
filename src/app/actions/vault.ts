@@ -208,6 +208,81 @@ export const vaultCardMidseason = wrapAction(vaultCardMidseasonImpl, {
   name: "vaultCardMidseason",
 });
 
+/**
+ * Polish spec §104 (Phase 35). Bulk mid-season vault wrapper. Loops
+ * the per-card SQL fn; returns per-card results. If the 10-slot cap
+ * is hit mid-batch, subsequent cards fail with VAULT_CAP_FULL while
+ * the earlier successes stick.
+ */
+export type BulkVaultResult = {
+  vaultedCount: number;
+  vaultCountAfter: number;
+  failures: { cardId: string; code: string; message: string }[];
+};
+
+async function vaultCardsMidseasonImpl(input: {
+  cardIds: string[];
+}): Promise<ActionResult<BulkVaultResult>> {
+  if (!Array.isArray(input.cardIds) || input.cardIds.length === 0) {
+    return { ok: false, error: { code: "VALIDATION", message: "No cards selected." } };
+  }
+  if (input.cardIds.length > 10) {
+    return { ok: false, error: { code: "VALIDATION", message: "Max 10 cards per vault batch." } };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  const db = getDb();
+  const failures: BulkVaultResult["failures"] = [];
+  let vaultedCount = 0;
+  let vaultCountAfter = 0;
+
+  for (const cardId of input.cardIds) {
+    try {
+      const res = await db.execute<{
+        vault_card_midseason: {
+          card_id: string;
+          vault_count: number;
+          vault_source: "midseason";
+        };
+      }>(sql`
+        SELECT public.vault_card_midseason(
+          ${user.id}::uuid, ${cardId}::uuid
+        ) AS vault_card_midseason
+      `);
+      const raw = res.rows[0]?.vault_card_midseason;
+      if (!raw) {
+        failures.push({ cardId, code: "INTERNAL", message: "Empty result." });
+        continue;
+      }
+      vaultedCount += 1;
+      vaultCountAfter = raw.vault_count;
+      await captureServerEvent(user.id, "card_vaulted_midseason", {
+        card_id: raw.card_id,
+        vault_count: raw.vault_count,
+        batch: true,
+      });
+    } catch (err) {
+      const mapped = mapDbError(err);
+      failures.push({ cardId, code: mapped.code, message: mapped.message });
+    }
+  }
+
+  revalidatePath("/lineup", "layout");
+  revalidatePath("/vault");
+  return {
+    ok: true,
+    data: { vaultedCount, vaultCountAfter, failures },
+  };
+}
+
+export const vaultCardsMidseason = wrapAction(vaultCardsMidseasonImpl, {
+  name: "vaultCardsMidseason",
+});
+
 type DestroyVaultedCardResult = {
   cardId: string;
   tier: string;

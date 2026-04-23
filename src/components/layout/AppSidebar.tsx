@@ -1,11 +1,12 @@
 "use client";
 
-import { SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
+import { SidebarSection } from "@/components/layout/sidebar-card";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { useGamesActive } from "@/components/lineup/useGamesActive";
 import { Button } from "@/components/ui/button";
+import type { CardTier } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { type InningInfo, liveLabel } from "@/lib/lineup/status-chip-label";
@@ -23,7 +24,9 @@ type SlotFill = {
 };
 
 /**
- * Polish spec §100 (Phase 34) — simplified lineup-only sidebar.
+ * Polish spec §100 (Phase 34) + §103 (Phase 35) —
+ * simplified lineup-only sidebar with structural parity
+ * across building + post-submit states.
  *
  * The old team-summary block at the top (team name + vault stats +
  * career FP) was cut — that info already lives in the top nav header
@@ -31,22 +34,24 @@ type SlotFill = {
  * earning it. The `"summary"` variant (for the now-deleted
  * /collection page) was also dropped; AppSidebar is lineup-only.
  *
+ * Phase 35 change: building state now mirrors the three-block
+ * spatial layout of post-submit (headline → roster → action), so
+ * the sidebar doesn't reflow when you submit. The user watches
+ * their roster fill in as they drag cards into slots.
+ *
  * Layout (top to bottom):
  *
  *   Building state:
  *     Contest header (name + lock countdown)
- *     Readiness (X/10 + warnings)
- *     Auto-sub (inline)
- *     Submit button (pinned to bottom via mt-auto)
+ *     DraftingHeadline      — parallels ScoreHeadline
+ *     RosterSection         — parallels BoxScoreSection
+ *     SubmitSection         — parallels EventFeed's spatial role
  *
  *   Post-submit state (submitted / live / final):
  *     Contest header (name + status copy)
- *     Live/Final Score (big) + Status chip inline — the headline
- *     Box Score (per-slot FP)
- *     Event Feed (fills remaining, scrolls internally)
- *
- * Post-submit reorders per user ask: score + status get top
- * billing, box score middle, event feed last.
+ *     ScoreHeadline         — live/final score + status
+ *     BoxScoreSection       — per-slot FP
+ *     EventFeed             — scrolls internally
  */
 type Props = {
   contestName: string;
@@ -109,7 +114,7 @@ function ContestHeaderCard({
   );
 }
 
-// ── Building state ───────────────────────────────────────────────────
+// ── Building state (Phase 35) ────────────────────────────────────────
 
 function BuildingContent({
   slotFills,
@@ -122,48 +127,175 @@ function BuildingContent({
   onSubmit,
 }: Props) {
   const filledCount = LINEUP_POSITIONS.filter((pos) => slotFills[pos].card !== null).length;
-  const warnings = computeWarnings(slotFills);
   const projectedFp = computeProjectedFp(slotFills);
 
   return (
     <>
-      <SidebarSection title="Ready to play">
-        <div className="flex items-baseline gap-3">
-          <SidebarStat value={`${filledCount} / 10`} accent={filledCount === 10} />
-          <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-            {projectedFp.toFixed(1)} proj FP
-          </span>
-        </div>
-        {warnings.length > 0 && (
-          <ul className="mt-1 flex flex-col gap-0.5">
-            {warnings.map((w) => (
-              <li key={`${w.position}-${w.kind}`} className="text-xs text-[#D4A647]">
-                <span className="font-mono">{w.position}</span> · {w.message}
-              </li>
-            ))}
-          </ul>
+      {/* Polish spec §103 (Phase 35). Parallels ScoreHeadline in the
+          post-submit layout — label + status line + big number. */}
+      <DraftingHeadline filledCount={filledCount} projectedFp={projectedFp} />
+
+      {/* Parallels BoxScoreSection. Each slot renders as a row; empty
+          slots show a placeholder. Fills live via optimistic slot
+          updates when cards are dragged in. */}
+      <RosterSection slotFills={slotFills} />
+
+      {/* Parallels EventFeed spatial role but does action work — the
+          user's exit from building state. Pinned to the bottom via
+          mt-auto so Roster can flex-grow to take available space. */}
+      <SubmitSection
+        autoSubMode={autoSubMode}
+        onAutoSubModeChange={onAutoSubModeChange}
+        canSubmit={canSubmit}
+        submitting={submitting}
+        locked={locked}
+        lockCountdown={lockCountdown}
+        filledCount={filledCount}
+        onSubmit={onSubmit}
+      />
+    </>
+  );
+}
+
+function DraftingHeadline({
+  filledCount,
+  projectedFp,
+}: {
+  filledCount: number;
+  projectedFp: number;
+}) {
+  const complete = filledCount === 10;
+  return (
+    <section
+      className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
+      aria-label="Drafting status"
+    >
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">Drafting</span>
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-wider",
+            complete ? "text-emerald-400" : "text-[var(--text-3)]",
+          )}
+        >
+          {filledCount} / 10 slots filled
+        </span>
+      </div>
+      <div
+        className={cn(
+          "font-mono text-3xl font-bold tabular-nums",
+          projectedFp > 0 ? "text-[var(--text)]" : "text-[var(--text-3)]",
         )}
-      </SidebarSection>
+      >
+        {projectedFp.toFixed(1)}
+      </div>
+      <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+        Projected FP
+      </div>
+    </section>
+  );
+}
 
-      <SidebarSection title="Auto-sub">
-        <fieldset disabled={locked} className="flex flex-col gap-1 pt-0.5 disabled:opacity-60">
-          <legend className="sr-only">Auto-sub mode</legend>
-          <ModeRadio
-            label="Smart Auto"
-            value="smart_auto"
-            current={autoSubMode}
-            onChange={onAutoSubModeChange}
-          />
-          <ModeRadio
-            label="Manual Priority"
-            value="manual_priority"
-            current={autoSubMode}
-            onChange={onAutoSubModeChange}
-          />
-        </fieldset>
-      </SidebarSection>
+function RosterSection({ slotFills }: { slotFills: Record<LineupPosition, SlotFill> }) {
+  return (
+    <SidebarSection title="Roster">
+      <ol data-scroll="lineup-roster" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+        {LINEUP_POSITIONS.map((pos) => {
+          const card = slotFills[pos].card;
+          return <RosterRow key={pos} position={pos} card={card} />;
+        })}
+      </ol>
+    </SidebarSection>
+  );
+}
 
-      <div className="mt-auto flex flex-col gap-2 pt-2">
+function RosterRow({ position, card }: { position: LineupPosition; card: LineupCardVM | null }) {
+  if (!card) {
+    return (
+      <li className="grid grid-cols-[2rem_1fr] items-baseline gap-1 text-[11px]">
+        <span className="font-mono text-[var(--text-3)]">{position}</span>
+        <span className="truncate text-[var(--text-3)] italic">
+          Drag a {formatPosition(position)}
+        </span>
+      </li>
+    );
+  }
+  const warning = playerWarning(card);
+  return (
+    <li className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 text-[11px]">
+      <span className="font-mono text-[var(--text-3)]">{position}</span>
+      <span className="flex min-w-0 items-baseline gap-1">
+        <span className="truncate text-[var(--text-2)]">{shortName(card.playerName)}</span>
+        {warning && (
+          <span
+            className="font-mono text-[9px] uppercase tracking-wider text-[#D4A647]"
+            title={warning}
+          >
+            !
+          </span>
+        )}
+      </span>
+      <TierChip tier={card.tier} />
+      <span
+        className={cn(
+          "text-right font-mono tabular-nums",
+          card.contractPlays <= 2 ? "text-[#D4A647]" : "text-[var(--text-3)]",
+        )}
+      >
+        {card.contractPlays}/{card.contractMax}
+      </span>
+    </li>
+  );
+}
+
+function TierChip({ tier }: { tier: CardTier }) {
+  const colorVar = `var(--tier-${tier})`;
+  return (
+    <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: colorVar }}>
+      {tier.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
+function SubmitSection({
+  autoSubMode,
+  onAutoSubModeChange,
+  canSubmit,
+  submitting,
+  locked,
+  lockCountdown,
+  filledCount,
+  onSubmit,
+}: {
+  autoSubMode: AutoSubMode;
+  onAutoSubModeChange: (mode: AutoSubMode) => void;
+  canSubmit: boolean;
+  submitting: boolean;
+  locked: boolean;
+  lockCountdown: string;
+  filledCount: number;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="mt-auto flex flex-col gap-3 border-t border-[var(--border)] pt-3">
+      <fieldset disabled={locked} className="flex flex-col gap-1 disabled:opacity-60">
+        <legend className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+          Auto-sub
+        </legend>
+        <ModeRadio
+          label="Smart Auto"
+          value="smart_auto"
+          current={autoSubMode}
+          onChange={onAutoSubModeChange}
+        />
+        <ModeRadio
+          label="Manual Priority"
+          value="manual_priority"
+          current={autoSubMode}
+          onChange={onAutoSubModeChange}
+        />
+      </fieldset>
+      <div className="flex flex-col gap-2">
         <p className="text-xs text-[var(--text-3)]">
           {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
         </p>
@@ -177,8 +309,39 @@ function BuildingContent({
                 : "Submit lineup"}
         </Button>
       </div>
-    </>
+    </div>
   );
+}
+
+function formatPosition(pos: LineupPosition): string {
+  switch (pos) {
+    case "C":
+      return "Catcher";
+    case "1B":
+      return "First Baseman";
+    case "2B":
+      return "Second Baseman";
+    case "3B":
+      return "Third Baseman";
+    case "SS":
+      return "Shortstop";
+    case "OF1":
+    case "OF2":
+    case "OF3":
+      return "Outfielder";
+    case "SP1":
+    case "SP2":
+      return "Pitcher";
+    default:
+      return pos;
+  }
+}
+
+function playerWarning(card: LineupCardVM): string | null {
+  if (card.isExpired) return "Contract expired";
+  if (card.playerStatus === "il") return "On IL";
+  if (card.playerStatus === "dfa") return "FA / DFA";
+  return null;
 }
 
 // ── Post-submit (submitted / live / final) ───────────────────────────
@@ -384,39 +547,11 @@ function ModeRadio({
   );
 }
 
-type SlotWarning = {
-  position: LineupPosition;
-  kind: "low-contract" | "expired" | "il" | "dfa";
-  message: string;
-};
-
-function computeWarnings(slotFills: Record<LineupPosition, SlotFill>): SlotWarning[] {
-  const out: SlotWarning[] = [];
-  for (const position of LINEUP_POSITIONS) {
-    const card = slotFills[position].card;
-    if (!card) continue;
-    if (card.isExpired) {
-      out.push({ position, kind: "expired", message: "contract expired" });
-      continue;
-    }
-    if (card.playerStatus === "il") {
-      out.push({ position, kind: "il", message: "on IL" });
-      continue;
-    }
-    if (card.playerStatus === "dfa") {
-      out.push({ position, kind: "dfa", message: "FA / DFA" });
-      continue;
-    }
-    if (card.contractPlays > 0 && card.contractPlays <= 2) {
-      out.push({
-        position,
-        kind: "low-contract",
-        message: `${card.contractPlays} play${card.contractPlays === 1 ? "" : "s"} left`,
-      });
-    }
-  }
-  return out;
-}
+/* Phase 35: per-slot warnings moved onto the RosterRow (see
+ * `playerWarning`) — displayed as a `!` glyph next to the name.
+ * The old aggregated list in the Ready-to-play section was
+ * removed; warning origin was never separable from the row it
+ * referred to anyway. */
 
 const TIER_BASELINE_FP: Record<"bronze" | "silver" | "gold" | "diamond", number> = {
   bronze: 3,

@@ -95,7 +95,11 @@ export function ExtendContractModal({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="default" disabled={disabled} className="w-full">
+        {/* Polish spec §106 (Phase 35). Outline to match
+            Quick-sell + Add-to-vault; previously default variant
+            rendered as a filled button that overpowered the other
+            actions. */}
+        <Button variant="outline" disabled={disabled} className="w-full">
           Extend contract
         </Button>
       </DialogTrigger>

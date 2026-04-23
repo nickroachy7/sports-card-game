@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useOptimistic, useState, useTransition
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
+import { quickSellCards } from "@/app/actions/cards";
 import {
   setAutoSubMode,
   submitLineup,
@@ -13,6 +14,7 @@ import {
   updateLineupSlot,
 } from "@/app/actions/lineup";
 import { applyToken, removeToken } from "@/app/actions/tokens";
+import { vaultCardsMidseason } from "@/app/actions/vault";
 import { CardDetailPanel } from "@/components/card/CardDetailPanel";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { AppSidebar, shortName } from "@/components/layout/AppSidebar";
@@ -22,9 +24,9 @@ import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupGrid } from "@/components/lineup/LineupGrid";
 import { LineupShell } from "@/components/lineup/LineupShell";
 import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
+import { SelectionPanel } from "@/components/lineup/SelectionPanel";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
-import { useScrollFade } from "@/components/lineup/use-scroll-fade";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import { Button } from "@/components/ui/button";
 import type { TokenType } from "@/lib/contracts/cards";
@@ -36,6 +38,19 @@ import type {
   LineupViewProps,
   SlotGameInfo,
 } from "@/lib/lineup/types";
+
+/**
+ * Coin value per tier for the bulk quick-sell running total. Matches
+ * the economy-config defaults shipped in the db seed; if the config
+ * ever drifts at runtime, the server authoritative total from the
+ * action result is what ultimately credits the user.
+ */
+const QUICK_SELL_VALUE_BY_TIER: Record<string, number> = {
+  bronze: 10,
+  silver: 25,
+  gold: 75,
+  diamond: 200,
+};
 
 export type AppliedTokenInfo = {
   tokenType: TokenType;
@@ -73,11 +88,12 @@ export function LineupView(props: LineupViewProps) {
   // cards buried below the fold in the CardsPanel can't be dragged
   // up to lineup slots at the top.
   useAutoScrollOnDrag();
-  // Polish spec §101 (Phase 34). Subtle auto-fading scrollbars on
-  // `[data-scroll]` containers (left column + right sidebar). Hidden
-  // by default; fades in while actively scrolling, fades back out
-  // ~700ms after the last scroll tick.
-  useScrollFade();
+  // Polish spec §101 (Phase 34) + §105 (Phase 35). The auto-fading
+  // scrollbar behavior was replaced with fully hidden scrollbars
+  // scoped to `data-scroll-surface="lineup"` on the shell. The
+  // `useScrollFade` hook is still available in the codebase for
+  // other surfaces that might want the P34 fade, but not needed
+  // here.
   // Polish spec §89 (P30 modal → P33 reverted to sidebar swap).
   // Card detail reads the `?card={id}` URL param; the sidebar swaps
   // between the default <AppSidebar> and <CardDetailPanel> based on
@@ -257,6 +273,14 @@ export function LineupView(props: LineupViewProps) {
   // Submit is a one-time entry step; only meaningful in building state.
   const canSubmit = filledCount === 10 && !submitted && !submitting;
 
+  // Polish spec §104 (Phase 35). Multi-select state lives on
+  // LineupView so CardsPanel + sidebar swap both read the same
+  // selection. Selection is intentionally non-persistent — exits
+  // on navigation, reload, or Escape.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkSubmitting, startBulk] = useTransition();
+
   function handleCardDropped(
     position: LineupPosition,
     cardId: string | null,
@@ -391,6 +415,122 @@ export function LineupView(props: LineupViewProps) {
     [router, searchParams],
   );
 
+  // Polish spec §104 (Phase 35). Multi-select handlers. Entering
+  // select mode clears the card detail param so the sidebar swap
+  // unambiguously falls to SelectionPanel. Exiting always clears
+  // the selection — carry-over across enter/exit felt worse than
+  // starting fresh in informal testing.
+  const handleToggleSelectMode = useCallback(() => {
+    setSelectMode((prev) => {
+      const next = !prev;
+      if (!next) setSelectedIds(new Set());
+      return next;
+    });
+    // On entry, kick any open card detail to the curb.
+    const next = new URLSearchParams(searchParams.toString());
+    if (next.has("card")) {
+      next.delete("card");
+      const q = next.toString();
+      router.replace(q ? `/lineup?${q}` : "/lineup", { scroll: false });
+    }
+  }, [router, searchParams]);
+
+  const handleToggleSelect = useCallback((cardId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      return next;
+    });
+  }, []);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectMode(false);
+  }, []);
+
+  // Escape key exits select mode as a quick-escape for power users
+  // — matches the pattern on the contest-final modal + others.
+  useEffect(() => {
+    if (!selectMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClearSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, handleClearSelection]);
+
+  const selectedCards = useMemo<LineupCardVM[]>(() => {
+    const out: LineupCardVM[] = [];
+    for (const id of selectedIds) {
+      const c = cardsById.get(id);
+      if (c) out.push(c);
+    }
+    return out;
+  }, [selectedIds, cardsById]);
+
+  const selectionLineupCount = useMemo(() => {
+    let n = 0;
+    for (const id of selectedIds) if (assignedCardIds.has(id)) n += 1;
+    return n;
+  }, [selectedIds, assignedCardIds]);
+
+  const selectionQuickSellTotal = useMemo(() => {
+    let total = 0;
+    for (const c of selectedCards) total += QUICK_SELL_VALUE_BY_TIER[c.tier] ?? 0;
+    return total;
+  }, [selectedCards]);
+
+  const handleBulkQuickSell = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    startBulk(async () => {
+      const result = await quickSellCards({ cardIds: ids });
+      if (!result.ok) {
+        toast.error(result.error.message);
+        return;
+      }
+      const { soldCount, totalCoinsEarned, failures } = result.data;
+      if (soldCount > 0) {
+        toast.success(
+          `Sold ${soldCount} card${soldCount === 1 ? "" : "s"} for ${totalCoinsEarned} coin${totalCoinsEarned === 1 ? "" : "s"}`,
+        );
+      }
+      if (failures.length > 0) {
+        toast.error(
+          `${failures.length} card${failures.length === 1 ? "" : "s"} couldn't be sold (${failures[0]?.message ?? "unknown"})`,
+        );
+      }
+      setSelectedIds(new Set());
+      setSelectMode(false);
+      router.refresh();
+    });
+  }, [selectedIds, router]);
+
+  const handleBulkVault = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    startBulk(async () => {
+      const result = await vaultCardsMidseason({ cardIds: ids });
+      if (!result.ok) {
+        toast.error(result.error.message);
+        return;
+      }
+      const { vaultedCount, failures } = result.data;
+      if (vaultedCount > 0) {
+        toast.success(`Vaulted ${vaultedCount} card${vaultedCount === 1 ? "" : "s"}`);
+      }
+      if (failures.length > 0) {
+        toast.error(
+          `${failures.length} card${failures.length === 1 ? "" : "s"} couldn't be vaulted (${failures[0]?.message ?? "unknown"})`,
+        );
+      }
+      setSelectedIds(new Set());
+      setSelectMode(false);
+      router.refresh();
+    });
+  }, [selectedIds, router]);
+
   // Polish spec §100 (Phase 34). Back button on the detail sidebar —
   // strips `?card` from the URL so the sidebar swaps back to the
   // default AppSidebar.
@@ -440,7 +580,22 @@ export function LineupView(props: LineupViewProps) {
         />
       }
       sidebar={
-        detailCardId ? (
+        // Polish spec §104 (Phase 35). Sidebar swap priority:
+        //   1. selectMode → <SelectionPanel>
+        //   2. ?card=id   → <DetailSidebar>
+        //   3. default    → <AppSidebar>
+        selectMode ? (
+          <SelectionPanel
+            selectedCards={selectedCards}
+            quickSellTotal={selectionQuickSellTotal}
+            lineupCount={selectionLineupCount}
+            canAct={!locked}
+            submitting={bulkSubmitting}
+            onQuickSell={handleBulkQuickSell}
+            onAddToVault={handleBulkVault}
+            onClear={handleClearSelection}
+          />
+        ) : detailCardId ? (
           <DetailSidebar
             cardId={detailCardId}
             slotted={detailSlotPosition !== null}
@@ -476,6 +631,10 @@ export function LineupView(props: LineupViewProps) {
           slotGameByCardId={props.slotGameByCardId}
           onRemoveToken={handleRemoveToken}
           onOpenDetail={handleOpenDetail}
+          selectMode={selectMode}
+          selectedIds={selectedIds}
+          onToggleSelectMode={handleToggleSelectMode}
+          onToggleSelect={handleToggleSelect}
           locked={locked}
         />
       }
