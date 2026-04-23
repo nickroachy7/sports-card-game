@@ -13,38 +13,42 @@ type Props = {
 };
 
 /**
- * Polish spec §82 (Phase 28) — flow-based layout.
+ * Polish spec §99 (Phase 33) — independent scroll containers.
  *
- * Earlier phases (23–27) kept the lineup grid in a fixed-height pane
- * inside the shell. The pane was `flex-1 overflow-hidden` which
- * forced grid content to fit OR clip, and made the lineup feel like
- * a contained "canvas" separate from the rest of the page. User
- * feedback: "it seems like these cards are fit into a section
- * separate from the rest of the page. It looks like a canvas in the
- * back of everything. What if we didn't do that and just kinda made
- * it like a whole section."
+ * User ask: "the right side bar section and the lineup / collection
+ * section should be different scrolls. When you hover over a section,
+ * it should only scroll on that section."
  *
- * The new shell lets grid + bench + tokens flow as a single natural-
- * height column. When the sum exceeds the available height, the
- * parent `<main>` element in app/(app)/layout.tsx — which already
- * has `overflow-auto` — scrolls. No internal grid constraint; no
- * clipping. Cards are rendered at bench size (96×134) and the
- * layout is a document-like flow (role labels → cards → role
- * labels → cards → bench → tokens).
+ * Previously (through P32) the shell was `min-h-full` — it grew past
+ * its parent `<main>` when content (grid + tokens + cards) exceeded
+ * the viewport, and `<main>`'s own `overflow-auto` scrolled the
+ * whole thing (both columns at once). Now the shell is `h-full` —
+ * exactly its parent's height — and each column scrolls internally:
+ *
+ *   - Left column (grid + tokens + cards) has `overflow-y-auto`
+ *     marked with `data-scroll="lineup-main"`. The autoscroll-on-
+ *     drag hook scrolls this container when the user drags near the
+ *     viewport edge.
+ *   - Aside (AppSidebar / CardDetailPanel swap) keeps its own
+ *     `overflow-auto`.
+ *
+ * The parent `<main overflow-auto>` in `(app)/layout.tsx` stays as-
+ * is for other pages; the lineup shell just fills it exactly so it
+ * never triggers.
  */
 export function LineupShell({ grid, sidebar, tokens, cards }: Props) {
   return (
-    <div className="flex min-h-full flex-col bg-[var(--bg)]">
+    <div className="flex h-full flex-col bg-[var(--bg)]">
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto" data-scroll="lineup-main">
           {grid}
-          {/* Polish spec §95 (Phase 32). Token tray docks above the
-              cards panel; cards extend down below the fold and the
-              parent <main> scrolls. */}
           {tokens}
           {cards}
         </div>
-        <aside className="hidden w-72 shrink-0 flex-col gap-5 overflow-auto border-[var(--border)] border-l bg-[var(--surface)] p-4 md:flex">
+        <aside
+          className="hidden w-72 shrink-0 flex-col gap-5 overflow-y-auto border-[var(--border)] border-l bg-[var(--surface)] p-4 md:flex"
+          data-scroll="lineup-sidebar"
+        >
           {sidebar}
         </aside>
       </div>

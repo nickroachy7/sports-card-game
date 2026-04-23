@@ -13,7 +13,7 @@ import {
   updateLineupSlot,
 } from "@/app/actions/lineup";
 import { applyToken, removeToken } from "@/app/actions/tokens";
-import { CardDetailModal } from "@/components/card/CardDetailModal";
+import { CardDetailPanel } from "@/components/card/CardDetailPanel";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { AppSidebar, shortName } from "@/components/layout/AppSidebar";
 import { CardContractEventsProvider } from "@/components/lineup/CardContractEventsProvider";
@@ -71,10 +71,10 @@ export function LineupView(props: LineupViewProps) {
   // cards buried below the fold in the CardsPanel can't be dragged
   // up to lineup slots at the top.
   useAutoScrollOnDrag();
-  // Polish spec §89 (Phase 30). Card detail is a modal keyed by the
-  // `?card={id}` URL param so back/forward navigation + shareable
-  // links keep working. Previously this was local useState driving a
-  // sidebar swap.
+  // Polish spec §89 (P30 modal → P33 reverted to sidebar swap).
+  // Card detail reads the `?card={id}` URL param; the sidebar swaps
+  // between the default <AppSidebar> and <CardDetailPanel> based on
+  // it. Back/forward + shareable links survive either way.
   const detailCardId = searchParams.get("card");
 
   // Polish spec §44 — per-slot lock semantics. Bench + tokens remain
@@ -372,8 +372,9 @@ export function LineupView(props: LineupViewProps) {
     return { tokenType: tok.tokenType, bonusFp: Number(tok.bonusFp) };
   };
 
-  // Polish spec §89 (Phase 30). Card click → push ?card=id URL
-  // param. The CardDetailModal reads the param and opens itself.
+  // Polish spec §89 (Phase 30 → reverted in Phase 33). Card click →
+  // push ?card=id URL param. The sidebar swaps to <CardDetailPanel>
+  // when the param is set; back/forward + shareable links survive.
   const handleOpenDetail = useCallback(
     (cardId: string) => {
       const next = new URLSearchParams(searchParams.toString());
@@ -422,23 +423,40 @@ export function LineupView(props: LineupViewProps) {
         />
       }
       sidebar={
-        <AppSidebar
-          variant="lineup"
-          teamSummary={props.teamSummary}
-          contestName={props.contestName}
-          slotFills={slotFills}
-          entryStatus={props.entryStatus}
-          liveScore={props.liveScore}
-          finalScore={props.finalScore}
-          contestGameIds={props.contestGameIds}
-          autoSubMode={mode}
-          onAutoSubModeChange={handleModeChange}
-          canSubmit={canSubmit}
-          submitting={submitting}
-          locked={locked}
-          lockCountdown={lockCountdown}
-          onSubmit={handleSubmit}
-        />
+        detailCardId ? (
+          <CardDetailPanel
+            cardId={detailCardId}
+            lineupContext={{
+              slotted: detailSlotPosition !== null,
+              onRemoveFromSlot: handleRemoveFromSlot,
+              onVaulted: () => router.refresh(),
+            }}
+            onClose={() => {
+              const next = new URLSearchParams(searchParams.toString());
+              next.delete("card");
+              const q = next.toString();
+              router.push(q ? `/lineup?${q}` : "/lineup", { scroll: false });
+            }}
+          />
+        ) : (
+          <AppSidebar
+            variant="lineup"
+            teamSummary={props.teamSummary}
+            contestName={props.contestName}
+            slotFills={slotFills}
+            entryStatus={props.entryStatus}
+            liveScore={props.liveScore}
+            finalScore={props.finalScore}
+            contestGameIds={props.contestGameIds}
+            autoSubMode={mode}
+            onAutoSubModeChange={handleModeChange}
+            canSubmit={canSubmit}
+            submitting={submitting}
+            locked={locked}
+            lockCountdown={lockCountdown}
+            onSubmit={handleSubmit}
+          />
+        )
       }
       tokens={<TokenTray tokens={props.tokens} locked={locked} />}
       cards={
@@ -460,16 +478,6 @@ export function LineupView(props: LineupViewProps) {
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
       <TokenDragLayer resolveToken={resolveToken} />
-      {/* Polish spec §89 (Phase 30). Card detail modal reads the
-          ?card param and opens automatically. Lineup context wires
-          the "Remove from slot" action. */}
-      <CardDetailModal
-        lineupContext={{
-          slotted: detailSlotPosition !== null,
-          onRemoveFromSlot: handleRemoveFromSlot,
-          onVaulted: () => router.refresh(),
-        }}
-      />
       {isPostSubmit ? (
         <LiveEventsProvider
           lineupPlayers={lineupPlayers}
