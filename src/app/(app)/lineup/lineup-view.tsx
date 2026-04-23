@@ -247,8 +247,15 @@ export function LineupView(props: LineupViewProps) {
       }
       const fp = slotFpByPosition.get(pos);
       const gameInfo = card ? (props.slotGameByCardId[card.id] ?? null) : null;
+      // Polish spec §126 (Phase 39) follow-up. Slot lock fires purely
+      // off the player's game state — independent of entry.status.
+      // Previously gated on `!isBuilding`, which meant slots stayed
+      // "unlocked" (on the client) for users whose entry.status was
+      // still 'building' even when their players' games had already
+      // started or finished. The unified sidebar's "Drafting / Live /
+      // Final" headline reads from this field, so the gate was
+      // keeping the sidebar stuck on Drafting.
       const slotLocked =
-        !isBuilding &&
         gameInfo !== null &&
         (gameInfo.status === "live" ||
           gameInfo.status === "final" ||
