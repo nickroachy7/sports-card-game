@@ -41,12 +41,11 @@ type Props = {
 };
 
 /**
- * Polish spec §94 (Phase 32). Unified cards grid replacing the
- * horizontal bench carousel + the `/collection` page. Shows every
- * card the user owns in a responsive CSS grid — 2 columns on narrow
- * screens, up to 8 on 2K+ monitors. Cards currently in the lineup
- * render with a subtle "IN LINEUP" pill + reduced opacity so the
- * available pool still pops.
+ * Polish spec §94 (Phase 32) + P40 follow-up. Bench view for the
+ * user's collection, filtered to cards NOT currently in a lineup
+ * slot (per-user-ask: the lineup IS the bench exclusion list).
+ * Rostered cards render in their lineup slots only — the grid here
+ * is strictly the pool of draftable options.
  *
  * Filters stack on top of the grid:
  *   - Hitters/Pitchers (position)
@@ -54,12 +53,14 @@ type Props = {
  *   - Game-state (All / Pre / Live / Final / Off)
  *   - Search (player name substring)
  *
- * Drag-and-drop: `cardToSlotPosition` tells BenchCard whether the
- * card is rostered; if so, the drag item carries `fromPosition` so
- * the lineup slot's drop handler routes through swap_lineup_slots
- * instead of update_lineup_slot. Pair with `useAutoScrollOnDrag`
- * at the page level so cards below the fold can still reach lineup
- * slots at the top.
+ * Drag-and-drop: all cards here are unassigned, so drags route
+ * through `update_lineup_slot` (no `fromPosition`). Slot-to-slot
+ * swaps still happen via LineupSlot's own drag source.
+ * `cardToSlotPosition` + `appliedTokenByCardId` props retained for
+ * backwards-compat; the former is unused now, the latter remains
+ * relevant because a card's applied token could persist even after
+ * removing it from a slot (though in practice the auto-detach rule
+ * keeps that rare).
  */
 export function CardsPanel({
   cards,
@@ -80,21 +81,26 @@ export function CardsPanel({
   const [gameState, setGameState] = useState<GameStateFilter>("all");
   const [search, setSearch] = useState("");
 
+  // Bench = cards not currently in a lineup slot. Matches the
+  // tokens tray behavior (applied tokens hide from the tray).
+  // Rostered cards still show in the lineup slots themselves —
+  // they just don't double-render here.
+  const benchCards = useMemo(
+    () => cards.filter((c) => !assignedCardIds.has(c.id)),
+    [cards, assignedCardIds],
+  );
+
   // Counts per filter dimension, respecting the OTHER active
-  // filters. Game-state and tier chips show counts that update as
-  // users slice — matches P22 bench chip behavior.
+  // filters. Operates on the bench list (rostered cards excluded).
   const counts = useMemo(() => {
     const q = search.trim().toLowerCase();
     const gs = { all: 0, pre: 0, live: 0, final: 0, off: 0 };
     const tiers = { all: 0, bronze: 0, silver: 0, gold: 0, diamond: 0 };
-    for (const c of cards) {
+    for (const c of benchCards) {
       if (positionFilter === "hitters" && c.isPitcher) continue;
       if (positionFilter === "pitchers" && !c.isPitcher) continue;
       if (q && !c.playerName.toLowerCase().includes(q)) continue;
       const gameInfo = slotGameByCardId[c.id] ?? null;
-      // Game-state counts respect the tier filter but not the
-      // game-state filter itself (else all counts would collapse
-      // to whichever bucket is currently selected).
       if (tierFilter === "all" || c.tier === tierFilter) {
         gs.all += 1;
         if (matchesGameStateFilter(gameInfo, "pre")) gs.pre += 1;
@@ -102,19 +108,17 @@ export function CardsPanel({
         else if (matchesGameStateFilter(gameInfo, "final")) gs.final += 1;
         else gs.off += 1;
       }
-      // Tier counts respect the game-state filter but not the tier
-      // filter.
       if (matchesGameStateFilter(gameInfo, gameState)) {
         tiers.all += 1;
         tiers[c.tier] += 1;
       }
     }
     return { gameState: gs, tier: tiers };
-  }, [cards, positionFilter, tierFilter, gameState, search, slotGameByCardId]);
+  }, [benchCards, positionFilter, tierFilter, gameState, search, slotGameByCardId]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return cards
+    return benchCards
       .filter((c) => {
         if (positionFilter === "hitters" && c.isPitcher) return false;
         if (positionFilter === "pitchers" && !c.isPitcher) return false;
@@ -124,11 +128,6 @@ export function CardsPanel({
         return true;
       })
       .sort((a, b) => {
-        // Unassigned cards bubble up before rostered ones (so the
-        // pool of draftable options is visually prioritised).
-        const aAssigned = assignedCardIds.has(a.id);
-        const bAssigned = assignedCardIds.has(b.id);
-        if (aAssigned !== bAssigned) return aAssigned ? 1 : -1;
         const rA = stateRank(slotGameByCardId[a.id] ?? null);
         const rB = stateRank(slotGameByCardId[b.id] ?? null);
         if (rA !== rB) return rA - rB;
@@ -141,9 +140,9 @@ export function CardsPanel({
         }
         return a.playerName.localeCompare(b.playerName);
       });
-  }, [cards, positionFilter, tierFilter, gameState, search, assignedCardIds, slotGameByCardId]);
+  }, [benchCards, positionFilter, tierFilter, gameState, search, slotGameByCardId]);
 
-  const availableCount = cards.length - assignedCardIds.size;
+  const availableCount = benchCards.length;
 
   const tierLabel = TIER_FILTER_LABELS[tierFilter];
   const stateLabel = GAME_STATE_FILTER_LABELS[gameState];
@@ -169,12 +168,9 @@ export function CardsPanel({
           ) : (
             <span
               className="font-mono text-xs text-[var(--text-2)]"
-              title={`${availableCount} available · ${assignedCardIds.size} in lineup`}
+              title={`${availableCount} cards on the bench`}
             >
               {availableCount}
-              {assignedCardIds.size > 0 && (
-                <span className="text-[var(--text-3)]">·{assignedCardIds.size}</span>
-              )}
             </span>
           )}
         </div>
@@ -321,32 +317,24 @@ export function CardsPanel({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8">
-          {filtered.map((card) => {
-            const assigned = assignedCardIds.has(card.id);
-            return (
-              <div key={card.id} className="relative flex justify-center">
-                {assigned && (
-                  <span className="pointer-events-none absolute left-1/2 top-1 z-10 -translate-x-1/2 rounded-full border border-[var(--text)]/40 bg-[var(--bg)]/80 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider text-[var(--text)] backdrop-blur-sm">
-                    In lineup
-                  </span>
-                )}
-                <BenchCard
-                  card={card}
-                  assigned={assigned}
-                  fromPosition={cardToSlotPosition.get(card.id) ?? null}
-                  appliedToken={appliedTokenByCardId.get(card.id)}
-                  gameInfo={slotGameByCardId[card.id] ?? null}
-                  onRemoveToken={onRemoveToken}
-                  onOpenDetail={onOpenDetail}
-                  selectMode={selectMode}
-                  isSelected={selectedIds.has(card.id)}
-                  onToggleSelect={onToggleSelect}
-                  disabled={locked || card.isExpired}
-                  locked={locked}
-                />
-              </div>
-            );
-          })}
+          {filtered.map((card) => (
+            <div key={card.id} className="relative flex justify-center">
+              <BenchCard
+                card={card}
+                assigned={false}
+                fromPosition={null}
+                appliedToken={appliedTokenByCardId.get(card.id)}
+                gameInfo={slotGameByCardId[card.id] ?? null}
+                onRemoveToken={onRemoveToken}
+                onOpenDetail={onOpenDetail}
+                selectMode={selectMode}
+                isSelected={selectedIds.has(card.id)}
+                onToggleSelect={onToggleSelect}
+                disabled={locked || card.isExpired}
+                locked={locked}
+              />
+            </div>
+          ))}
         </div>
       )}
     </section>
