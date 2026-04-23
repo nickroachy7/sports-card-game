@@ -163,25 +163,35 @@ export function LineupView(props: LineupViewProps) {
     return byCardId;
   }, [optimisticApps]);
 
-  // Tokens list with `appliedToCardId` derived entirely from
-  // `optimisticApps`. This handles both directions of the optimistic
-  // overlay in one pass:
-  //   - Apply: new entry → `appliedToCardId = <cardId>` so the tray
-  //     hides the pip immediately.
-  //   - Remove: entry gone → `appliedToCardId = null` so the pip
-  //     reappears in the tray instantly, without waiting for the
-  //     server refresh to clear the real `appliedToCardId`.
-  // Prior version only handled adds; removes had a visible lag
-  // until the router.refresh() landed.
+  // Tokens list with `appliedToCardId` derived from `optimisticApps`
+  // — but ONLY for tokens we're actually tracking in the current
+  // contest. `props.tokenApplications` is contest-scoped, so any
+  // token NOT present in either the optimistic layer OR the server-
+  // side contest-scoped apps passes through unchanged. Without that
+  // guard, tokens applied in a different contest would get their
+  // `appliedToCardId` stomped to null and mistakenly show up in the
+  // tray; conversely, pristine unapplied tokens could get tagged
+  // "applied" if their id collided in a pending transition.
+  //
+  // Cases:
+  //   (a) in optimistic, in server apps   → override (normal apply)
+  //   (b) not in optimistic, in server apps → override to null
+  //                                            (optimistic remove)
+  //   (c) in optimistic, not in server apps → override (fresh apply)
+  //   (d) not in either                    → pass through
   const effectiveTokens = useMemo(() => {
     const cardByTokenId = new Map<string, string>();
     for (const a of optimisticApps) cardByTokenId.set(a.tokenId, a.cardId);
+    const serverAppliedInContest = new Set(props.tokenApplications.map((a) => a.tokenId));
     return props.tokens.map((t) => {
+      const inOptimistic = cardByTokenId.has(t.id);
+      const inServerContest = serverAppliedInContest.has(t.id);
+      if (!inOptimistic && !inServerContest) return t;
       const effectiveCard = cardByTokenId.get(t.id) ?? null;
       if (effectiveCard === t.appliedToCardId) return t;
       return { ...t, appliedToCardId: effectiveCard };
     });
-  }, [props.tokens, optimisticApps]);
+  }, [props.tokens, optimisticApps, props.tokenApplications]);
 
   // Optimistic slot overlay. A pending bench→slot drop immediately
   // writes the cardId here so the UI doesn't wait for the server
