@@ -1,6 +1,5 @@
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
-import type { TeamSummary } from "@/lib/profile/team-summary";
 
 /**
  * A card view model enriched with fields needed on the lineup page.
@@ -125,11 +124,4 @@ export type LineupViewProps = {
    * surfaced to the slot footer.
    */
   gameMatchupById: Record<string, string>;
-  /**
-   * Polish spec §88 (Phase 30). Team summary (team name, vault
-   * value, career FP, vaulted cards count) for the unified
-   * sidebar's top block. Computed by `getTeamSummary(userId)` on
-   * the server.
-   */
-  teamSummary: TeamSummary;
 };

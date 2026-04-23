@@ -1,8 +1,5 @@
 "use client";
 
-import { Vault as VaultIcon } from "lucide-react";
-import Link from "next/link";
-
 import { SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
@@ -13,7 +10,6 @@ import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { type InningInfo, liveLabel } from "@/lib/lineup/status-chip-label";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
-import type { TeamSummary } from "@/lib/profile/team-summary";
 import { cn } from "@/lib/utils";
 
 type EntryStatus = "building" | "submitted" | "live" | "final";
@@ -27,23 +23,32 @@ type SlotFill = {
 };
 
 /**
- * Polish spec §88 (Phase 30). Unified sidebar shared across
- * /lineup and /collection. Discriminated variant:
+ * Polish spec §100 (Phase 34) — simplified lineup-only sidebar.
  *
- *   - `"lineup"` — full interactive sidebar. Building-state shows
- *     Readiness + Submit; post-submit shows Live Score + Box Score
- *     + Event Feed + Status chip. Lineup-interactive props required.
+ * The old team-summary block at the top (team name + vault stats +
+ * career FP) was cut — that info already lives in the top nav header
+ * + profile drawer, and the duplicate ate ~100px of vertical without
+ * earning it. The `"summary"` variant (for the now-deleted
+ * /collection page) was also dropped; AppSidebar is lineup-only.
  *
- *   - `"summary"` — read-only sidebar for pages that aren't the
- *     lineup builder (currently just /collection). Shows team
- *     summary + contest header + simple live-score number when a
- *     contest is active. Deep contest state (box score, event
- *     feed) stays gated to the lineup page — users click into
- *     /lineup for the full view.
+ * Layout (top to bottom):
+ *
+ *   Building state:
+ *     Contest header (name + lock countdown)
+ *     Readiness (X/10 + warnings)
+ *     Auto-sub (inline)
+ *     Submit button (pinned to bottom via mt-auto)
+ *
+ *   Post-submit state (submitted / live / final):
+ *     Contest header (name + status copy)
+ *     Live/Final Score (big) + Status chip inline — the headline
+ *     Box Score (per-slot FP)
+ *     Event Feed (fills remaining, scrolls internally)
+ *
+ * Post-submit reorders per user ask: score + status get top
+ * billing, box score middle, event feed last.
  */
-type LineupVariantProps = {
-  variant: "lineup";
-  teamSummary: TeamSummary;
+type Props = {
   contestName: string;
   lockCountdown: string;
   entryStatus: EntryStatus;
@@ -59,101 +64,24 @@ type LineupVariantProps = {
   onSubmit: () => void;
 };
 
-type SummaryVariantProps = {
-  variant: "summary";
-  teamSummary: TeamSummary;
-  /** Null when the user has no active contest today. */
-  contest: {
-    contestName: string;
-    entryStatus: EntryStatus;
-    lockCountdown: string;
-    liveScore: number;
-    finalScore: number;
-  } | null;
-};
-
-type Props = LineupVariantProps | SummaryVariantProps;
-
 export function AppSidebar(props: Props) {
   return (
-    <div className="flex h-full flex-col gap-5">
-      <TeamSummaryBlock summary={props.teamSummary} />
-
-      {props.variant === "lineup" ? (
-        <>
-          <ContestHeaderCard
-            contestName={props.contestName}
-            entryStatus={props.entryStatus}
-            lockCountdown={props.lockCountdown}
-          />
-          {props.entryStatus === "building" ? (
-            <BuildingContent {...props} />
-          ) : (
-            <PostSubmitContent {...props} />
-          )}
-        </>
-      ) : props.contest ? (
-        <>
-          <ContestHeaderCard
-            contestName={props.contest.contestName}
-            entryStatus={props.contest.entryStatus}
-            lockCountdown={props.contest.lockCountdown}
-          />
-          <ReadonlyScoreBlock
-            entryStatus={props.contest.entryStatus}
-            liveScore={props.contest.liveScore}
-            finalScore={props.contest.finalScore}
-          />
-        </>
+    <div className="flex h-full flex-col gap-4">
+      <ContestHeaderCard
+        contestName={props.contestName}
+        entryStatus={props.entryStatus}
+        lockCountdown={props.lockCountdown}
+      />
+      {props.entryStatus === "building" ? (
+        <BuildingContent {...props} />
       ) : (
-        <NoContestPlaceholder />
+        <PostSubmitContent {...props} />
       )}
     </div>
   );
 }
 
-// ── Top: team summary ────────────────────────────────────────────────
-
-function TeamSummaryBlock({ summary }: { summary: TeamSummary }) {
-  return (
-    <section
-      className="flex flex-col gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] p-3"
-      aria-label="Team summary"
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="truncate font-sans text-sm font-semibold text-[var(--text)]">
-          {summary.teamName}
-        </h2>
-        <span className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-          <VaultIcon className="size-3" aria-hidden />
-          {summary.vaultedCardsCount}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <SummaryStat label="Career FP" value={summary.totalCareerFp.toLocaleString()} />
-        <SummaryStat
-          label="Vault Value"
-          value={summary.vaultValueTotal.toLocaleString()}
-          unit="¢"
-        />
-      </div>
-    </section>
-  );
-}
-
-function SummaryStat({ label, value, unit }: { label: string; value: string; unit?: string }) {
-  return (
-    <div className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1.5">
-      <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">{label}</div>
-      <div className="font-mono text-sm font-bold tabular-nums text-[var(--text)]">
-        {unit && <span className="mr-0.5 text-[var(--tier-gold,#D4A647)]">{unit}</span>}
-        {value}
-      </div>
-    </div>
-  );
-}
-
-// ── Middle: contest header (shared) ──────────────────────────────────
+// ── Contest header ───────────────────────────────────────────────────
 
 function ContestHeaderCard({
   contestName,
@@ -181,7 +109,7 @@ function ContestHeaderCard({
   );
 }
 
-// ── Building-state (lineup variant only) ─────────────────────────────
+// ── Building state ───────────────────────────────────────────────────
 
 function BuildingContent({
   slotFills,
@@ -192,16 +120,13 @@ function BuildingContent({
   locked,
   lockCountdown,
   onSubmit,
-}: LineupVariantProps) {
+}: Props) {
   const filledCount = LINEUP_POSITIONS.filter((pos) => slotFills[pos].card !== null).length;
   const warnings = computeWarnings(slotFills);
   const projectedFp = computeProjectedFp(slotFills);
 
   return (
     <>
-      {/* Polish spec §85 (Phase 30). Building state tightened:
-          Readiness + warnings + Projected FP + Auto-sub collapsed
-          into one compact block. Submit stays at the bottom. */}
       <SidebarSection title="Ready to play">
         <div className="flex items-baseline gap-3">
           <SidebarStat value={`${filledCount} / 10`} accent={filledCount === 10} />
@@ -256,16 +181,15 @@ function BuildingContent({
   );
 }
 
-// ── Post-submit (lineup variant only) ────────────────────────────────
+// ── Post-submit (submitted / live / final) ───────────────────────────
 
 function PostSubmitContent({
   slotFills,
   entryStatus,
   liveScore,
   finalScore,
-  lockCountdown,
   contestGameIds,
-}: LineupVariantProps) {
+}: Props) {
   const isFinal = entryStatus === "final";
   const displayScore = isFinal
     ? finalScore
@@ -278,27 +202,81 @@ function PostSubmitContent({
 
   return (
     <>
-      <SidebarSection title={isFinal ? "Final Score" : "Live Score"}>
-        <SidebarStat value={displayScore.toFixed(1)} accent={displayScore > 0} />
-      </SidebarSection>
+      {/* Polish spec §100 (Phase 34). Score + status are the headline;
+          merged into one block at the top so users see "how am I
+          doing" + "what's happening" at a glance. */}
+      <ScoreHeadline
+        isFinal={isFinal}
+        displayScore={displayScore}
+        entryStatus={entryStatus}
+        latestInning={latestInning}
+        gamesActive={gamesActive}
+        gamesReady={gamesReady}
+      />
 
       <BoxScoreSection slotFills={slotFills} isFinal={isFinal} />
 
       <EventFeed />
-
-      <div className="mt-auto flex flex-col gap-2 pt-2">
-        <p className="text-xs text-[var(--text-3)]">
-          {entryStatus === "live" ? <>Live · {lockCountdown}</> : <>Locked · {lockCountdown}</>}
-        </p>
-        <StatusChip
-          entryStatus={entryStatus}
-          displayScore={displayScore}
-          latestInning={latestInning}
-          gamesActive={gamesActive}
-          gamesReady={gamesReady}
-        />
-      </div>
     </>
+  );
+}
+
+function ScoreHeadline({
+  isFinal,
+  displayScore,
+  entryStatus,
+  latestInning,
+  gamesActive,
+  gamesReady,
+}: {
+  isFinal: boolean;
+  displayScore: number;
+  entryStatus: EntryStatus;
+  latestInning: InningInfo | null;
+  gamesActive: number;
+  gamesReady: boolean;
+}) {
+  let statusLabel: string;
+  switch (entryStatus) {
+    case "submitted":
+      statusLabel = "Waiting on first pitch";
+      break;
+    case "live":
+      statusLabel = liveLabel(latestInning, gamesActive, gamesReady);
+      break;
+    case "final":
+      statusLabel = "Contest final";
+      break;
+    default:
+      statusLabel = "";
+  }
+  return (
+    <section
+      className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
+      aria-label="Live score"
+    >
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">
+          {isFinal ? "Final" : "Live"}
+        </span>
+        <span
+          className={cn(
+            "font-mono text-[10px] uppercase tracking-wider",
+            entryStatus === "live" ? "text-emerald-400" : "text-[var(--text-3)]",
+          )}
+        >
+          {statusLabel}
+        </span>
+      </div>
+      <div
+        className={cn(
+          "font-mono text-3xl font-bold tabular-nums",
+          displayScore > 0 ? "text-[var(--text)]" : "text-[var(--text-3)]",
+        )}
+      >
+        {displayScore.toFixed(1)}
+      </div>
+    </section>
   );
 }
 
@@ -310,7 +288,7 @@ function BoxScoreSection({
   isFinal: boolean;
 }) {
   return (
-    <SidebarSection title="Box Score" className="min-h-0 flex-1">
+    <SidebarSection title="Box Score">
       <ol className="flex flex-col gap-0.5">
         {LINEUP_POSITIONS.map((pos) => {
           const fill = slotFills[pos];
@@ -355,81 +333,6 @@ function BoxScoreSection({
         })}
       </ol>
     </SidebarSection>
-  );
-}
-
-function StatusChip({
-  entryStatus,
-  displayScore,
-  latestInning,
-  gamesActive,
-  gamesReady,
-}: {
-  entryStatus: EntryStatus;
-  displayScore: number;
-  latestInning: InningInfo | null;
-  gamesActive: number;
-  gamesReady: boolean;
-}) {
-  let label: string;
-  switch (entryStatus) {
-    case "submitted":
-      label = "Submitted · Waiting on first pitch";
-      break;
-    case "live":
-      label = liveLabel(latestInning, gamesActive, gamesReady);
-      break;
-    case "final":
-      label = `Final · ${displayScore.toFixed(1)} FP`;
-      break;
-    default:
-      label = "Submitted";
-  }
-  return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-center font-medium text-xs text-[var(--text-2)] tabular-nums">
-      {label}
-    </div>
-  );
-}
-
-// ── Summary variant: read-only score + no-contest placeholder ────────
-
-function ReadonlyScoreBlock({
-  entryStatus,
-  liveScore,
-  finalScore,
-}: {
-  entryStatus: EntryStatus;
-  liveScore: number;
-  finalScore: number;
-}) {
-  const isFinal = entryStatus === "final";
-  const displayScore = isFinal ? finalScore : liveScore;
-  return (
-    <>
-      <SidebarSection title={isFinal ? "Final Score" : "Live Score"}>
-        <SidebarStat value={displayScore.toFixed(1)} accent={displayScore > 0} />
-      </SidebarSection>
-      <div className="mt-auto pt-2">
-        <Link
-          href="/lineup"
-          className="inline-flex items-center gap-1 text-xs text-[var(--text-2)] hover:text-[var(--text)]"
-        >
-          View lineup →
-        </Link>
-      </div>
-    </>
-  );
-}
-
-function NoContestPlaceholder() {
-  return (
-    <div className="flex flex-1 flex-col gap-2 rounded-md border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--text-3)]">
-      <p>No active contest right now.</p>
-      <Link href="/lineup" className="text-[var(--text-2)] hover:text-[var(--text)]">
-        Build a lineup →
-      </Link>
-    </div>
   );
 }
 

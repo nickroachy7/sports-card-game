@@ -5247,3 +5247,185 @@ works under `/lineup` so share-links mostly survive.
   collection_cap = 100).
 - Mobile / tablet layout for the cards grid.
 - Standard parked items.
+
+---
+
+# Phase 33 — v1.19.1 (Card detail sidebar swap + independent scroll)
+
+Two small follow-ups after Phase 32 shipped. User caught that
+Phase 30.4 had replaced the sidebar-swap card detail with a
+modal overlay — that was the wrong direction. This phase
+restores the pre-P30.4 behavior and also gives each column
+its own scroll container so the sidebar doesn't drag along
+with the main page when it's taller than the viewport.
+
+---
+
+## 99. Card detail sidebar swap restored + independent scroll
+
+### Goal
+
+Revert the P30.4 modal-overlay card detail and bring back the
+sidebar-swap pattern. The right sidebar should switch between
+the default AppSidebar and CardDetailPanel based on the
+`?card={id}` URL param. Also: left column (lineup + cards
+grid + tokens) and right column (sidebar) should scroll
+independently — hovering the sidebar scrolls the sidebar only,
+hovering the main area scrolls the main area only.
+
+### Scope
+
+- Restore sidebar-swap routing: `<aside>` renders either
+  `<AppSidebar>` or `<CardDetailPanel>` based on `?card=id`.
+- Delete `src/components/card/CardDetailModal.tsx` (no longer
+  referenced).
+- Drop the modal render from LineupView.
+- Keep URL-param routing from P30.4 so back/forward and
+  shareable links still work.
+- LineupShell: switch root from `min-h-full` → `h-full`; each
+  column carries its own `overflow-y-auto`.
+- Tag left column `data-scroll="lineup-main"`, aside
+  `data-scroll="lineup-sidebar"`.
+- `useAutoScrollOnDrag` targets `[data-scroll="lineup-main"]`
+  instead of the `<main>` element so drag-to-scroll only
+  drives the left column.
+
+### Out of scope
+
+- Sidebar restructure (pushed to Phase 34).
+- Scrollbar styling (pushed to Phase 34).
+
+---
+
+# Phase 34 — v1.19.2 (Sidebar redesign + subtle scrollbars)
+
+The right sidebar had accumulated density: contest header +
+live score chip + status pill + team summary + box score +
+event feed + submit controls, all stacked. Team summary
+duplicated info that already lives in the header + profile
+drawer. There was no close affordance on the card detail
+swap — users had to navigate away by clicking elsewhere.
+And scrollbars sat visible the whole time even when nothing
+was scrolling, adding visual noise to both columns.
+
+This phase tightens all three: redesign the sidebar, add a
+Back button to the card detail shell, and make scrollbars
+auto-fade in/out on scroll activity.
+
+---
+
+## 100. Sidebar redesign — cut team summary, reorder, Back button
+
+### Goal
+
+Rebuild the lineup sidebar around what the user actually
+needs in each state (building vs. submitted/live/final). Cut
+redundant content, tighten the visual hierarchy, and put the
+most important signal at the top. Also add a Back button to
+the card-detail sidebar swap — previously there was no
+obvious dismiss affordance.
+
+### Scope — AppSidebar rewrite
+
+- Cut the team summary block entirely. Team identity lives in
+  the header; career stats live in the profile drawer. The
+  sidebar shouldn't duplicate either.
+- Drop the unused `summary` variant of `<AppSidebar>` that
+  rendered on `/collection` before Phase 32 deleted the route.
+  Sidebar is lineup-only now; simplify the props type to match.
+- Merge Live Score + Status into a single `ScoreHeadline`
+  block at the top of the post-submit sidebar:
+  - "Live" or "Final" label (depending on entry.status).
+  - Secondary line: "Waiting on first pitch" (submitted) /
+    live-progress label ("3 games live · 2 final") / "Contest
+    final" based on state.
+  - Big score number (liveScore or finalScore as appropriate).
+- Post-submit order becomes: ScoreHeadline → BoxScoreSection
+  → EventFeed. (Was: LiveScore + StatusChip + TeamSummary +
+  BoxScore + EventFeed.)
+- Building-state order unchanged: Contest header → Readiness
+  → Projected → Auto-sub → Submit.
+
+### Scope — Back button on detail sidebar
+
+- Wrap `<CardDetailPanel>` in a local `DetailSidebar`
+  component in LineupView that adds a Back button row above
+  the panel: `<ArrowLeft /> Back` in a ghost-variant button.
+- `onClose` handler strips `?card` from the URL via
+  `router.replace`, which causes the sidebar to swap back to
+  `<AppSidebar>`.
+- No change to `CardDetailPanel` itself — just a wrapper.
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — full rewrite.
+- `src/lib/lineup/types.ts` — drop `teamSummary` from
+  `LineupViewProps`.
+- `src/app/(app)/lineup/page.tsx` — drop `getTeamSummary` call
+  from the parallel fetch.
+- `src/lib/profile/team-summary.ts` — delete.
+- `src/app/(app)/lineup/lineup-view.tsx` — add local
+  `DetailSidebar` component + `handleCloseDetail` callback.
+
+---
+
+## 101. Subtle auto-fading scrollbars
+
+### Goal
+
+Scrollbars sat visible the whole time on both the left column
+and the right sidebar, adding visual noise even when nothing
+was moving. Make them hidden by default, fade in briefly when
+scrolling, and fade out ~700ms after the last scroll tick. On
+macOS Chrome this matches the native overlay-scrollbar
+behavior; on Windows/Linux Chrome it brings them in line.
+
+### Scope
+
+- Global CSS in `src/app/globals.css`:
+  - `[data-scroll]` hides the scrollbar via
+    `scrollbar-width: thin` + transparent colors (Firefox) and
+    `::-webkit-scrollbar-thumb { background: transparent }`
+    (Webkit).
+  - `[data-scroll][data-scrolling="true"]` swaps the thumb to
+    `color-mix(in oklab, var(--text-3) 55%, transparent)`.
+  - 300ms `color-mix` transition on both layers so the thumb
+    glides in / out rather than popping.
+- `useScrollFade` hook (`src/components/lineup/use-scroll-fade.ts`):
+  - Document-level scroll listener in the capture phase (scroll
+    events don't bubble, so capture is required to catch any
+    descendant scroller).
+  - On scroll of any `[data-scroll]` element, sets
+    `data-scrolling="true"` and starts a 700ms timer to clear
+    it. Fresh scroll ticks reset the timer.
+  - Per-element timers in a WeakMap so multiple scrollers can
+    be active simultaneously.
+- Wire `useScrollFade()` into LineupView next to
+  `useAutoScrollOnDrag()`.
+
+### Files
+
+- `src/app/globals.css` — scrollbar rules.
+- `src/components/lineup/use-scroll-fade.ts` — new hook.
+- `src/app/(app)/lineup/lineup-view.tsx` — call the hook.
+
+---
+
+## 102. Not in scope for v1.19.2
+
+- Sidebar content in building state (Readiness / Projected /
+  Auto-sub / Submit) — unchanged this phase.
+- Status chip merger into ScoreHeadline for the *building*
+  state — ScoreHeadline only renders post-submit.
+- Virtualization of EventFeed or BoxScore.
+- Baserunners + pitcher-on-mound (still Phase 31 spec).
+- Mobile / tablet sidebar layout.
+- Empty / error state sweep.
+
+**Renumbering note:** §99 is reused between Phase 33
+(independent scroll containers) and Phase 34 (sidebar
+redesign). Phase 34's spec section is §100 to avoid
+collision with the P33 code references in `LineupShell.tsx`
+and `use-autoscroll-on-drag.ts`. Code tagged `§100 (Phase 34)`
+covers the sidebar rewrite + the Back-button detail wrapper;
+`§101 (Phase 34)` covers the scrollbar fade behavior.

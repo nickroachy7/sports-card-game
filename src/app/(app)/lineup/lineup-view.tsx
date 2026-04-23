@@ -1,11 +1,11 @@
 "use client";
 
+import { ArrowLeft } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
-
 import {
   setAutoSubMode,
   submitLineup,
@@ -24,7 +24,9 @@ import { LineupShell } from "@/components/lineup/LineupShell";
 import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
+import { useScrollFade } from "@/components/lineup/use-scroll-fade";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
+import { Button } from "@/components/ui/button";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
@@ -71,6 +73,11 @@ export function LineupView(props: LineupViewProps) {
   // cards buried below the fold in the CardsPanel can't be dragged
   // up to lineup slots at the top.
   useAutoScrollOnDrag();
+  // Polish spec §101 (Phase 34). Subtle auto-fading scrollbars on
+  // `[data-scroll]` containers (left column + right sidebar). Hidden
+  // by default; fades in while actively scrolling, fades back out
+  // ~700ms after the last scroll tick.
+  useScrollFade();
   // Polish spec §89 (P30 modal → P33 reverted to sidebar swap).
   // Card detail reads the `?card={id}` URL param; the sidebar swaps
   // between the default <AppSidebar> and <CardDetailPanel> based on
@@ -384,8 +391,18 @@ export function LineupView(props: LineupViewProps) {
     [router, searchParams],
   );
 
+  // Polish spec §100 (Phase 34). Back button on the detail sidebar —
+  // strips `?card` from the URL so the sidebar swaps back to the
+  // default AppSidebar.
+  const handleCloseDetail = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("card");
+    const q = next.toString();
+    router.push(q ? `/lineup?${q}` : "/lineup", { scroll: false });
+  }, [router, searchParams]);
+
   // Which slot (if any) holds the currently-opened card. Drives the
-  // modal's Remove-from-slot action visibility.
+  // detail sidebar's Remove-from-slot action visibility.
   const detailSlotPosition = detailCardId
     ? (optimisticSlots.find((s) => s.cardId === detailCardId)?.position ?? null)
     : null;
@@ -424,24 +441,15 @@ export function LineupView(props: LineupViewProps) {
       }
       sidebar={
         detailCardId ? (
-          <CardDetailPanel
+          <DetailSidebar
             cardId={detailCardId}
-            lineupContext={{
-              slotted: detailSlotPosition !== null,
-              onRemoveFromSlot: handleRemoveFromSlot,
-              onVaulted: () => router.refresh(),
-            }}
-            onClose={() => {
-              const next = new URLSearchParams(searchParams.toString());
-              next.delete("card");
-              const q = next.toString();
-              router.push(q ? `/lineup?${q}` : "/lineup", { scroll: false });
-            }}
+            slotted={detailSlotPosition !== null}
+            onRemoveFromSlot={handleRemoveFromSlot}
+            onVaulted={() => router.refresh()}
+            onClose={handleCloseDetail}
           />
         ) : (
           <AppSidebar
-            variant="lineup"
-            teamSummary={props.teamSummary}
             contestName={props.contestName}
             slotFills={slotFills}
             entryStatus={props.entryStatus}
@@ -492,6 +500,52 @@ export function LineupView(props: LineupViewProps) {
         shell
       )}
     </DndProvider>
+  );
+}
+
+/**
+ * Polish spec §100 (Phase 34). Wraps CardDetailPanel with a Back
+ * button at the top so users can return to the default sidebar.
+ * Pre-P30 the SelectedCardSidebar component did this; P30 replaced
+ * it with a modal; P33 reverted the swap pattern; P34 restores the
+ * Back button affordance inline here.
+ */
+function DetailSidebar({
+  cardId,
+  slotted,
+  onRemoveFromSlot,
+  onVaulted,
+  onClose,
+}: {
+  cardId: string;
+  slotted: boolean;
+  onRemoveFromSlot: () => void;
+  onVaulted: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="-ml-2 flex shrink-0 items-center">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClose}
+          className="h-7 gap-1 px-2 text-[var(--text-2)] hover:text-[var(--text)]"
+        >
+          <ArrowLeft className="size-3.5" aria-hidden="true" />
+          Back
+        </Button>
+      </div>
+      <CardDetailPanel
+        cardId={cardId}
+        lineupContext={{
+          slotted,
+          onRemoveFromSlot,
+          onVaulted,
+        }}
+        onClose={onClose}
+      />
+    </div>
   );
 }
 

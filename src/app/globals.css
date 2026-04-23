@@ -61,6 +61,45 @@
 }
 
 /*
+ * Subtle auto-fading scrollbars — polish spec §101 (Phase 34).
+ *
+ * Any element tagged `data-scroll` hides its scrollbar by default and
+ * shows a thin translucent thumb only while it is actively being
+ * scrolled. A `useScrollFade` hook toggles `data-scrolling="true"` on
+ * scroll events and clears it ~700ms after the last scroll tick.
+ * Thumb + track transition smoothly so the scrollbar glides in and
+ * out instead of popping.
+ *
+ * Applies to both Firefox (`scrollbar-*`) and Webkit
+ * (`::-webkit-scrollbar-*`). macOS overlay scrollbars already
+ * auto-hide; these rules just make Chrome / Chrome-on-Windows /
+ * Linux match that behavior.
+ */
+[data-scroll] {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 300ms ease-out;
+}
+[data-scroll][data-scrolling="true"] {
+  scrollbar-color: color-mix(in oklab, var(--text-3) 55%, transparent) transparent;
+}
+[data-scroll]::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+[data-scroll]::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-scroll]::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 4px;
+  transition: background-color 300ms ease-out;
+}
+[data-scroll][data-scrolling="true"]::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--text-3) 55%, transparent);
+}
+
+/*
  * Global reduced-motion floor — polish spec §1 / §5 / §7.
  *
  * Framer-motion surfaces (CardDragLayer, TokenDragLayer, DissolveCard)
