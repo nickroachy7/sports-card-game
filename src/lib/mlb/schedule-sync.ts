@@ -199,6 +199,17 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
         // different game_number is already set for this matchup we
         // leave it alone — prevents clobbering DH1's data when
         // processing a DH2 entry for the same matchup.
+        // ORDER BY note: `(game_number = N)` returns NULL for rows with
+        // game_number IS NULL, and `NULL DESC` lands BEFORE `true` in
+        // Postgres (NULLS FIRST is the default for DESC). That would
+        // pick an unclaimed NULL row even when a row already has the
+        // matching game_number — and trying to UPDATE the NULL row to
+        // N would then violate `game_matchup_number_uidx` because the
+        // claimed row already owns N for this matchup. Using
+        // `IS TRUE DESC` coerces NULL into `false`, so the claimed row
+        // wins the sort and the outer IS-DISTINCT-FROM gate turns the
+        // update into a no-op. Unclaimed NULL rows only get picked
+        // when no claimed row exists.
         const res = await db.execute(sql`
           UPDATE public.game AS g
           SET scheduled_start = ${entry.scheduledStartIso}::timestamptz,
@@ -211,7 +222,7 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
               AND away_team_id = (SELECT id FROM public.team WHERE abbreviation = ${awayAbbr})
               AND (game_number IS NULL OR game_number = ${entry.gameNumber}::smallint)
             ORDER BY
-              (game_number = ${entry.gameNumber}::smallint) DESC,
+              (game_number = ${entry.gameNumber}::smallint) IS TRUE DESC,
               created_at ASC
             LIMIT 1
           )
@@ -223,6 +234,40 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       pushError(summary, `mlb-stats schedule ${iso}: ${msg}`);
+    }
+
+    // Polish spec §65 (Phase 22) self-healing dedup. BDL occasionally
+    // emits the same game under two bdl_game_ids; the INSERT ON
+    // CONFLICT (bdl_game_id) clause doesn't catch it and a second row
+    // lands with game_number IS NULL. Migration 0035's dedup backfill
+    // was one-shot; without this step, every BDL dupe would stick
+    // around until the next migration. Only deletes NULL-game_number
+    // rows that have zero game_events and share a matchup-date with a
+    // claimed sibling — guaranteed-safe to drop.
+    try {
+      const dedupRes = await db.execute(sql`
+        DELETE FROM public.game g
+        WHERE g.date = ${iso}::date
+          AND g.game_number IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM public.game_event ge WHERE ge.game_id = g.id
+          )
+          AND EXISTS (
+            SELECT 1 FROM public.game g2
+            WHERE g2.date = g.date
+              AND g2.home_team_id = g.home_team_id
+              AND g2.away_team_id = g.away_team_id
+              AND g2.id <> g.id
+              AND g2.game_number IS NOT NULL
+          )
+      `);
+      const dropped = dedupRes.rowCount ?? 0;
+      if (dropped > 0) {
+        pushError(summary, `dedup ${iso}: dropped ${dropped} orphan BDL dupe row(s)`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      pushError(summary, `dedup ${iso}: ${msg}`);
     }
   }
 
