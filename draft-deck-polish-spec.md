@@ -3827,3 +3827,288 @@ would be noise.
 - Full doubleheader support.
 - Outs / baserunners.
 - contest_status enum cleanup (parallel to 0033).
+
+---
+
+# Phase 22 batch — locked 2026-04-22
+
+Feel Pass v1.13 — Live-State Polish. Six cleanup / enrichment
+items landing together:
+
+1. **Bench + slot footer visual treatment.** Phase 21's
+   bench footer reads as a noisy horizontal stream. Tone-
+   washed pill applied to both bench AND slot footers for
+   uniformity.
+2. **Game-state filter chips** on bench and collection.
+3. **Outs tracking** on `game` row; shown inline in slot
+   footer LIVE copy.
+4. **Full doubleheader support** — `game_number` column +
+   unique index + DH marker on the slot footer.
+5. **`contest_status` enum cleanup.** Drop the vestigial
+   `'locked'` value (parallel to P20's work on
+   `contest_entry_status`).
+6. (ADR only: retro).
+
+---
+
+## 62. SlotGameState tone-washed pill
+
+### Goal
+
+Phase 21's bench footer renders game-state text as a plain
+horizontal band under each card. When 10+ bench cards sit
+side-by-side, the state lines bleed together visually.
+Wrap the state text in a rounded pill with a subtle
+state-toned background so each card's footer reads as its
+own visual unit. Apply the same pill to the lineup slot
+footer for uniformity (user call-out).
+
+### Scope
+
+- `<SlotGameState>` `footer` + `bench` variants render
+  inside a rounded pill:
+  - **Pre-game:** `bg-[var(--surface-2)]` + muted text.
+    "vs LAD · 7:40p"
+  - **Live:** `bg-emerald-950/40` + emerald text + subtle
+    emerald ring. "LIVE · T5 2O · 2-1"
+  - **Final:** `bg-[var(--surface-2)]/50` + neutral text.
+    "FINAL W 5-2"
+  - **Off:** `bg-[var(--surface-2)]/30` + muted text.
+    "OFF"
+- Chip variant (used in Box Score rows) unchanged — that
+  context is text-only and works fine inline.
+- Width: pill width = content width (auto-sizes). On bench
+  cards where the pill exceeds card width, it can slightly
+  overflow or the card rows get a min-width.
+- Same padding + font-size on both surfaces for uniformity.
+
+### Acceptance
+
+- [ ] Each bench card's footer is a visually distinct pill.
+- [ ] Lineup slot footer uses the same pill.
+- [ ] Pills are tone-washed by state (grey / emerald /
+      neutral).
+- [ ] Reading bench from left to right feels discrete, not
+      a stream.
+- [ ] No layout shift on state transitions.
+
+### Trade-offs
+
+- **Pill adds ~4px of vertical real estate.** Still fits.
+- **Overflow on bench cards with long pre-game copy**
+  (e.g., "vs CWS · 10:07p" when the pill wants ~110px but
+  the card is 96px). Acceptable — pill stays
+  whitespace-nowrap; visual overflow communicates "this
+  card's state is more than fits," which is honest.
+
+---
+
+## 63. Game-state filter chips
+
+### Goal
+
+Let users filter bench + collection grids by today's game
+state. The priority sort from Phase 21 groups by state;
+filter chips let users narrow to just the actionable bucket.
+
+### Scope
+
+- **Bench header:** new second row of chips below the
+  existing Hitters/Pitchers/Search row. `All · Pre · Live
+  · Final · Off`. Single-select (mutually exclusive with
+  `All`). Applies on top of the existing
+  position/search/assigned filters.
+- **Collection header:** new `Today` chip row. Same 5
+  chips. When any state chip is active, the grid is
+  narrowed to players whose card's team has a game in
+  the current slate with that status. `All` resets to the
+  schedule-agnostic view.
+- **`All` is the default** — preserves current behavior.
+- **Counts per chip** render inline: `Pre (8) · Live (5) ·
+  Final (7) · Off (3)`. Totals reflect post-position-filter
+  + post-search set.
+- **Collection data requirement:** `CollectionGrid` needs
+  access to the `slotGameByCardId`-equivalent for
+  collection cards. Add a server-side query mirroring the
+  lineup page's one — one-shot game lookup for the user's
+  card teams.
+
+### Acceptance
+
+- [ ] Bench: clicking Pre narrows to cards whose player's
+      game is in scheduled state.
+- [ ] Bench: chip counts update as the user toggles
+      Hitters/Pitchers or types in search.
+- [ ] Collection: chip row visible; filtering works.
+- [ ] Collection: default (All) behavior unchanged.
+- [ ] Combining with position filter works: Hitters + Live
+      narrows to hitters whose game is live.
+
+### Trade-offs
+
+- **Collection page gains a schedule dependency.**
+  Previously pure "your cards" view; now joins to today's
+  games. One extra query; fine for today's feature set.
+- **Chip counts refresh on any filter change.** Minor
+  re-compute; not a concern at our sizes.
+
+---
+
+## 64. Outs tracking
+
+### Goal
+
+Enrich the LIVE slot footer from `LIVE · T5 · 2-1` to
+`LIVE · T5 2O · 2-1`. One more signal on a slot that's
+in the middle of an inning.
+
+### Scope
+
+- **Migration 0034** adds `current_outs smallint` to
+  `public.game` with CHECK constraint 0–2 or NULL.
+- **Webhook handler** reads `payload.play?.outs` on every
+  batter event. Idempotent UPDATE (IS DISTINCT FROM).
+  `handleGameStarted` seeds `0`. `handleGameEnded` clears
+  to NULL.
+- **`SlotGameInfo`** type gains `currentOuts: number | null`.
+  Lineup page SELECT pulls it.
+- **`<SlotGameState>` LIVE branch** appends `${outs}O` if
+  available: `LIVE · T5 2O · 2-1`. Falls back gracefully
+  when outs is null.
+
+### Acceptance
+
+- [ ] Migration 0034 applied.
+- [ ] Live slot footer renders outs when available.
+- [ ] FINAL footer doesn't show stale outs (cleared on
+      end).
+- [ ] Absent outs → footer degrades to no-outs version.
+
+### Trade-offs
+
+- **Outs change every pitch/play.** IS DISTINCT FROM
+  keeps the UPDATE a no-op for reps with no outs change;
+  Realtime only broadcasts actual changes. ~20–30 out-
+  changes per game.
+- **BDL's `play.outs` may not always be present.** Handler
+  tolerates null; fn guards against bad writes.
+
+---
+
+## 65. Doubleheader support
+
+### Goal
+
+Real DHs (two distinct games on the same matchup-date,
+different start times) become first-class. BDL-duplicate
+rows get rejected at the schema level going forward.
+Slot footer for a DH day shows `DH1` or `DH2` marker.
+
+### Scope
+
+- **Migration 0035**:
+  - Add `game_number smallint` to `public.game` with CHECK
+    constraint `game_number IN (1, 2) OR game_number IS NULL`.
+    Default 1 for backfill via schedule-sync pull.
+  - Drop the existing unique index on `bdl_game_id`; keep
+    as a non-unique index (BDL occasionally re-uses ids
+    across DH1/DH2 — confirmed by today's LAA@TOR data).
+  - Add unique index on `(date, home_team_id, away_team_id,
+    game_number)` to prevent future dupes. Same-matchup-
+    same-number rejected at schema level.
+- **Backfill** — one-time SQL in migration: for every
+  existing (date, home, away) that has >1 row, DELETE
+  the duplicates (keep earliest `created_at`). Running
+  today this wipes the LAA@TOR and SEA@OAK dups.
+- **`schedule-sync`** augmented: use MLB Stats API's
+  `schedule?date=X&sportId=1` response to pick up
+  `gameNumber` + `doubleHeader` fields per game. Set
+  `game_number` on matching rows. Rows without a clean
+  match default to `1`.
+- **Lineup page dedup query** updated: still `DISTINCT ON
+  (home_team_id, away_team_id)` but tiebreak favors the
+  game with the soonest scheduled_start that hasn't
+  finished (real DHs: DH2 rises when DH1 finals).
+- **Slot + bench footer** shows `DH1` / `DH2` marker when
+  `game_number !== null && game_number != 1 OR (game_number
+  == 1 && a DH exists on this matchup)`. Simple:
+  `LIVE · T3 · 2-1 (DH2)`.
+
+### Acceptance
+
+- [ ] Migration 0035 applied. Today's LAA@TOR dup
+      collapses to one row.
+- [ ] Unique index prevents re-inserting a dup via
+      schedule-sync.
+- [ ] schedule-sync populates `game_number` from MLB Stats
+      on next run.
+- [ ] Slot footer renders DH marker on a real DH day.
+
+### Trade-offs
+
+- **`bdl_game_id` unique index removal.** BDL sometimes
+  duplicates ids across a matchup's two games — observed
+  in today's data. Keep the index as non-unique for lookup
+  speed; dedup at schema level via the new triple-key
+  unique.
+- **Backfill deletes rows.** Pre-migration verification
+  (below) lists the rows that would be deleted so the
+  user can confirm. Deletion is safe because the Phase
+  20 DISTINCT ON query already hid them.
+- **MLB Stats' `gameNumber` may not always match BDL's
+  `bdl_game_id` pairing.** Best-effort match via
+  (date, home_mlb_team_id, away_mlb_team_id); MLB Stats
+  gives both game entries. Rare edge case where the
+  match is ambiguous; defaults to 1.
+
+---
+
+## 66. `contest_status` enum cleanup
+
+### Goal
+
+Drop `'locked'` from the `contest_status` enum. Parallel
+to Phase 20's `contest_entry_status` cleanup. Zero
+business logic transitions to this value today.
+
+### Scope
+
+- **Migration 0036** follows the P20 recipe:
+  rename old type → create new type → drop dependencies
+  (DEFAULT, RLS policies, any triggers) → ALTER COLUMN
+  TYPE → restore dependencies → drop old type.
+- Pre-migration check: verify zero rows at `'locked'`.
+- **SQL fn cleanup:** any fn that checks
+  `contest.status IN ('pending', 'locked', ...)`
+  simplified to just `'pending'`.
+
+### Acceptance
+
+- [ ] Zero rows at `'locked'` pre-migration.
+- [ ] Migration applies clean.
+- [ ] Enum has 4 values: `pending` / `live` / `final` /
+      `canceled`.
+- [ ] No TS references to `"locked"` on contest status.
+
+### Trade-offs
+
+- **Recipe already documented from P20.** Expect similar
+  dependency cascade (DEFAULT + possibly some triggers).
+
+---
+
+## 67. Not in scope for v1.13
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Baserunners live tracking.
+- Pitcher-on-mound indicator.
+- Collection page multi-day schedule view.
