@@ -128,11 +128,52 @@ export function LineupView(props: LineupViewProps) {
     return map;
   }, [props.tokens]);
 
+  // Effective tokens list for the tray — flips `appliedToCardId` on
+  // any token that's in an optimistic apply patch so TokenTray's
+  // "unapplied" filter hides it immediately. Declared after
+  // tokensById so we still have a full by-id lookup. Effective
+  // value is assembled below once `optimisticApps` exists.
+
+  // Optimistic token-application overlay. Mirrors the slot
+  // `useOptimistic` pattern: apply/remove reducer patches rebase on
+  // `props.tokenApplications` whenever the server refresh delivers
+  // new props. The drop-in scale pulse (§119) and "applied" badge
+  // appear instantly without waiting for the apply_token round-trip.
+  type TokenAppsState = typeof props.tokenApplications;
+  type TokenAppPatch =
+    | { type: "apply"; cardId: string; tokenId: string; applicationId: string }
+    | { type: "remove"; applicationId: string };
+  const [optimisticApps, patchApps] = useOptimistic<TokenAppsState, TokenAppPatch>(
+    props.tokenApplications,
+    (state, patch) => {
+      if (patch.type === "apply") {
+        const withoutCard = state.filter((s) => s.cardId !== patch.cardId);
+        return [
+          ...withoutCard,
+          { id: patch.applicationId, tokenId: patch.tokenId, cardId: patch.cardId },
+        ];
+      }
+      return state.filter((s) => s.id !== patch.applicationId);
+    },
+  );
+
   const tokenApps = useMemo(() => {
     const byCardId = new Map<string, { id: string; tokenId: string }>();
-    for (const app of props.tokenApplications) byCardId.set(app.cardId, app);
+    for (const app of optimisticApps) byCardId.set(app.cardId, app);
     return byCardId;
-  }, [props.tokenApplications]);
+  }, [optimisticApps]);
+
+  // Tokens list with optimistic applied-state pushed in so the
+  // TokenTray hides tokens that are "applied" during a pending
+  // transition, not just after the server refresh settles.
+  const effectiveTokens = useMemo(() => {
+    const appliedTokenIds = new Set(optimisticApps.map((a) => a.tokenId));
+    return props.tokens.map((t) =>
+      appliedTokenIds.has(t.id) && t.appliedToCardId === null
+        ? { ...t, appliedToCardId: "optimistic" as const }
+        : t,
+    );
+  }, [props.tokens, optimisticApps]);
 
   // Optimistic slot overlay. A pending bench→slot drop immediately
   // writes the cardId here so the UI doesn't wait for the server
@@ -366,7 +407,11 @@ export function LineupView(props: LineupViewProps) {
       toast.error("Drop the token on a filled slot.");
       return;
     }
+    // Optimistic apply — badge appears on the card + tray pip hides
+    // immediately. Rebases on the next server refresh.
+    const tempAppId = `optimistic-${tokenId}-${card.id}`;
     startTransition(async () => {
+      patchApps({ type: "apply", cardId: card.id, tokenId, applicationId: tempAppId });
       const result = await applyToken({
         tokenId,
         cardId: card.id,
@@ -382,6 +427,10 @@ export function LineupView(props: LineupViewProps) {
 
   function handleRemoveToken(applicationId: string) {
     startTransition(async () => {
+      // Optimistic remove — badge disappears from the card + tray
+      // pip reappears immediately. Rebases on the next server
+      // refresh.
+      patchApps({ type: "remove", applicationId });
       const result = await removeToken({ tokenApplicationId: applicationId });
       if (!result.ok) {
         // NOT_FOUND is idempotent success: the token was already
@@ -731,7 +780,7 @@ export function LineupView(props: LineupViewProps) {
           />
         )
       }
-      tokens={<TokenTray tokens={props.tokens} locked={locked} />}
+      tokens={<TokenTray tokens={effectiveTokens} locked={locked} />}
       cards={
         <CardsPanel
           cards={props.cards}
