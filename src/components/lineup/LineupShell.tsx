@@ -3,8 +3,13 @@ import type { ReactNode } from "react";
 type Props = {
   grid: ReactNode;
   sidebar: ReactNode;
-  bench: ReactNode;
+  /** Polish spec §95 (Phase 32). Tokens now render ABOVE the cards
+   *  panel — previously they sat below the bench carousel. */
   tokens: ReactNode;
+  /** Polish spec §94 (Phase 32). Renamed from `bench` — the cards
+   *  panel shows the user's entire collection in a responsive grid
+   *  below the tokens. `/collection` page was killed in this phase. */
+  cards: ReactNode;
 };
 
 /**
@@ -27,16 +32,17 @@ type Props = {
  * layout is a document-like flow (role labels → cards → role
  * labels → cards → bench → tokens).
  */
-export function LineupShell({ grid, sidebar, bench, tokens }: Props) {
+export function LineupShell({ grid, sidebar, tokens, cards }: Props) {
   return (
     <div className="flex min-h-full flex-col bg-[var(--bg)]">
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {grid}
-          <div className="shrink-0">
-            {bench}
-            {tokens}
-          </div>
+          {/* Polish spec §95 (Phase 32). Token tray docks above the
+              cards panel; cards extend down below the fold and the
+              parent <main> scrolls. */}
+          {tokens}
+          {cards}
         </div>
         <aside className="hidden w-72 shrink-0 flex-col gap-5 overflow-auto border-[var(--border)] border-l bg-[var(--surface)] p-4 md:flex">
           {sidebar}

@@ -9,6 +9,7 @@ import { Card } from "@/components/card/Card";
 import { dragResult } from "@/components/card/drag-layer-state";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
+import type { LineupPosition } from "@/lib/contracts/lineup";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,11 @@ import { type CardDragItem, DRAG_TYPES } from "./drag-types";
 type Props = {
   card: LineupCardVM;
   assigned: boolean;
+  /** Polish spec §94 (Phase 32). When non-null, the card is rostered
+   *  in a lineup slot and this is that slot's position. Included in
+   *  the drag item so the drop handler on LineupSlot routes through
+   *  `swap_lineup_slots` instead of `update_lineup_slot`. */
+  fromPosition?: LineupPosition | null;
   appliedToken?: AppliedTokenInfo;
   /** Polish spec §58 — today's game for this card's player, or null
    *  when they have no game in the contest. Drives the footer line
@@ -31,6 +37,7 @@ type Props = {
 export function BenchCard({
   card,
   assigned,
+  fromPosition = null,
   appliedToken,
   gameInfo,
   onRemoveToken,
@@ -43,7 +50,9 @@ export function BenchCard({
       type: DRAG_TYPES.CARD,
       item: () => {
         dragResult.lastDropAccepted = false;
-        return { cardId: card.id, isPitcher: card.isPitcher };
+        const item: CardDragItem = { cardId: card.id, isPitcher: card.isPitcher };
+        if (fromPosition) item.fromPosition = fromPosition;
+        return item;
       },
       canDrag: !disabled,
       end: (_item, monitor) => {
@@ -51,7 +60,7 @@ export function BenchCard({
       },
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
-    [card.id, card.isPitcher, disabled],
+    [card.id, card.isPitcher, disabled, fromPosition],
   );
 
   // Suppress the HTML5 drag ghost — the card itself plus our drop-indicators

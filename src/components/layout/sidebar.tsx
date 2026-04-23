@@ -1,14 +1,16 @@
 "use client";
 
-import { BarChart3, Boxes, Gem, Medal, ShoppingBag, Users } from "lucide-react";
+import { BarChart3, Gem, Medal, ShoppingBag, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 
+// Polish spec §97 (Phase 32). Collection was absorbed into the
+// Lineup page — all cards now render below the lineup grid in one
+// scrollable view. `/collection` is a 404.
 const NAV = [
   { href: "/lineup", label: "Lineup", Icon: Users },
-  { href: "/collection", label: "Collection", Icon: Boxes },
   { href: "/shop", label: "Shop", Icon: ShoppingBag },
   { href: "/vault", label: "Vault", Icon: Gem },
   { href: "/milestones", label: "Milestones", Icon: Medal },

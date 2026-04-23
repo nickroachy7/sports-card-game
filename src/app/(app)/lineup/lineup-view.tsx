@@ -16,13 +16,14 @@ import { applyToken, removeToken } from "@/app/actions/tokens";
 import { CardDetailModal } from "@/components/card/CardDetailModal";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { AppSidebar, shortName } from "@/components/layout/AppSidebar";
-import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { CardContractEventsProvider } from "@/components/lineup/CardContractEventsProvider";
+import { CardsPanel } from "@/components/lineup/CardsPanel";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupGrid } from "@/components/lineup/LineupGrid";
 import { LineupShell } from "@/components/lineup/LineupShell";
 import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
 import { TokenTray } from "@/components/lineup/TokenTray";
+import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import type { TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
@@ -65,6 +66,11 @@ export function LineupView(props: LineupViewProps) {
   const [, startTransition] = useTransition();
   const [submitting, startSubmit] = useTransition();
   const [mode, setMode] = useState<AutoSubMode>(props.autoSubMode);
+  // Polish spec §96 (Phase 32). Auto-scroll the main container when
+  // a drag is in progress near the viewport edge. Without this,
+  // cards buried below the fold in the CardsPanel can't be dragged
+  // up to lineup slots at the top.
+  useAutoScrollOnDrag();
   // Polish spec §89 (Phase 30). Card detail is a modal keyed by the
   // `?card={id}` URL param so back/forward navigation + shareable
   // links keep working. Previously this was local useState driving a
@@ -202,6 +208,18 @@ export function LineupView(props: LineupViewProps) {
       if (slot.cardId) set.add(slot.cardId);
     }
     return set;
+  }, [optimisticSlots]);
+
+  // Polish spec §94 (Phase 32). Inverse of slotFills — cardId → the
+  // position that card occupies. CardsPanel passes the position down
+  // to each BenchCard so the drag source can include `fromPosition`,
+  // routing drops to swap_lineup_slots.
+  const cardToSlotPosition = useMemo(() => {
+    const map = new Map<string, LineupPosition>();
+    for (const slot of optimisticSlots) {
+      if (slot.cardId) map.set(slot.cardId, slot.position);
+    }
+    return map;
   }, [optimisticSlots]);
 
   // Lineup's rostered players — input to <LiveEventsProvider> post-
@@ -422,10 +440,12 @@ export function LineupView(props: LineupViewProps) {
           onSubmit={handleSubmit}
         />
       }
-      bench={
-        <BenchDrawer
+      tokens={<TokenTray tokens={props.tokens} locked={locked} />}
+      cards={
+        <CardsPanel
           cards={props.cards}
           assignedCardIds={assignedCardIds}
+          cardToSlotPosition={cardToSlotPosition}
           appliedTokenByCardId={appliedTokenByCardId}
           slotGameByCardId={props.slotGameByCardId}
           onRemoveToken={handleRemoveToken}
@@ -433,7 +453,6 @@ export function LineupView(props: LineupViewProps) {
           locked={locked}
         />
       }
-      tokens={<TokenTray tokens={props.tokens} locked={locked} />}
     />
   );
 
