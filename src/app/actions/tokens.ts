@@ -17,37 +17,65 @@ type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
 
+/**
+ * Drizzle's execute wraps the underlying `pg.DatabaseError` — the PG
+ * `code` (e.g. "23514", "P0002") often lives on `err.cause.code`
+ * instead of the top-level. Check both so we don't fall through to
+ * `INTERNAL` with a raw "Failed query: SELECT public..." toast.
+ *
+ * We also string-match the RAISE EXCEPTION messages as a belt-and-
+ * suspenders: even when the code is missing, the human copy is
+ * recognisable.
+ */
 function mapDbError(err: unknown): { code: string; message: string } {
-  const e = err as { code?: string; message?: string };
-  const msg = e.message ?? "Unknown error";
-  if (e.code === "P0002") return { code: "NOT_FOUND", message: msg };
-  if (e.code === "23514") {
-    // Polish spec §44 — slot lock check fires before the token
-    // eligibility ones; surface it first.
-    if (msg.includes("SLOT_LOCKED")) {
-      return {
-        code: "SLOT_LOCKED",
-        message: msg.replace(/^.*SLOT_LOCKED:\s*/, ""),
-      };
-    }
-    if (msg.includes("token already applied")) {
+  const e = err as {
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  const topMsg = e.message ?? "";
+  const causeMsg = e.cause?.message ?? "";
+  const code = e.code ?? e.cause?.code;
+  const combined = `${topMsg} ${causeMsg}`;
+
+  if (code === "P0002" || combined.includes("application not found")) {
+    return { code: "NOT_FOUND", message: "Token already removed." };
+  }
+  if (combined.includes("SLOT_LOCKED")) {
+    return {
+      code: "SLOT_LOCKED",
+      message: "Game already started — this token is locked in place.",
+    };
+  }
+  if (combined.includes("already resolved")) {
+    return {
+      code: "TOKEN_ALREADY_RESOLVED",
+      message: "Token has already been used.",
+    };
+  }
+  if (combined.includes("contest no longer pending") || combined.includes("contest locked")) {
+    return {
+      code: "CONTEST_LOCKED",
+      message: "Contest is locked — tokens can't be changed now.",
+    };
+  }
+  if (code === "23514") {
+    if (combined.includes("token already applied")) {
       return { code: "TOKEN_ALREADY_APPLIED", message: "Token is already applied." };
     }
-    if (msg.includes("card already has a token")) {
+    if (combined.includes("card already has a token")) {
       return { code: "CONFLICT", message: "Card already has a token." };
     }
-    if (msg.includes("pitcher token") || msg.includes("hitter token")) {
-      return { code: "TOKEN_INELIGIBLE", message: msg.replace(/^.*: /, "") };
+    if (combined.includes("pitcher token") || combined.includes("hitter token")) {
+      return { code: "TOKEN_INELIGIBLE", message: combined.replace(/^.*: /, "").trim() };
     }
-    if (msg.includes("contest locked")) {
-      return { code: "CONTEST_LOCKED", message: "Lineup lock has passed." };
-    }
-    if (msg.includes("card is expired")) {
+    if (combined.includes("card is expired")) {
       return { code: "CARD_EXPIRED", message: "Card's contract is expired." };
     }
-    return { code: "CONFLICT", message: msg };
+    return { code: "CONFLICT", message: "Can't modify this token right now." };
   }
-  return { code: "INTERNAL", message: msg };
+  // Fallback — still better than "Failed query: SELECT public...".
+  return { code: "INTERNAL", message: causeMsg || topMsg || "Couldn't update the token." };
 }
 
 async function applyTokenImpl(

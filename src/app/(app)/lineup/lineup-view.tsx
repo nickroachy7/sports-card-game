@@ -344,10 +344,11 @@ export function LineupView(props: LineupViewProps) {
           ? removeToken({ tokenApplicationId: appliedAtPosition.applicationId })
           : Promise.resolve({ ok: true } as const),
       ]);
-      if (!tokenResult.ok) {
+      if (!tokenResult.ok && tokenResult.error.code !== "NOT_FOUND") {
         // Log but don't block the slot update — slot removal
         // already succeeded; token detach failure is recoverable
-        // on next refresh.
+        // on next refresh. Skip NOT_FOUND since that just means
+        // the token was already detached server-side.
         toast.error(`Token detach failed: ${tokenResult.error.message}`);
       }
       if (!result.ok) {
@@ -383,8 +384,13 @@ export function LineupView(props: LineupViewProps) {
     startTransition(async () => {
       const result = await removeToken({ tokenApplicationId: applicationId });
       if (!result.ok) {
-        toast.error(result.error.message);
-        return;
+        // NOT_FOUND is idempotent success: the token was already
+        // removed (e.g. by the auto-detach on slot clear). Don't
+        // surface it as an error.
+        if (result.error.code !== "NOT_FOUND") {
+          toast.error(result.error.message);
+          return;
+        }
       }
       router.refresh();
     });
@@ -655,7 +661,7 @@ export function LineupView(props: LineupViewProps) {
         ? removeToken({ tokenApplicationId: applied.applicationId })
         : Promise.resolve({ ok: true } as const),
     ]);
-    if (!tokenResult.ok) {
+    if (!tokenResult.ok && tokenResult.error.code !== "NOT_FOUND") {
       toast.error(`Token detach failed: ${tokenResult.error.message}`);
     }
     if (!result.ok) {
