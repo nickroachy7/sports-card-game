@@ -5056,3 +5056,194 @@ current pitcher's name on hitter slots whose team is batting.
 - Baserunner names (hover tooltip).
 - Pitcher stats / matchup analysis.
 - Standard parked items.
+
+---
+
+# Phase 32 — v1.19 (Unified lineup + collection on one page)
+
+User-proposed redesign: kill the `/collection` page entirely.
+Replace the horizontal bench carousel with a responsive grid of
+all cards below the lineup. Tokens move above the cards grid.
+Users build lineups + browse their collection on a single
+continuous page.
+
+Baserunners + pitcher-on-mound (previously Phase 31) stay
+spec'd but unbuilt; will pick up as a later phase.
+
+---
+
+## 94. Unified cards grid (replaces `/collection`)
+
+### Goal
+
+Consolidate lineup-building and collection-browsing into one
+page. The bench was a horizontal scroll of unused cards; the
+new section is a responsive grid of ALL cards (assigned +
+unused), max 8 per row, wrapping down at narrower viewports.
+Users see their full collection while they draft their lineup.
+
+### Scope
+
+- Rename / refactor `BenchDrawer` → `CardsPanel`. Replaces the
+  horizontal `<HorizontalScroller>` carousel with a responsive
+  CSS grid:
+  ```
+  grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8
+  ```
+  Gap = 12-16px. Card size stays at `size="small"` (96×134)
+  matching lineup slots.
+- Shows **all cards**, not just unused. Cards currently in the
+  lineup render with a subtle "IN LINEUP" badge overlay +
+  muted tint; they're still clickable (opens modal) and
+  draggable (for swap) but visually distinguished.
+- Default sort: pre-game today → live → final → off/no-game.
+  Same priority-by-game-state rank the bench already uses.
+- Filter row above the grid:
+  - Hitters / Pitchers chips (existing)
+  - Game-state chips with counts (existing)
+  - Tier chips: All / Bronze / Silver / Gold / Diamond (new)
+  - Search input (existing)
+  - "X cards · Y in lineup" counter on the right
+- No pagination or virtualization. At collection_cap = 100,
+  rendering all cards is cheap.
+
+### Acceptance
+
+- [ ] All cards visible in the grid, rows of up to 8.
+- [ ] Responsive columns scale from 2 (narrow) to 8 (wide).
+- [ ] Tier filter chips work and show counts.
+- [ ] Cards in lineup slots render with "IN LINEUP" marker.
+- [ ] Clicking a card opens the detail modal.
+- [ ] Dragging a card onto a lineup slot still works for
+      visible cards.
+
+### Trade-offs
+
+- **One giant scroll per page.** Users scroll the whole
+  document to see all their cards. The AppSidebar sticks to
+  the right via its own sticky-ish behavior (existing).
+- **Rendering 100 cards at once.** No virtualization. Cheap
+  now, revisit if collection_cap grows.
+
+---
+
+## 95. Tokens above cards
+
+### Goal
+
+User's layout call: tokens should appear ABOVE the cards grid
+(between the lineup and the cards panel), not below. Makes
+tokens more discoverable when browsing cards + keeps the
+"interactive game state" (lineup + tokens) visually grouped.
+
+### Scope
+
+- Update `LineupShell` section order: `grid` → `tokens` →
+  `cards` (was `grid` → `bench` → `tokens`).
+- `TokenTray` component unchanged — just moves up in the
+  layout.
+
+### Acceptance
+
+- [ ] Tokens render between the lineup grid and the cards
+      grid.
+- [ ] No layout regressions on the lineup grid itself.
+
+### Trade-offs
+
+- **None meaningful.** Pure reshuffle.
+
+---
+
+## 96. Auto-scroll during drag
+
+### Goal
+
+With the cards grid extending below the fold, users can now
+drag a card that's off-screen downward. To drop it on a
+lineup slot (which is at the top of the page), the page must
+auto-scroll upward while the drag is in progress. HTML5 DnD
+doesn't do this natively.
+
+### Scope
+
+- New `useAutoScrollOnDrag` hook in
+  `src/components/lineup/use-autoscroll-on-drag.ts`. Works
+  purely with pointer events:
+  - When any card drag is in progress (tracked via
+    `react-dnd`'s monitor or a module-level ref), listen on
+    `dragover` (or a custom pointermove) at the document level.
+  - If the pointer is within 80px of the top of the viewport,
+    scroll the main scroll container upward at ~12px/frame.
+  - If within 80px of the bottom, scroll downward.
+  - Uses `requestAnimationFrame` for smooth continuous scroll
+    while the pointer stays in the edge zone.
+- Attach the hook at the `DndProvider` level in LineupView so
+  it covers all drag operations (bench card → slot, slot →
+  slot, token → slot).
+
+### Acceptance
+
+- [ ] Dragging a card from the bottom of the cards grid
+      toward the top of the page auto-scrolls the page up.
+- [ ] The auto-scroll stops when the pointer leaves the edge
+      zone OR the drop completes.
+- [ ] No conflicts with existing DnD behavior.
+- [ ] Works across the cards grid, bench, and token tray.
+
+### Trade-offs
+
+- **Custom hook instead of `react-dnd-scrolling`.** The
+  library has heavier abstractions; a small hook is cleaner
+  for our case. If we need more scroll-during-drag features
+  (container-specific scroll, multiple scroll zones), we
+  revisit.
+- **80px edge zone.** Tuneable. Too large = accidental
+  scrolling; too small = hard to trigger.
+
+---
+
+## 97. `/collection` page deletion
+
+### Goal
+
+Hard-delete the collection surface. Nav cleanup. Old deep-
+links get 404'd; the modal's `?card={id}` URL pattern already
+works under `/lineup` so share-links mostly survive.
+
+### Scope
+
+- Delete:
+  - `src/app/(app)/collection/page.tsx`
+  - `src/app/(app)/collection/collection-grid.tsx`
+  - `src/app/(app)/collection/[cardId]/page.tsx` (legacy
+    redirect)
+- Remove the "Collection" entry from the sidebar nav
+  (`src/components/layout/sidebar.tsx`).
+- No redirect: paths return 404. Acceptable since the
+  surface hasn't shipped to external users.
+
+### Acceptance
+
+- [ ] `/collection` 404s.
+- [ ] Sidebar doesn't list Collection.
+- [ ] No TS references to the deleted components.
+- [ ] Card deep-links on `/lineup?card={id}` still work.
+
+### Trade-offs
+
+- **No redirect** — a small number of any-existing bookmarks
+  break. Acceptable pre-launch.
+
+---
+
+## 98. Not in scope for v1.19
+
+- Baserunners + pitcher-on-mound (stays as Phase 31 spec,
+  built later).
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Virtualization of the cards grid (unnecessary at
+  collection_cap = 100).
+- Mobile / tablet layout for the cards grid.
+- Standard parked items.
