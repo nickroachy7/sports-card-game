@@ -14,10 +14,16 @@ import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
+import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/fetch-slot-games";
+import type { SlotGameInfo } from "@/lib/lineup/types";
+import { cn } from "@/lib/utils";
 
 export type CollectionCard = CardViewModel & {
   positions: string[];
   playerStatus: PlayerStatus;
+  /** Polish spec §63 (Phase 22). Needed so the Collection page can look
+   *  up today's game by team for the game-state filter chips. */
+  teamId: string | null;
   acquiredAt: string;
   appliedToken?: {
     tokenType: TokenType;
@@ -70,9 +76,13 @@ function positionMatches(raw: string, filter: PositionFilter): boolean {
 export function CollectionGrid({
   cards,
   collectionCap,
+  slotGameByCardId,
 }: {
   cards: CollectionCard[];
   collectionCap: number;
+  /** Polish spec §63 (Phase 22). Keyed by card.id; missing key = no
+   *  contest game today for that player. */
+  slotGameByCardId: Record<string, SlotGameInfo>;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -82,6 +92,7 @@ export function CollectionGrid({
   const [position, setPosition] = useState<PositionFilter>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [contract, setContract] = useState<ContractFilter>("all");
+  const [gameState, setGameState] = useState<GameStateFilter>("all");
   const [sort, setSort] = useState<SortKey>("tier");
 
   // Detail state is derived from the ?card query param so that
@@ -126,6 +137,32 @@ export function CollectionGrid({
     }
   }, [detailCardId, cards, closeDetail]);
 
+  // Polish spec §63 (Phase 22). Per-game-state counts for the chip row.
+  // Counted against all cards — independent of the current chip
+  // selection so the label on each chip is stable as the user toggles.
+  // (The other filters still influence counts; mirrors the bench.)
+  const gameStateCounts = useMemo(() => {
+    const counts = { all: 0, pre: 0, live: 0, final: 0, off: 0 };
+    const q = search.trim().toLowerCase();
+    for (const c of cards) {
+      if (q && !c.playerName.toLowerCase().includes(q)) continue;
+      if (tier !== "all" && c.tier !== tier) continue;
+      if (!matchPosition(c.positions, position)) continue;
+      if (status === "expired" && !c.isExpired) continue;
+      if (status !== "all" && status !== "expired" && c.playerStatus !== status) continue;
+      if (contract === "expired" && !c.isExpired) continue;
+      if (contract === "critical" && !(c.contractPlays > 0 && c.contractPlays <= 2)) continue;
+      if (contract === "low" && !(c.contractPlays >= 3 && c.contractPlays <= 4)) continue;
+      counts.all += 1;
+      const info = slotGameByCardId[c.id] ?? null;
+      if (matchesGameStateFilter(info, "pre")) counts.pre += 1;
+      else if (matchesGameStateFilter(info, "live")) counts.live += 1;
+      else if (matchesGameStateFilter(info, "final")) counts.final += 1;
+      else counts.off += 1;
+    }
+    return counts;
+  }, [cards, search, tier, position, status, contract, slotGameByCardId]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return cards
@@ -138,6 +175,7 @@ export function CollectionGrid({
         if (contract === "expired" && !c.isExpired) return false;
         if (contract === "critical" && !(c.contractPlays > 0 && c.contractPlays <= 2)) return false;
         if (contract === "low" && !(c.contractPlays >= 3 && c.contractPlays <= 4)) return false;
+        if (!matchesGameStateFilter(slotGameByCardId[c.id] ?? null, gameState)) return false;
         return true;
       })
       .sort((a, b) => {
@@ -156,7 +194,7 @@ export function CollectionGrid({
             return 0;
         }
       });
-  }, [cards, search, tier, position, status, contract, sort]);
+  }, [cards, search, tier, position, status, contract, gameState, sort, slotGameByCardId]);
 
   const nearCap = cards.length / collectionCap >= 0.95;
 
@@ -166,6 +204,7 @@ export function CollectionGrid({
     setPosition("all");
     setStatus("all");
     setContract("all");
+    setGameState("all");
     setSort("tier");
   }
 
@@ -193,6 +232,48 @@ export function CollectionGrid({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-64"
+        />
+      </div>
+
+      {/* Polish spec §63 (Phase 22) — game-state filter chips. Primary
+          axis, so it sits above the secondary select filters. Tone-
+          matched to SlotGameState pill tones so the chip tint
+          previews what the user will see. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <GameStateChip
+          label="All"
+          tone="neutral"
+          count={gameStateCounts.all}
+          active={gameState === "all"}
+          onClick={() => setGameState("all")}
+        />
+        <GameStateChip
+          label="Pre"
+          tone="pre"
+          count={gameStateCounts.pre}
+          active={gameState === "pre"}
+          onClick={() => setGameState("pre")}
+        />
+        <GameStateChip
+          label="Live"
+          tone="live"
+          count={gameStateCounts.live}
+          active={gameState === "live"}
+          onClick={() => setGameState("live")}
+        />
+        <GameStateChip
+          label="Final"
+          tone="final"
+          count={gameStateCounts.final}
+          active={gameState === "final"}
+          onClick={() => setGameState("final")}
+        />
+        <GameStateChip
+          label="Off"
+          tone="off"
+          count={gameStateCounts.off}
+          active={gameState === "off"}
+          onClick={() => setGameState("off")}
         />
       </div>
 
@@ -336,4 +417,61 @@ function FilterSelect<T extends string>({
       </select>
     </label>
   );
+}
+
+type ChipTone = "neutral" | "pre" | "live" | "final" | "off";
+
+/**
+ * Polish spec §63 (Phase 22). Mirror of the bench chip (see
+ * src/components/lineup/BenchDrawer.tsx `GameStateChip`). Kept in two
+ * places for now because the bench version lives in a client component
+ * in the lineup page tree; pulling them into a shared module would
+ * mean a client-only barrel that both pages import. Parallel definition
+ * is simpler at this scale.
+ */
+function GameStateChip({
+  label,
+  tone,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  tone: ChipTone;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 font-mono text-[11px] uppercase leading-tight tracking-wider transition-colors",
+        active ? "border-[var(--text)] text-[var(--text)]" : toneIdle(tone),
+      )}
+    >
+      <span>{label}</span>
+      <span
+        className={cn("tabular-nums", active ? "text-[var(--text-2)]" : "text-[var(--text-3)]")}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
+function toneIdle(tone: ChipTone): string {
+  switch (tone) {
+    case "live":
+      return "border-emerald-800/60 bg-emerald-950/40 text-emerald-400 hover:border-emerald-700";
+    case "final":
+      return "border-[var(--border)] bg-[var(--surface-2)]/60 text-[var(--text-2)] hover:border-[var(--text-2)]";
+    case "pre":
+      return "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-2)] hover:border-[var(--text-2)]";
+    case "off":
+      return "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-3)] hover:border-[var(--text-2)]";
+    default:
+      return "border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:border-[var(--text-2)]";
+  }
 }

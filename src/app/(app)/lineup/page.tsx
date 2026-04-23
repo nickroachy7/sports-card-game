@@ -7,7 +7,8 @@ import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
-import type { LineupCardVM, LineupSlotVM, LineupTokenVM, SlotGameInfo } from "@/lib/lineup/types";
+import { fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
+import type { LineupCardVM, LineupSlotVM, LineupTokenVM } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
 export const dynamic = "force-dynamic";
@@ -175,80 +176,14 @@ export default async function LineupPage() {
     photoUrl: r.mlbam_id ? mlbamHeadshotUrl(r.mlbam_id, "small") : null,
   }));
 
-  // Polish spec §45 — per-card today's game info. One game per team
-  // per date; we join contest.included_game_ids to narrow to the
-  // contest's slate. Empty if no contest games fall on today.
-  const slotGameByCardId: Record<string, SlotGameInfo> = {};
-  const cardTeamIds = new Set(cards.map((c) => c.teamId).filter((id): id is string => !!id));
-  if (cardTeamIds.size > 0 && (contest.included_game_ids?.length ?? 0) > 0) {
-    type GameRow = {
-      id: string;
-      home_team_id: string;
-      away_team_id: string;
-      home_abbr: string | null;
-      away_abbr: string | null;
-      scheduled_start: string | null;
-      status: SlotGameInfo["status"];
-      home_runs: number | null;
-      away_runs: number | null;
-      current_inning: number | null;
-      current_inning_half: "top" | "bottom" | null;
-    };
-    // Polish spec §55 (Phase 20). DISTINCT ON per matchup collapses
-    // doubleheader + BDL-duplicate rows down to one row; priority
-    // prefers live > scheduled > final, then earliest start time.
-    const gamesRes = await db.execute<GameRow>(sql`
-      SELECT DISTINCT ON (g.home_team_id, g.away_team_id)
-        g.id,
-        g.home_team_id, g.away_team_id,
-        ht.abbreviation AS home_abbr,
-        at.abbreviation AS away_abbr,
-        g.scheduled_start, g.status, g.home_runs, g.away_runs,
-        g.current_inning, g.current_inning_half
-      FROM public.game g
-      LEFT JOIN public.team ht ON ht.id = g.home_team_id
-      LEFT JOIN public.team at ON at.id = g.away_team_id
-      WHERE g.id = ANY(${sql`ARRAY[${sql.join(
-        (contest.included_game_ids ?? []).map((id) => sql`${id}::uuid`),
-        sql`, `,
-      )}]::uuid[]`})
-      ORDER BY
-        g.home_team_id, g.away_team_id,
-        CASE g.status
-          WHEN 'live' THEN 0
-          WHEN 'scheduled' THEN 1
-          WHEN 'final' THEN 2
-          ELSE 3
-        END,
-        g.scheduled_start NULLS LAST,
-        g.created_at
-    `);
-    // Build team_id → game info. A team can only appear in one game
-    // per contest slate (one game per day per team).
-    const gameByTeamId = new Map<string, GameRow>();
-    for (const g of gamesRes.rows) {
-      gameByTeamId.set(g.home_team_id, g);
-      gameByTeamId.set(g.away_team_id, g);
-    }
-    for (const card of cards) {
-      if (!card.teamId) continue;
-      const game = gameByTeamId.get(card.teamId);
-      if (!game) continue;
-      const isHome = game.home_team_id === card.teamId;
-      slotGameByCardId[card.id] = {
-        gameId: game.id,
-        playerTeamId: card.teamId,
-        opponentAbbr: (isHome ? game.away_abbr : game.home_abbr) ?? "???",
-        isHome,
-        scheduledStart: game.scheduled_start,
-        status: game.status,
-        homeRuns: game.home_runs,
-        awayRuns: game.away_runs,
-        currentInning: game.current_inning,
-        currentInningHalf: game.current_inning_half,
-      };
-    }
-  }
+  // Polish spec §45 — per-card today's game info. Shared helper; see
+  // `fetchSlotGameByCardId` for the DISTINCT ON + has_double_header
+  // derivation. The Collection page uses the same helper so its
+  // per-card "has game today" filter reads from the same source.
+  const slotGameByCardId = await fetchSlotGameByCardId(
+    contest.included_game_ids ?? [],
+    cards.map((c) => ({ id: c.id, teamId: c.teamId })),
+  );
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({
     id: r.id,

@@ -1,8 +1,12 @@
+import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { type CollectionCard, CollectionGrid } from "@/app/(app)/collection/collection-grid";
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
+import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
+import { fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
+import type { SlotGameInfo } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 import { captureServerEvent } from "@/lib/observability/action";
 
@@ -22,7 +26,7 @@ type RawRow = {
         positions: string[] | null;
         status: PlayerStatus;
         mlbam_id: number | null;
-        team: { abbreviation: string } | { abbreviation: string }[] | null;
+        team: { id: string; abbreviation: string } | { id: string; abbreviation: string }[] | null;
       }
     | {
         full_name: string;
@@ -61,7 +65,7 @@ export default async function CollectionPage() {
         .select(
           `id, career_fp_total, current_tier, contract_plays_remaining, is_expired,
          applied_token_id, acquired_at,
-         player:player_id ( full_name, positions, status, mlbam_id, team:team_id ( abbreviation ) )`,
+         player:player_id ( full_name, positions, status, mlbam_id, team:team_id ( id, abbreviation ) )`,
         )
         .eq("user_id", user.id)
         .eq("is_vaulted", false)
@@ -100,7 +104,7 @@ export default async function CollectionPage() {
     const team = player
       ? Array.isArray(player.team)
         ? player.team[0]
-        : (player.team as { abbreviation: string } | null)
+        : (player.team as { id: string; abbreviation: string } | null)
       : null;
     const positions = player?.positions ?? [];
 
@@ -122,6 +126,7 @@ export default async function CollectionPage() {
       playerName: player?.full_name ?? "Unknown",
       position: positions[0] ?? null,
       positions,
+      teamId: team?.id ?? null,
       teamAbbreviation: team?.abbreviation ?? null,
       tier: row.current_tier,
       careerFp: Number(row.career_fp_total ?? 0),
@@ -136,6 +141,31 @@ export default async function CollectionPage() {
     };
   });
 
+  // Polish spec §63 (Phase 22) — per-card today's-game info for the
+  // collection's game-state filter chips. Same helper the lineup page
+  // uses; scoped to today's contest slate (create_daily_contest is
+  // idempotent + cheap). We skip this if the user has no cards at
+  // all to avoid a pointless round-trip.
+  let slotGameByCardId: Record<string, SlotGameInfo> = {};
+  if (cards.length > 0) {
+    const db = getDb();
+    type ContestRow = { id: string; included_game_ids: string[] | null };
+    const contestRes = await db.execute<{ create_daily_contest: string }>(sql`
+      SELECT public.create_daily_contest() AS create_daily_contest
+    `);
+    const contestId = contestRes.rows[0]?.create_daily_contest;
+    if (contestId) {
+      const contestMeta = await db.execute<ContestRow>(sql`
+        SELECT id, included_game_ids FROM public.contest WHERE id = ${contestId}::uuid
+      `);
+      const gameIds = contestMeta.rows[0]?.included_game_ids ?? [];
+      slotGameByCardId = await fetchSlotGameByCardId(
+        gameIds,
+        cards.map((c) => ({ id: c.id, teamId: c.teamId })),
+      );
+    }
+  }
+
   const collectionCap = Number(cfg?.collection_cap ?? 100);
 
   // Fire & forget — server-side page view. PostHog also auto-captures a
@@ -146,5 +176,11 @@ export default async function CollectionPage() {
     collection_cap: collectionCap,
   });
 
-  return <CollectionGrid cards={cards} collectionCap={collectionCap} />;
+  return (
+    <CollectionGrid
+      cards={cards}
+      collectionCap={collectionCap}
+      slotGameByCardId={slotGameByCardId}
+    />
+  );
 }

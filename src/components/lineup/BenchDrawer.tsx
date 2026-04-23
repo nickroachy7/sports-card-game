@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
 import { Input } from "@/components/ui/input";
+import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/fetch-slot-games";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 import { BenchCard } from "./BenchCard";
@@ -32,7 +33,28 @@ export function BenchDrawer({
   locked,
 }: Props) {
   const [filter, setFilter] = useState<PositionFilter>("all");
+  const [gameState, setGameState] = useState<GameStateFilter>("all");
   const [search, setSearch] = useState("");
+
+  // Polish spec §63 (Phase 22) — game-state counts for the chip row.
+  // Reveals how many cards sit in each bucket pre-filtered by the
+  // assigned-card hide rule + position filter, so the chip labels
+  // carry actionable signal ("3 Pre · 1 Live").
+  const gameStateCounts = useMemo(() => {
+    const counts = { all: 0, pre: 0, live: 0, final: 0, off: 0 };
+    for (const c of cards) {
+      if (assignedCardIds.has(c.id)) continue;
+      if (filter === "hitters" && c.isPitcher) continue;
+      if (filter === "pitchers" && !c.isPitcher) continue;
+      counts.all += 1;
+      const info = slotGameByCardId[c.id] ?? null;
+      if (matchesGameStateFilter(info, "pre")) counts.pre += 1;
+      else if (matchesGameStateFilter(info, "live")) counts.live += 1;
+      else if (matchesGameStateFilter(info, "final")) counts.final += 1;
+      else counts.off += 1;
+    }
+    return counts;
+  }, [cards, assignedCardIds, filter, slotGameByCardId]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -51,6 +73,7 @@ export function BenchDrawer({
         if (filter === "hitters" && c.isPitcher) return false;
         if (filter === "pitchers" && !c.isPitcher) return false;
         if (q && !c.playerName.toLowerCase().includes(q)) return false;
+        if (!matchesGameStateFilter(slotGameByCardId[c.id] ?? null, gameState)) return false;
         return true;
       })
       .sort((a, b) => {
@@ -67,11 +90,11 @@ export function BenchDrawer({
         }
         return a.playerName.localeCompare(b.playerName);
       });
-  }, [cards, filter, search, assignedCardIds, slotGameByCardId]);
+  }, [cards, filter, gameState, search, assignedCardIds, slotGameByCardId]);
 
   return (
     <section className="flex flex-col gap-2 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2">
-      <header className="flex items-center justify-between gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Bench</h2>
           {locked ? (
@@ -89,7 +112,7 @@ export function BenchDrawer({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <FilterButton label="All" active={filter === "all"} onClick={() => setFilter("all")} />
           <FilterButton
             label="Hitters"
@@ -109,6 +132,48 @@ export function BenchDrawer({
           />
         </div>
       </header>
+
+      {/* Polish spec §63 (Phase 22) — per-game-state filter chip row.
+          Sits under the position chips so the two filter axes compose.
+          Tone-matched to SlotGameState pill tones so the chip tint
+          reads as a preview of what the filter will show. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <GameStateChip
+          label="All"
+          tone="neutral"
+          count={gameStateCounts.all}
+          active={gameState === "all"}
+          onClick={() => setGameState("all")}
+        />
+        <GameStateChip
+          label="Pre"
+          tone="pre"
+          count={gameStateCounts.pre}
+          active={gameState === "pre"}
+          onClick={() => setGameState("pre")}
+        />
+        <GameStateChip
+          label="Live"
+          tone="live"
+          count={gameStateCounts.live}
+          active={gameState === "live"}
+          onClick={() => setGameState("live")}
+        />
+        <GameStateChip
+          label="Final"
+          tone="final"
+          count={gameStateCounts.final}
+          active={gameState === "final"}
+          onClick={() => setGameState("final")}
+        />
+        <GameStateChip
+          label="Off"
+          tone="off"
+          count={gameStateCounts.off}
+          active={gameState === "off"}
+          onClick={() => setGameState("off")}
+        />
+      </div>
 
       {filtered.length === 0 ? (
         <div className="flex h-[140px] items-center justify-center rounded border border-dashed border-[var(--border)] px-4 text-center text-xs text-[var(--text-3)]">
@@ -175,4 +240,60 @@ function FilterButton({
       {label}
     </button>
   );
+}
+
+type ChipTone = "neutral" | "pre" | "live" | "final" | "off";
+
+/**
+ * Polish spec §63 (Phase 22). Game-state chip matching SlotGameState's
+ * pill tones (see src/components/lineup/SlotGameState.tsx `pillTone`).
+ * Emerald wash for live; muted-2 for scheduled/final; muted for off.
+ * When `active`, the chip swaps to a bold neutral outline so it reads
+ * as selected regardless of tone.
+ */
+function GameStateChip({
+  label,
+  tone,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  tone: ChipTone;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase leading-tight tracking-wider transition-colors",
+        active ? "border-[var(--text)] text-[var(--text)]" : toneIdle(tone),
+      )}
+    >
+      <span>{label}</span>
+      <span
+        className={cn("tabular-nums", active ? "text-[var(--text-2)]" : "text-[var(--text-3)]")}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
+function toneIdle(tone: ChipTone): string {
+  switch (tone) {
+    case "live":
+      return "border-emerald-800/60 bg-emerald-950/40 text-emerald-400 hover:border-emerald-700";
+    case "final":
+      return "border-[var(--border)] bg-[var(--surface-2)]/60 text-[var(--text-2)] hover:border-[var(--text-2)]";
+    case "pre":
+      return "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-2)] hover:border-[var(--text-2)]";
+    case "off":
+      return "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-3)] hover:border-[var(--text-2)]";
+    default:
+      return "border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:border-[var(--text-2)]";
+  }
 }
