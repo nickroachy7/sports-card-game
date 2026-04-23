@@ -30,29 +30,33 @@ type Props = {
 };
 
 /**
- * Polish spec §68 (Phase 23) + §76 (Phase 25) — three-role-row lineup
- * layout with bench-matching fixed card sizes.
+ * Polish spec §78 (Phase 26) — three-role-row lineup with inline role
+ * labels + lineup-size cards.
  *
- * Phase 23 introduced the role rows; Phase 24 tried to make them
- * fluid via ResizeObserver + transform-scale; Phase 25 reverted the
- * fluid experiment because typical laptop viewports computed card
- * widths smaller than the bench's 96, producing the exact visual
- * inconsistency (tiny lineup cards, larger bench cards) the user
- * flagged.
+ * Phase 25 matched lineup cards to bench size (96×134); on a typical
+ * laptop pane the layout read as "tiny cards floating in a void." P26
+ * addresses that with:
  *
- * Design:
- *   ROTATION
- *            [SP1]      [SP2]
- *   INFIELD
- *   [C] [1B] [2B] [3B] [SS]
- *   OUTFIELD
- *        [OF1]  [OF2]  [OF3]
+ *   - `size="lineup"` (120×168) → cards 25% bigger than bench.
+ *   - Per-slot chrome dropped for filled slots (no position label
+ *     above, no result pill below, no inline remove). Fits 3 rows
+ *     vertically on typical laptop viewports.
+ *   - Role labels moved INLINE to the left of each card row so we
+ *     save ~60px vertical vs the above-row stacked variant.
  *
- * Every row sits inside a shared-width container (544px = 5 cards ×
- * 96 + 4 gaps × 16, the natural infield width). Labels are block
- * elements inside that container so they flush to the same left
- * edge across all three rows. Rotation + Outfield rows center-
- * justify their cards within the shared container.
+ * Layout:
+ *   ┌──────────────────────────────────────────────┐
+ *   │ ROTATION  [SP1] [SP2]                         │
+ *   │ INFIELD   [C] [1B] [2B] [3B] [SS]             │
+ *   │ OUTFIELD  [OF1]  [OF2]  [OF3]                 │
+ *   └──────────────────────────────────────────────┘
+ *
+ * Fixed label column = 80px wide so all three labels vertically
+ * align. Cards area = natural infield width (5×120 + 4×16 = 664).
+ * Total row = 80 + 16 + 664 = 760px; centered horizontally in the
+ * pane. Rotation and Outfield rows center-justify their cards
+ * within the 664px area so cards align on the same x-axis across
+ * rows.
  */
 const ROWS: ReadonlyArray<{ label: string; positions: readonly LineupPosition[] }> = [
   { label: "Rotation", positions: ["SP1", "SP2"] },
@@ -61,10 +65,12 @@ const ROWS: ReadonlyArray<{ label: string; positions: readonly LineupPosition[] 
 ] as const;
 
 /**
- * 5 cards × 96 + 4 gaps × 16 = 544. All three rows share this width
- * so their labels + card groups align to a consistent left edge.
+ * Infield's natural width: 5 × 120 + 4 × 16 = 664.
+ * All three rows share this width; rotation + outfield center within.
  */
-const SHARED_ROW_WIDTH_PX = 544;
+const CARDS_AREA_WIDTH_PX = 664;
+/** Fixed column for the inline role label — keeps labels vertically aligned. */
+const LABEL_COL_WIDTH_PX = 80;
 
 export function LineupGrid({
   slotFills,
@@ -74,8 +80,8 @@ export function LineupGrid({
   onOpenDetail,
 }: Props) {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-6 p-6">
-      <div className="flex flex-col gap-5" style={{ width: SHARED_ROW_WIDTH_PX }}>
+    <div className="flex h-full w-full flex-col items-center justify-center px-4 py-4">
+      <div className="flex flex-col gap-4">
         {ROWS.map((row) => (
           <RoleRow
             key={row.label}
@@ -111,14 +117,14 @@ function RoleRow({
   onOpenDetail: Props["onOpenDetail"];
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <h3 className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+    <div className="flex items-center gap-4">
+      <h3
+        className="shrink-0 font-mono text-[11px] uppercase tracking-wider text-[var(--text-3)]"
+        style={{ width: LABEL_COL_WIDTH_PX }}
+      >
         {label}
       </h3>
-      {/* `justify-center` is a no-op for the 5-card infield row (cards
-          exactly fill the shared width) and centers the 2-card
-          Rotation + 3-card Outfield rows within that shared width. */}
-      <div className="flex justify-center gap-4">
+      <div className="flex justify-center gap-4" style={{ width: CARDS_AREA_WIDTH_PX }}>
         {positions.map((position) => {
           const fill = slotFills[position];
           return (

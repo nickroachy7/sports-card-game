@@ -22,19 +22,21 @@ type Props = {
  * sidebar-inclusive variant). The sidebar's own `overflow-auto`
  * lets its contents scroll independently.
  *
- * Polish spec §76 (Phase 25): the grid pane holds the fixed-size
- * LineupGrid centered vertically + horizontally. Phase 24's
- * `overflow-hidden` was dropped alongside the fluid scaling math;
- * at fixed 96×134 card sizes, content fits comfortably in realistic
- * laptop pane heights (three 134px rows plus chrome ≈ 620px, well
- * within the 620px+ flex-1 allocation on a 900px viewport).
+ * Polish spec §78 (Phase 26): LineupGrid uses size="lineup"
+ * (120×168) cards + inline role labels to fit three rows into
+ * typical laptop pane heights (roughly 520px grid content). The
+ * grid pane gets `overflow-hidden` back so a very short viewport
+ * clips the bottom of the outfield row rather than letting it
+ * overlap the bench (which is what happened in the P25 build at
+ * narrow viewports — the outfield cards were spilling through the
+ * bench visually).
  */
 export function LineupShell({ grid, sidebar, bench, tokens }: Props) {
   return (
     <div className="flex h-full min-h-[720px] flex-col bg-[var(--bg)]">
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1">{grid}</div>
+          <div className="flex min-h-0 flex-1 overflow-hidden">{grid}</div>
           <div className="shrink-0">
             {bench}
             {tokens}

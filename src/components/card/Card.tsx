@@ -3,7 +3,7 @@ import { contractColor, TIER_FRAME } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { cn } from "@/lib/utils";
 
-export type CardSize = "small" | "medium" | "large";
+export type CardSize = "small" | "lineup" | "medium" | "large";
 
 export type CardViewModel = {
   id: string;
@@ -39,6 +39,11 @@ const SIZE_STYLES: Record<
   { width: number; height: number; radius: number; border: number }
 > = {
   small: { width: 96, height: 134, radius: 6, border: 3 },
+  // Polish spec §78 (Phase 26). "lineup" sits between small and medium
+  // — 25% bigger than the bench card so the lineup reads as prominent
+  // without crowding a typical laptop pane. Aspect ratio preserved at
+  // 96:134 (≈ 0.714). Radius + border scale up proportionally.
+  lineup: { width: 120, height: 168, radius: 8, border: 4 },
   medium: { width: 160, height: 224, radius: 10, border: 4 },
   large: { width: 320, height: 448, radius: 16, border: 7 },
 };
