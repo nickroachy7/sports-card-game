@@ -10,6 +10,7 @@ import { createServerClient } from "@/lib/db/supabase";
 import { fetchGameMatchupsById, fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
 import type { LineupCardVM, LineupSlotVM, LineupTokenVM } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
+import { getTeamSummary } from "@/lib/profile/team-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -184,12 +185,24 @@ export default async function LineupPage() {
   // Polish spec §69 (Phase 23) — per-game matchup lookup for the
   // Event Feed chip. Runs in parallel with the slot-game query since
   // they're independent reads.
-  const [slotGameByCardId, gameMatchupById] = await Promise.all([
+  const [slotGameByCardId, gameMatchupById, teamSummary] = await Promise.all([
     fetchSlotGameByCardId(
       contest.included_game_ids ?? [],
       cards.map((c) => ({ id: c.id, teamId: c.teamId })),
     ),
     fetchGameMatchupsById(contest.included_game_ids ?? []),
+    // Polish spec §88 (Phase 30). Team summary feeds the unified
+    // sidebar's top block. Cheap JOIN; falls back to zeroed stats
+    // if the user has no manager_account row yet (brand-new user).
+    getTeamSummary(user.id).then(
+      (s) =>
+        s ?? {
+          teamName: "",
+          totalCareerFp: 0,
+          vaultedCardsCount: 0,
+          vaultValueTotal: 0,
+        },
+    ),
   ]);
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({
@@ -235,6 +248,7 @@ export default async function LineupPage() {
       }))}
       slotGameByCardId={slotGameByCardId}
       gameMatchupById={gameMatchupById}
+      teamSummary={teamSummary}
     />
   );
 }

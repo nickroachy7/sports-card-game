@@ -9,6 +9,7 @@ import { fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
 import type { SlotGameInfo } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 import { captureServerEvent } from "@/lib/observability/action";
+import { getTeamSummary } from "@/lib/profile/team-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -168,6 +169,23 @@ export default async function CollectionPage() {
 
   const collectionCap = Number(cfg?.collection_cap ?? 100);
 
+  // Polish spec §88 (Phase 30). Fetch team summary + active-contest
+  // snapshot so the unified AppSidebar renders on /collection with
+  // the same top block as /lineup. If the user has no entry today
+  // the sidebar shows a "no active contest" placeholder.
+  const [teamSummary, contestSnapshot] = await Promise.all([
+    getTeamSummary(user.id).then(
+      (s) =>
+        s ?? {
+          teamName: "",
+          totalCareerFp: 0,
+          vaultedCardsCount: 0,
+          vaultValueTotal: 0,
+        },
+    ),
+    fetchActiveContestSnapshot(user.id),
+  ]);
+
   // Fire & forget — server-side page view. PostHog also auto-captures a
   // client $pageview from the provider, but this gives us a server-side
   // "collection_viewed" with card-count properties for funnel analysis.
@@ -181,6 +199,64 @@ export default async function CollectionPage() {
       cards={cards}
       collectionCap={collectionCap}
       slotGameByCardId={slotGameByCardId}
+      teamSummary={teamSummary}
+      contestSnapshot={contestSnapshot}
     />
   );
+}
+
+/**
+ * Polish spec §88 (Phase 30). Minimal read-only snapshot of the
+ * user's current contest entry for the collection-page sidebar.
+ * Returns null if no active contest or no entry today. The sidebar
+ * falls back to a "no active contest" placeholder when null.
+ */
+async function fetchActiveContestSnapshot(userId: string): Promise<{
+  contestName: string;
+  entryStatus: "building" | "submitted" | "live" | "final";
+  lockCountdown: string;
+  liveScore: number;
+  finalScore: number;
+} | null> {
+  type Row = {
+    contest_name: string;
+    lineup_locks_at: string;
+    entry_status: "building" | "submitted" | "live" | "final";
+    live_score: string | number;
+    final_score: string | number;
+  };
+  const res = await getDb().execute<Row>(sql`
+    SELECT
+      c.name AS contest_name,
+      c.lineup_locks_at,
+      ce.status AS entry_status,
+      ce.live_score,
+      ce.final_score
+    FROM public.contest_entry ce
+    JOIN public.contest c ON c.id = ce.contest_id
+    WHERE ce.user_id = ${userId}::uuid
+      AND c.date = public.current_slate_date()
+    ORDER BY c.created_at DESC
+    LIMIT 1
+  `);
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    contestName: row.contest_name,
+    entryStatus: row.entry_status,
+    lockCountdown: formatLockCountdown(row.lineup_locks_at),
+    liveScore: Number(row.live_score),
+    finalScore: Number(row.final_score),
+  };
+}
+
+/** Minimal countdown formatter shared with LineupView's useLockCountdown. */
+function formatLockCountdown(lockIso: string): string {
+  const delta = new Date(lockIso).getTime() - Date.now();
+  if (delta <= 0) return "past lock time";
+  const hours = Math.floor(delta / 3_600_000);
+  const mins = Math.floor((delta % 3_600_000) / 60_000);
+  if (hours > 24) return `${Math.floor(hours / 24)}d`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
 }

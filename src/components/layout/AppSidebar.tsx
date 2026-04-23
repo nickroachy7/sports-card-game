@@ -1,5 +1,8 @@
 "use client";
 
+import { Vault as VaultIcon } from "lucide-react";
+import Link from "next/link";
+
 import { SidebarSection, SidebarStat } from "@/components/layout/sidebar-card";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
@@ -10,70 +13,148 @@ import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { type InningInfo, liveLabel } from "@/lib/lineup/status-chip-label";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
+import type { TeamSummary } from "@/lib/profile/team-summary";
 import { cn } from "@/lib/utils";
+
+type EntryStatus = "building" | "submitted" | "live" | "final";
 
 type SlotFill = {
   card: LineupCardVM | null;
   appliedToken: { bonusFp: number } | null;
   liveFp: number;
   finalFp: number;
-  /** Polish spec §48 — per-slot game state drives the Box Score
-   *  row chip the same way it drives the slot footer. */
   gameInfo?: SlotGameInfo | null;
 };
 
-type EntryStatus = "building" | "submitted" | "live" | "final";
-
-type Props = {
-  /** Polish spec §72 (Phase 23). Contest name was in the top bar pre-P23;
-   *  now rendered at the top of the sidebar above the box score. */
+/**
+ * Polish spec §88 (Phase 30). Unified sidebar shared across
+ * /lineup and /collection. Discriminated variant:
+ *
+ *   - `"lineup"` — full interactive sidebar. Building-state shows
+ *     Readiness + Submit; post-submit shows Live Score + Box Score
+ *     + Event Feed + Status chip. Lineup-interactive props required.
+ *
+ *   - `"summary"` — read-only sidebar for pages that aren't the
+ *     lineup builder (currently just /collection). Shows team
+ *     summary + contest header + simple live-score number when a
+ *     contest is active. Deep contest state (box score, event
+ *     feed) stays gated to the lineup page — users click into
+ *     /lineup for the full view.
+ */
+type LineupVariantProps = {
+  variant: "lineup";
+  teamSummary: TeamSummary;
   contestName: string;
-  slotFills: Record<LineupPosition, SlotFill>;
+  lockCountdown: string;
   entryStatus: EntryStatus;
   liveScore: number;
   finalScore: number;
+  contestGameIds: string[];
+  slotFills: Record<LineupPosition, SlotFill>;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
   canSubmit: boolean;
   submitting: boolean;
   locked: boolean;
-  lockCountdown: string;
   onSubmit: () => void;
-  /** Contest's included game ids (for Event Feed initial fetch scope). */
-  contestGameIds: string[];
 };
 
-export function LineupSidebar(props: Props) {
-  if (props.entryStatus === "building") {
-    return (
-      <>
-        <ContestHeaderCard
-          contestName={props.contestName}
-          entryStatus={props.entryStatus}
-          lockCountdown={props.lockCountdown}
-        />
-        <BuildingSidebar {...props} />
-      </>
-    );
-  }
+type SummaryVariantProps = {
+  variant: "summary";
+  teamSummary: TeamSummary;
+  /** Null when the user has no active contest today. */
+  contest: {
+    contestName: string;
+    entryStatus: EntryStatus;
+    lockCountdown: string;
+    liveScore: number;
+    finalScore: number;
+  } | null;
+};
+
+type Props = LineupVariantProps | SummaryVariantProps;
+
+export function AppSidebar(props: Props) {
   return (
-    <>
-      <ContestHeaderCard
-        contestName={props.contestName}
-        entryStatus={props.entryStatus}
-        lockCountdown={props.lockCountdown}
-      />
-      <PostSubmitSidebar {...props} />
-    </>
+    <div className="flex h-full flex-col gap-5">
+      <TeamSummaryBlock summary={props.teamSummary} />
+
+      {props.variant === "lineup" ? (
+        <>
+          <ContestHeaderCard
+            contestName={props.contestName}
+            entryStatus={props.entryStatus}
+            lockCountdown={props.lockCountdown}
+          />
+          {props.entryStatus === "building" ? (
+            <BuildingContent {...props} />
+          ) : (
+            <PostSubmitContent {...props} />
+          )}
+        </>
+      ) : props.contest ? (
+        <>
+          <ContestHeaderCard
+            contestName={props.contest.contestName}
+            entryStatus={props.contest.entryStatus}
+            lockCountdown={props.contest.lockCountdown}
+          />
+          <ReadonlyScoreBlock
+            entryStatus={props.contest.entryStatus}
+            liveScore={props.contest.liveScore}
+            finalScore={props.contest.finalScore}
+          />
+        </>
+      ) : (
+        <NoContestPlaceholder />
+      )}
+    </div>
   );
 }
 
-/**
- * Polish spec §72 (Phase 23). Top-of-sidebar contest header. Relocated
- * from the pre-P23 top bar. Copy mirrors the old header: contest name
- * bold; status/countdown line muted underneath. Kept visually compact
- * so it sits above the Live Score / Readiness block cleanly.
- */
+// ── Top: team summary ────────────────────────────────────────────────
+
+function TeamSummaryBlock({ summary }: { summary: TeamSummary }) {
+  return (
+    <section
+      className="flex flex-col gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] p-3"
+      aria-label="Team summary"
+    >
+      <div className="flex items-center justify-between">
+        <h2 className="truncate font-sans text-sm font-semibold text-[var(--text)]">
+          {summary.teamName}
+        </h2>
+        <span className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+          <VaultIcon className="size-3" aria-hidden />
+          {summary.vaultedCardsCount}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <SummaryStat label="Career FP" value={summary.totalCareerFp.toLocaleString()} />
+        <SummaryStat
+          label="Vault Value"
+          value={summary.vaultValueTotal.toLocaleString()}
+          unit="¢"
+        />
+      </div>
+    </section>
+  );
+}
+
+function SummaryStat({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wider text-[var(--text-3)]">{label}</div>
+      <div className="font-mono text-sm font-bold tabular-nums text-[var(--text)]">
+        {unit && <span className="mr-0.5 text-[var(--tier-gold,#D4A647)]">{unit}</span>}
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// ── Middle: contest header (shared) ──────────────────────────────────
+
 function ContestHeaderCard({
   contestName,
   entryStatus,
@@ -100,9 +181,9 @@ function ContestHeaderCard({
   );
 }
 
-// ── Building state ────────────────────────────────────────────────────
+// ── Building-state (lineup variant only) ─────────────────────────────
 
-function BuildingSidebar({
+function BuildingContent({
   slotFills,
   autoSubMode,
   onAutoSubModeChange,
@@ -111,15 +192,23 @@ function BuildingSidebar({
   locked,
   lockCountdown,
   onSubmit,
-}: Props) {
+}: LineupVariantProps) {
   const filledCount = LINEUP_POSITIONS.filter((pos) => slotFills[pos].card !== null).length;
   const warnings = computeWarnings(slotFills);
   const projectedFp = computeProjectedFp(slotFills);
 
   return (
     <>
-      <SidebarSection title="Readiness">
-        <SidebarStat value={`${filledCount} / 10`} accent={filledCount === 10} />
+      {/* Polish spec §85 (Phase 30). Building state tightened:
+          Readiness + warnings + Projected FP + Auto-sub collapsed
+          into one compact block. Submit stays at the bottom. */}
+      <SidebarSection title="Ready to play">
+        <div className="flex items-baseline gap-3">
+          <SidebarStat value={`${filledCount} / 10`} accent={filledCount === 10} />
+          <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+            {projectedFp.toFixed(1)} proj FP
+          </span>
+        </div>
         {warnings.length > 0 && (
           <ul className="mt-1 flex flex-col gap-0.5">
             {warnings.map((w) => (
@@ -131,12 +220,8 @@ function BuildingSidebar({
         )}
       </SidebarSection>
 
-      <SidebarSection title="Projected FP">
-        <SidebarStat value={projectedFp.toFixed(1)} />
-      </SidebarSection>
-
       <SidebarSection title="Auto-sub">
-        <fieldset disabled={locked} className="flex flex-col gap-1.5 pt-1 disabled:opacity-60">
+        <fieldset disabled={locked} className="flex flex-col gap-1 pt-0.5 disabled:opacity-60">
           <legend className="sr-only">Auto-sub mode</legend>
           <ModeRadio
             label="Smart Auto"
@@ -171,29 +256,22 @@ function BuildingSidebar({
   );
 }
 
-// ── Submitted / Live / Final state ────────────────────────────────────
+// ── Post-submit (lineup variant only) ────────────────────────────────
 
-function PostSubmitSidebar({
+function PostSubmitContent({
   slotFills,
   entryStatus,
   liveScore,
   finalScore,
   lockCountdown,
   contestGameIds,
-}: Props) {
+}: LineupVariantProps) {
   const isFinal = entryStatus === "final";
   const displayScore = isFinal
     ? finalScore
     : liveScore > 0
       ? liveScore
       : slotSum(slotFills, "liveFp") + slotSum(slotFills, "finalFp");
-  // The rollup inside reconcileGame only updates contest_entry.live_score /
-  // final_score when status is 'live' or 'final' — while 'submitted' the
-  // entry aggregate stays at zero even though slot FPs may be populated
-  // (see ADR-0014). Derive from slotFills as a fallback so the Live Score
-  // reads correctly during the submitted → live transition window.
-  // The Event Feed + per-slot glow both consume <LiveEventsProvider>
-  // higher up the tree — no subscription wiring happens here anymore.
 
   const latestInning = useLatestInning();
   const { count: gamesActive, ready: gamesReady } = useGamesActive(contestGameIds);
@@ -237,10 +315,6 @@ function BoxScoreSection({
         {LINEUP_POSITIONS.map((pos) => {
           const fill = slotFills[pos];
           const fp = isFinal ? fill.finalFp : fill.liveFp || fill.finalFp;
-          // Polish spec §71 (Phase 23). Show `0.0` once the player's
-          // game is live or final — zero-is-a-number-not-absence. Pre-
-          // game (scheduled, null, postponed/suspended/canceled) keeps
-          // the em-dash since there is genuinely no play yet.
           const status = fill.gameInfo?.status ?? null;
           const gameStarted = status === "live" || status === "final";
           const hasPlayerInSlot = fill.card !== null;
@@ -261,7 +335,6 @@ function BoxScoreSection({
               >
                 {playerLabel}
               </span>
-              {/* Polish spec §48 — state chip in Box Score row. */}
               <SlotGameState
                 info={fill.gameInfo ?? null}
                 variant="chip"
@@ -319,7 +392,48 @@ function StatusChip({
   );
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Summary variant: read-only score + no-contest placeholder ────────
+
+function ReadonlyScoreBlock({
+  entryStatus,
+  liveScore,
+  finalScore,
+}: {
+  entryStatus: EntryStatus;
+  liveScore: number;
+  finalScore: number;
+}) {
+  const isFinal = entryStatus === "final";
+  const displayScore = isFinal ? finalScore : liveScore;
+  return (
+    <>
+      <SidebarSection title={isFinal ? "Final Score" : "Live Score"}>
+        <SidebarStat value={displayScore.toFixed(1)} accent={displayScore > 0} />
+      </SidebarSection>
+      <div className="mt-auto pt-2">
+        <Link
+          href="/lineup"
+          className="inline-flex items-center gap-1 text-xs text-[var(--text-2)] hover:text-[var(--text)]"
+        >
+          View lineup →
+        </Link>
+      </div>
+    </>
+  );
+}
+
+function NoContestPlaceholder() {
+  return (
+    <div className="flex flex-1 flex-col gap-2 rounded-md border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--text-3)]">
+      <p>No active contest right now.</p>
+      <Link href="/lineup" className="text-[var(--text-2)] hover:text-[var(--text)]">
+        Build a lineup →
+      </Link>
+    </div>
+  );
+}
+
+// ── Shared helpers ───────────────────────────────────────────────────
 
 export function shortName(full: string): string {
   const parts = full.trim().split(/\s+/);
@@ -401,10 +515,6 @@ function computeWarnings(slotFills: Record<LineupPosition, SlotFill>): SlotWarni
   return out;
 }
 
-// Per-card projection: avg career FP per play used, plus any applied
-// token bonus. Unplayed cards (15/15) fall back to a tier baseline.
-// Rough heuristic — good enough for a sidebar hint; swap for a scoring
-// model when one exists.
 const TIER_BASELINE_FP: Record<"bronze" | "silver" | "gold" | "diamond", number> = {
   bronze: 3,
   silver: 6,

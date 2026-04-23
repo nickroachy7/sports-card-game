@@ -6,17 +6,25 @@ import { toast } from "sonner";
 
 import { removeToken } from "@/app/actions/tokens";
 import { Card, type CardViewModel } from "@/components/card/Card";
-import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
+import { CardDetailModal } from "@/components/card/CardDetailModal";
 import { CollectionShell } from "@/components/collection/CollectionShell";
-import { CollectionSummaryStats } from "@/components/collection/CollectionSummaryStats";
-import { SidebarFadeSwap } from "@/components/layout/SidebarFadeSwap";
+import { AppSidebar } from "@/components/layout/AppSidebar";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import { type GameStateFilter, matchesGameStateFilter } from "@/lib/lineup/game-state-filter";
 import type { SlotGameInfo } from "@/lib/lineup/types";
+import type { TeamSummary } from "@/lib/profile/team-summary";
 import { cn } from "@/lib/utils";
+
+type ContestSnapshot = {
+  contestName: string;
+  entryStatus: "building" | "submitted" | "live" | "final";
+  lockCountdown: string;
+  liveScore: number;
+  finalScore: number;
+} | null;
 
 export type CollectionCard = CardViewModel & {
   positions: string[];
@@ -77,12 +85,18 @@ export function CollectionGrid({
   cards,
   collectionCap,
   slotGameByCardId,
+  teamSummary,
+  contestSnapshot,
 }: {
   cards: CollectionCard[];
   collectionCap: number;
   /** Polish spec §63 (Phase 22). Keyed by card.id; missing key = no
    *  contest game today for that player. */
   slotGameByCardId: Record<string, SlotGameInfo>;
+  /** Polish spec §88 (Phase 30). Unified sidebar top block. */
+  teamSummary: TeamSummary;
+  /** Null if no active contest entry today. */
+  contestSnapshot: ContestSnapshot;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -97,8 +111,9 @@ export function CollectionGrid({
 
   // Detail state is derived from the ?card query param so that
   // back/forward navigation naturally opens / closes the detail
-  // and shareable links survive. The sidebar swaps to
-  // <SelectedCardSidebar> when this is non-null (polish spec §25).
+  // and shareable links survive. The CardDetailModal reads this
+  // directly; we keep detailCardId here for the "card deleted"
+  // housekeeping below.
   const detailCardId = searchParams.get("card");
 
   const openDetail = useCallback(
@@ -377,17 +392,19 @@ export function CollectionGrid({
     </div>
   );
 
+  // Polish spec §88 + §89 (Phase 30). Unified AppSidebar (summary
+  // variant) always renders. Card detail is now a modal overlay
+  // driven by the ?card URL param — same pattern as the lineup page.
   const sidebar = (
-    <SidebarFadeSwap modeKey={detailCardId ? "detail" : "default"}>
-      {detailCardId ? (
-        <SelectedCardSidebar cardId={detailCardId} onBack={closeDetail} />
-      ) : (
-        <CollectionSummaryStats cards={cards} collectionCap={collectionCap} />
-      )}
-    </SidebarFadeSwap>
+    <AppSidebar variant="summary" teamSummary={teamSummary} contest={contestSnapshot} />
   );
 
-  return <CollectionShell main={main} sidebar={sidebar} />;
+  return (
+    <>
+      <CardDetailModal />
+      <CollectionShell main={main} sidebar={sidebar} />
+    </>
+  );
 }
 
 function FilterSelect<T extends string>({

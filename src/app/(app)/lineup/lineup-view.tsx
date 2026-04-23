@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
@@ -13,15 +13,14 @@ import {
   updateLineupSlot,
 } from "@/app/actions/lineup";
 import { applyToken, removeToken } from "@/app/actions/tokens";
+import { CardDetailModal } from "@/components/card/CardDetailModal";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
-import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
-import { SidebarFadeSwap } from "@/components/layout/SidebarFadeSwap";
+import { AppSidebar, shortName } from "@/components/layout/AppSidebar";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { CardContractEventsProvider } from "@/components/lineup/CardContractEventsProvider";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupGrid } from "@/components/lineup/LineupGrid";
 import { LineupShell } from "@/components/lineup/LineupShell";
-import { LineupSidebar, shortName } from "@/components/lineup/LineupSidebar";
 import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
@@ -62,10 +61,15 @@ type SlotFill = {
 
 export function LineupView(props: LineupViewProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
   const [submitting, startSubmit] = useTransition();
   const [mode, setMode] = useState<AutoSubMode>(props.autoSubMode);
-  const [detailCardId, setDetailCardId] = useState<string | null>(null);
+  // Polish spec §89 (Phase 30). Card detail is a modal keyed by the
+  // `?card={id}` URL param so back/forward navigation + shareable
+  // links keep working. Previously this was local useState driving a
+  // sidebar swap.
+  const detailCardId = searchParams.get("card");
 
   // Polish spec §44 — per-slot lock semantics. Bench + tokens remain
   // draggable in submitted/live states (so the user can edit un-started
@@ -350,12 +354,19 @@ export function LineupView(props: LineupViewProps) {
     return { tokenType: tok.tokenType, bonusFp: Number(tok.bonusFp) };
   };
 
-  function handleOpenDetail(cardId: string) {
-    setDetailCardId(cardId);
-  }
+  // Polish spec §89 (Phase 30). Card click → push ?card=id URL
+  // param. The CardDetailModal reads the param and opens itself.
+  const handleOpenDetail = useCallback(
+    (cardId: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("card", cardId);
+      router.push(`/lineup?${next.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
 
   // Which slot (if any) holds the currently-opened card. Drives the
-  // drawer's Remove-from-slot action visibility.
+  // modal's Remove-from-slot action visibility.
   const detailSlotPosition = detailCardId
     ? (optimisticSlots.find((s) => s.cardId === detailCardId)?.position ?? null)
     : null;
@@ -393,35 +404,23 @@ export function LineupView(props: LineupViewProps) {
         />
       }
       sidebar={
-        <SidebarFadeSwap modeKey={detailCardId ? "detail" : "default"}>
-          {detailCardId ? (
-            <SelectedCardSidebar
-              cardId={detailCardId}
-              onBack={() => setDetailCardId(null)}
-              lineupContext={{
-                slotted: detailSlotPosition !== null,
-                onRemoveFromSlot: handleRemoveFromSlot,
-                onVaulted: () => router.refresh(),
-              }}
-            />
-          ) : (
-            <LineupSidebar
-              contestName={props.contestName}
-              slotFills={slotFills}
-              entryStatus={props.entryStatus}
-              liveScore={props.liveScore}
-              finalScore={props.finalScore}
-              contestGameIds={props.contestGameIds}
-              autoSubMode={mode}
-              onAutoSubModeChange={handleModeChange}
-              canSubmit={canSubmit}
-              submitting={submitting}
-              locked={locked}
-              lockCountdown={lockCountdown}
-              onSubmit={handleSubmit}
-            />
-          )}
-        </SidebarFadeSwap>
+        <AppSidebar
+          variant="lineup"
+          teamSummary={props.teamSummary}
+          contestName={props.contestName}
+          slotFills={slotFills}
+          entryStatus={props.entryStatus}
+          liveScore={props.liveScore}
+          finalScore={props.finalScore}
+          contestGameIds={props.contestGameIds}
+          autoSubMode={mode}
+          onAutoSubModeChange={handleModeChange}
+          canSubmit={canSubmit}
+          submitting={submitting}
+          locked={locked}
+          lockCountdown={lockCountdown}
+          onSubmit={handleSubmit}
+        />
       }
       bench={
         <BenchDrawer
@@ -442,6 +441,16 @@ export function LineupView(props: LineupViewProps) {
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
       <TokenDragLayer resolveToken={resolveToken} />
+      {/* Polish spec §89 (Phase 30). Card detail modal reads the
+          ?card param and opens automatically. Lineup context wires
+          the "Remove from slot" action. */}
+      <CardDetailModal
+        lineupContext={{
+          slotted: detailSlotPosition !== null,
+          onRemoveFromSlot: handleRemoveFromSlot,
+          onVaulted: () => router.refresh(),
+        }}
+      />
       {isPostSubmit ? (
         <LiveEventsProvider
           lineupPlayers={lineupPlayers}
