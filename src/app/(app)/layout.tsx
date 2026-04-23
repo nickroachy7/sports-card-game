@@ -5,15 +5,6 @@ import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { createServerClient } from "@/lib/db/supabase";
 
-type DailyWindowResult = { ready: boolean };
-
-function isDailyPackReady(claimedAtIso: string | null): DailyWindowResult {
-  if (!claimedAtIso) return { ready: true };
-  const claimed = new Date(claimedAtIso).getTime();
-  const now = Date.now();
-  return { ready: now - claimed >= 24 * 60 * 60 * 1000 };
-}
-
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const supabase = await createServerClient();
   const {
@@ -34,16 +25,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       )
       .eq("user_id", user.id)
       .maybeSingle(),
-    supabase
-      .from("user_season_state")
-      .select("coins, daily_pack_claimed_at")
-      .eq("user_id", user.id)
-      .maybeSingle(),
+    supabase.from("user_season_state").select("coins").eq("user_id", user.id).maybeSingle(),
   ]);
 
   if (!profile) redirect("/onboarding");
 
-  const { ready: dailyPackReady } = isDailyPackReady(seasonState?.daily_pack_claimed_at ?? null);
+  // Polish spec §109 (Phase 36). `dailyPackReady` moved from the
+  // layout → header to the lineup page, where the buy-packs FAB
+  // owns the daily-pack affordance. Layout just passes coin
+  // balance + manager stats to the header.
 
   return (
     <div className="flex h-screen flex-col bg-[var(--bg)] text-[var(--text)]">
@@ -52,7 +42,6 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         primaryColor={profile.team_color_primary}
         secondaryColor={profile.team_color_secondary}
         coins={Number(seasonState?.coins ?? 0)}
-        dailyPackReady={dailyPackReady}
         managerLevel={manager?.manager_level ?? 1}
         managerXp={Number(manager?.manager_xp ?? 0)}
         careerFp={Number(manager?.lifetime_fp ?? 0)}

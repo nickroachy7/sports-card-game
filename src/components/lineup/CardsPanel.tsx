@@ -1,9 +1,11 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
 import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TIER_FRAME } from "@/lib/card/tiers";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { LineupPosition } from "@/lib/contracts/lineup";
@@ -143,9 +145,21 @@ export function CardsPanel({
 
   const availableCount = cards.length - assignedCardIds.size;
 
+  const tierLabel = TIER_FILTER_LABELS[tierFilter];
+  const stateLabel = GAME_STATE_FILTER_LABELS[gameState];
+  const activeTierCount = tierFilter === "all" ? counts.tier.all : counts.tier[tierFilter];
+  const activeStateCount = gameState === "all" ? counts.gameState.all : counts.gameState[gameState];
+
   return (
     <section className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+      {/* Polish spec §108 (Phase 36). Single-row header — count,
+          position pills, tier + state popovers, search, Select. The
+          old three-row stack (count row + tier chips + state chips)
+          was eating ~120px before any cards rendered; compacting it
+          frees up vertical space. Tier + state chip sets live in
+          popovers behind labeled pills so the chrome is hidden
+          unless actively filtering. */}
+      <header className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2">
           <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Cards</h2>
           {locked ? (
@@ -153,136 +167,151 @@ export function CardsPanel({
               Locked
             </span>
           ) : (
-            <span className="font-mono text-xs text-[var(--text-2)]">
-              {availableCount} available
+            <span
+              className="font-mono text-xs text-[var(--text-2)]"
+              title={`${availableCount} available · ${assignedCardIds.size} in lineup`}
+            >
+              {availableCount}
               {assignedCardIds.size > 0 && (
-                <span className="ml-1 text-[var(--text-3)]">
-                  · {assignedCardIds.size} in lineup
-                </span>
+                <span className="text-[var(--text-3)]">·{assignedCardIds.size}</span>
               )}
             </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <FilterButton
-            label="All"
-            active={positionFilter === "all"}
-            onClick={() => setPositionFilter("all")}
-          />
-          <FilterButton
-            label="Hitters"
-            active={positionFilter === "hitters"}
-            onClick={() => setPositionFilter("hitters")}
-          />
-          <FilterButton
-            label="Pitchers"
-            active={positionFilter === "pitchers"}
-            onClick={() => setPositionFilter("pitchers")}
-          />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search…"
-            className="h-7 w-36 text-xs"
-          />
-          {/* Polish spec §104 (Phase 35). Select chip toggles multi-
-              select mode; sidebar swaps to <SelectionPanel> while
-              it's on. Hidden when locked (post-submit — no point
-              selecting anything you can't act on). */}
-          {!locked && (
-            <button
-              type="button"
-              onClick={onToggleSelectMode}
-              className={cn(
-                "rounded-md border px-2.5 py-1 text-xs font-medium uppercase tracking-wider transition-colors",
-                selectMode
-                  ? "border-[var(--tier-gold)] bg-[var(--tier-gold)] text-[var(--bg)]"
-                  : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:border-[var(--text-2)]",
-              )}
-              aria-pressed={selectMode}
-            >
-              {selectMode ? `Done (${selectedIds.size})` : "Select"}
-            </button>
-          )}
-        </div>
+
+        <FilterButton
+          label="All"
+          active={positionFilter === "all"}
+          onClick={() => setPositionFilter("all")}
+        />
+        <FilterButton
+          label="Hitters"
+          active={positionFilter === "hitters"}
+          onClick={() => setPositionFilter("hitters")}
+        />
+        <FilterButton
+          label="Pitchers"
+          active={positionFilter === "pitchers"}
+          onClick={() => setPositionFilter("pitchers")}
+        />
+
+        <FilterPopover
+          label="Tier"
+          currentLabel={tierFilter === "all" ? null : tierLabel}
+          count={activeTierCount}
+          active={tierFilter !== "all"}
+        >
+          <div className="flex flex-col gap-1.5">
+            <TierChip
+              label="All"
+              tone="neutral"
+              count={counts.tier.all}
+              active={tierFilter === "all"}
+              onClick={() => setTierFilter("all")}
+            />
+            <TierChip
+              label="Bronze"
+              tone="bronze"
+              count={counts.tier.bronze}
+              active={tierFilter === "bronze"}
+              onClick={() => setTierFilter("bronze")}
+            />
+            <TierChip
+              label="Silver"
+              tone="silver"
+              count={counts.tier.silver}
+              active={tierFilter === "silver"}
+              onClick={() => setTierFilter("silver")}
+            />
+            <TierChip
+              label="Gold"
+              tone="gold"
+              count={counts.tier.gold}
+              active={tierFilter === "gold"}
+              onClick={() => setTierFilter("gold")}
+            />
+            <TierChip
+              label="Diamond"
+              tone="diamond"
+              count={counts.tier.diamond}
+              active={tierFilter === "diamond"}
+              onClick={() => setTierFilter("diamond")}
+            />
+          </div>
+        </FilterPopover>
+
+        <FilterPopover
+          label="State"
+          currentLabel={gameState === "all" ? null : stateLabel}
+          count={activeStateCount}
+          active={gameState !== "all"}
+        >
+          <div className="flex flex-col gap-1.5">
+            <GameStateChip
+              label="All"
+              tone="neutral"
+              count={counts.gameState.all}
+              active={gameState === "all"}
+              onClick={() => setGameState("all")}
+            />
+            <GameStateChip
+              label="Pre"
+              tone="pre"
+              count={counts.gameState.pre}
+              active={gameState === "pre"}
+              onClick={() => setGameState("pre")}
+            />
+            <GameStateChip
+              label="Live"
+              tone="live"
+              count={counts.gameState.live}
+              active={gameState === "live"}
+              onClick={() => setGameState("live")}
+            />
+            <GameStateChip
+              label="Final"
+              tone="final"
+              count={counts.gameState.final}
+              active={gameState === "final"}
+              onClick={() => setGameState("final")}
+            />
+            <GameStateChip
+              label="Off"
+              tone="off"
+              count={counts.gameState.off}
+              active={gameState === "off"}
+              onClick={() => setGameState("off")}
+            />
+          </div>
+        </FilterPopover>
+
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search…"
+          className="h-7 w-36 text-xs"
+        />
+
+        {/* Polish spec §104 (Phase 35). Select chip toggles multi-
+            select mode; sidebar swaps to <SelectionPanel> while
+            it's on. Hidden when locked (post-submit — no point
+            selecting anything you can't act on). */}
+        {!locked && (
+          <button
+            type="button"
+            onClick={onToggleSelectMode}
+            className={cn(
+              "rounded-md border px-2.5 py-1 text-xs font-medium uppercase tracking-wider transition-colors",
+              selectMode
+                ? "border-[var(--tier-gold)] bg-[var(--tier-gold)] text-[var(--bg)]"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:border-[var(--text-2)]",
+            )}
+            aria-pressed={selectMode}
+          >
+            {selectMode ? `Done (${selectedIds.size})` : "Select"}
+          </button>
+        )}
       </header>
-
-      {/* Filter chip rows — tier + game-state, both with live counts. */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <TierChip
-          label="All"
-          tone="neutral"
-          count={counts.tier.all}
-          active={tierFilter === "all"}
-          onClick={() => setTierFilter("all")}
-        />
-        <TierChip
-          label="Bronze"
-          tone="bronze"
-          count={counts.tier.bronze}
-          active={tierFilter === "bronze"}
-          onClick={() => setTierFilter("bronze")}
-        />
-        <TierChip
-          label="Silver"
-          tone="silver"
-          count={counts.tier.silver}
-          active={tierFilter === "silver"}
-          onClick={() => setTierFilter("silver")}
-        />
-        <TierChip
-          label="Gold"
-          tone="gold"
-          count={counts.tier.gold}
-          active={tierFilter === "gold"}
-          onClick={() => setTierFilter("gold")}
-        />
-        <TierChip
-          label="Diamond"
-          tone="diamond"
-          count={counts.tier.diamond}
-          active={tierFilter === "diamond"}
-          onClick={() => setTierFilter("diamond")}
-        />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        <GameStateChip
-          label="All"
-          tone="neutral"
-          count={counts.gameState.all}
-          active={gameState === "all"}
-          onClick={() => setGameState("all")}
-        />
-        <GameStateChip
-          label="Pre"
-          tone="pre"
-          count={counts.gameState.pre}
-          active={gameState === "pre"}
-          onClick={() => setGameState("pre")}
-        />
-        <GameStateChip
-          label="Live"
-          tone="live"
-          count={counts.gameState.live}
-          active={gameState === "live"}
-          onClick={() => setGameState("live")}
-        />
-        <GameStateChip
-          label="Final"
-          tone="final"
-          count={counts.gameState.final}
-          active={gameState === "final"}
-          onClick={() => setGameState("final")}
-        />
-        <GameStateChip
-          label="Off"
-          tone="off"
-          count={counts.gameState.off}
-          active={gameState === "off"}
-          onClick={() => setGameState("off")}
-        />
-      </div>
 
       {filtered.length === 0 ? (
         <div className="flex h-[140px] items-center justify-center rounded border border-dashed border-[var(--border)] px-4 text-center text-xs text-[var(--text-3)]">
@@ -363,6 +392,78 @@ function FilterButton({
     </button>
   );
 }
+
+/**
+ * Polish spec §108 (Phase 36). Pill + popover wrapper for the tier
+ * and game-state filter sets. The pill shows the label + current
+ * selection (if narrower than All) + active count. Clicking opens
+ * a popover with the full chip list. Active styling (gold border)
+ * fires when a non-All filter is selected so the user can see at
+ * a glance that a filter is applied.
+ */
+function FilterPopover({
+  label,
+  currentLabel,
+  count,
+  active,
+  children,
+}: {
+  label: string;
+  /** Null when the filter is set to "All" — pill shows just the label. */
+  currentLabel: string | null;
+  count: number;
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium uppercase tracking-wider transition-colors",
+            active
+              ? "border-[var(--tier-gold)] text-[var(--text)]"
+              : "border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:border-[var(--text-2)]",
+          )}
+          aria-pressed={active}
+        >
+          <span>
+            {label}
+            {currentLabel ? `: ${currentLabel}` : ""}
+          </span>
+          <span
+            className={cn(
+              "font-mono tabular-nums",
+              active ? "text-[var(--text-2)]" : "text-[var(--text-3)]",
+            )}
+          >
+            {count}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto min-w-[160px]">
+        {children}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const TIER_FILTER_LABELS: Record<TierFilter, string> = {
+  all: "All",
+  bronze: "Bronze",
+  silver: "Silver",
+  gold: "Gold",
+  diamond: "Diamond",
+};
+
+const GAME_STATE_FILTER_LABELS: Record<GameStateFilter, string> = {
+  all: "All",
+  pre: "Pre",
+  live: "Live",
+  final: "Final",
+  off: "Off",
+};
 
 type GameStateChipTone = "neutral" | "pre" | "live" | "final" | "off";
 

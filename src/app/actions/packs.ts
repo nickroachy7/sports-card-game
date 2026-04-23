@@ -140,3 +140,131 @@ async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPack
 
 /** Public entrypoint — Sentry-wrapped. */
 export const openPack = wrapAction(openPackImpl, { name: "openPack" });
+
+/**
+ * Polish spec §110 (Phase 36). Bulk-open wrapper. Loops the
+ * existing `open_pack` SQL fn up to 10× server-side and aggregates
+ * the result. Matches the P35 bulk-quick-sell pattern — partial
+ * failures are reported; the loop stops at the first failure so
+ * users don't get surprise half-charges past the point of error.
+ *
+ * Daily packs are forced to quantity 1 (SQL already enforces one
+ * claim per 24h; batching would trip the constraint).
+ */
+export type OpenPacksBatchResult = {
+  openings: OpenPackResult[];
+  totalCoinCost: number;
+  totalCardsGranted: number;
+  balanceAfter: number;
+  failures: { index: number; code: string; message: string }[];
+};
+
+async function openPacksBatchImpl(input: {
+  packType: PackType;
+  quantity: 1 | 5 | 10;
+}): Promise<ActionResult<OpenPacksBatchResult>> {
+  const packType = input.packType;
+  const quantity = input.quantity;
+  if (!packType || !["daily", "standard", "premium"].includes(packType)) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: "Invalid pack type." },
+    };
+  }
+  if (![1, 5, 10].includes(quantity)) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: "Quantity must be 1, 5, or 10." },
+    };
+  }
+  if (packType === "daily" && quantity !== 1) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: "Daily pack is one-at-a-time." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  const db = getDb();
+  const openings: OpenPackResult[] = [];
+  const failures: OpenPacksBatchResult["failures"] = [];
+  let balanceAfter = 0;
+  let totalCoinCost = 0;
+  let totalCardsGranted = 0;
+
+  for (let i = 0; i < quantity; i++) {
+    try {
+      const res = await db.execute<{ open_pack: unknown }>(sql`
+        SELECT public.open_pack(${user.id}::uuid, ${packType}::pack_type) AS open_pack
+      `);
+      type RawCardResult = {
+        card_id: string;
+        is_dupe: boolean;
+        existing_card_id: string | null;
+      };
+      const raw = res.rows[0]?.open_pack as
+        | {
+            opening_id: string;
+            card_ids: string[];
+            card_results: RawCardResult[] | null;
+            duplicate_count: number | null;
+            coins_from_dupes: number | string;
+            token_ids: string[];
+            coin_cost: number | string;
+            balance_after: number | string;
+          }
+        | undefined;
+      if (!raw) {
+        failures.push({ index: i, code: "INTERNAL", message: "Empty result." });
+        break;
+      }
+      const opening: OpenPackResult = {
+        openingId: raw.opening_id,
+        cardIds: raw.card_ids ?? [],
+        cardResults: (raw.card_results ?? []).map((r) => ({
+          cardId: r.card_id,
+          isDupe: r.is_dupe,
+          existingCardId: r.existing_card_id,
+        })),
+        duplicateCount: raw.duplicate_count ?? 0,
+        coinsFromDupes: Number(raw.coins_from_dupes),
+        tokenIds: raw.token_ids ?? [],
+        coinCost: Number(raw.coin_cost),
+        balanceAfter: Number(raw.balance_after),
+        packType,
+      };
+      openings.push(opening);
+      balanceAfter = opening.balanceAfter;
+      totalCoinCost += opening.coinCost;
+      totalCardsGranted += opening.cardIds.length;
+      await captureServerEvent(user.id, "pack_opened", {
+        pack_type: packType,
+        cards_granted: opening.cardIds.length,
+        duplicates: opening.duplicateCount,
+        tokens_granted: opening.tokenIds.length,
+        coin_cost: opening.coinCost,
+        coins_from_dupes: opening.coinsFromDupes,
+        balance_after: opening.balanceAfter,
+        batch: true,
+        batch_index: i,
+      });
+    } catch (err) {
+      const mapped = mapDbError(err);
+      failures.push({ index: i, code: mapped.code, message: mapped.message });
+      // Stop after first failure — don't keep charging if something went wrong.
+      break;
+    }
+  }
+
+  revalidatePath("/lineup", "layout");
+  return {
+    ok: true,
+    data: { openings, totalCoinCost, totalCardsGranted, balanceAfter, failures },
+  };
+}
+
+export const openPacksBatch = wrapAction(openPacksBatchImpl, { name: "openPacksBatch" });

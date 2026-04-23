@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { LineupView } from "@/app/(app)/lineup/lineup-view";
-import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
+import type { CardTier, PackType, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { getDb } from "@/lib/db/client";
@@ -187,13 +187,40 @@ export default async function LineupPage() {
   // Polish spec §100 (Phase 34). Team summary was cut from the
   // sidebar; header + profile drawer already surface team identity
   // and career stats. Query dropped.
-  const [slotGameByCardId, gameMatchupById] = await Promise.all([
+  //
+  // Polish spec §109 (Phase 36). Buy-packs modal state — coin
+  // balance, daily-pack readiness, standard pack cost. Fetched
+  // alongside the game queries so the modal has everything it
+  // needs on first render.
+  const [slotGameByCardId, gameMatchupById, packStateRes, econCfgRes] = await Promise.all([
     fetchSlotGameByCardId(
       contest.included_game_ids ?? [],
       cards.map((c) => ({ id: c.id, teamId: c.teamId })),
     ),
     fetchGameMatchupsById(contest.included_game_ids ?? []),
+    supabase
+      .from("user_season_state")
+      .select("coins, daily_pack_claimed_at")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase.rpc("get_active_economy_config").single(),
   ]);
+
+  const packState = packStateRes.data ?? null;
+  const coinBalance = Number(packState?.coins ?? 0);
+  const dailyClaimedAt = packState?.daily_pack_claimed_at
+    ? new Date(packState.daily_pack_claimed_at)
+    : null;
+  const dailyReadyAtMs = dailyClaimedAt ? dailyClaimedAt.getTime() + 24 * 60 * 60 * 1000 : null;
+  const dailyPackReady = dailyReadyAtMs === null || dailyReadyAtMs <= Date.now();
+  const dailyPackSecondsUntilReady =
+    dailyReadyAtMs && dailyReadyAtMs > Date.now()
+      ? Math.ceil((dailyReadyAtMs - Date.now()) / 1000)
+      : 0;
+  const econCfg = (econCfgRes.data ?? null) as {
+    pack_prices_coins?: Record<PackType, number>;
+  } | null;
+  const standardPackCost = Number(econCfg?.pack_prices_coins?.standard ?? 0);
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({
     id: r.id,
@@ -238,6 +265,10 @@ export default async function LineupPage() {
       }))}
       slotGameByCardId={slotGameByCardId}
       gameMatchupById={gameMatchupById}
+      coinBalance={coinBalance}
+      dailyPackReady={dailyPackReady}
+      dailyPackSecondsUntilReady={dailyPackSecondsUntilReady}
+      standardPackCost={standardPackCost}
     />
   );
 }

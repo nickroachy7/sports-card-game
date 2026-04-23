@@ -1,14 +1,20 @@
-import { Coins, Package } from "lucide-react";
+import { Coins } from "lucide-react";
 import Link from "next/link";
 
 import { ProfileDrawer } from "@/components/layout/profile-drawer";
 
+/**
+ * Polish spec §109 (Phase 36). Header no longer renders the shop /
+ * daily-pack link — /shop was killed; the buy-packs modal lives on
+ * /lineup behind a floating action button, which owns the
+ * daily-ready pulse. Header keeps coin balance + manager level +
+ * profile drawer.
+ */
 type HeaderProps = {
   teamName: string;
   primaryColor: string;
   secondaryColor: string;
   coins: number;
-  dailyPackReady: boolean;
   managerLevel: number;
   managerXp: number;
   careerFp: number;
@@ -38,24 +44,6 @@ export function Header(props: HeaderProps) {
             {props.coins.toLocaleString()}
           </span>
         </div>
-
-        <Link
-          href="/shop"
-          aria-label={props.dailyPackReady ? "Daily Pack ready" : "Daily Pack claimed"}
-          className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 transition-colors hover:border-[var(--text-2)]"
-        >
-          <Package
-            className={`size-3.5 ${props.dailyPackReady ? "text-[var(--tier-gold)]" : "text-[var(--muted)]"}`}
-            aria-hidden="true"
-          />
-          <span className="font-mono text-xs font-medium text-[var(--text-2)]">DP</span>
-          {props.dailyPackReady && (
-            <span
-              aria-hidden="true"
-              className="ml-0.5 size-1.5 rounded-full bg-[var(--tier-gold)] animate-pulse"
-            />
-          )}
-        </Link>
 
         <Link
           href="/leaderboards"

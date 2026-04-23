@@ -124,4 +124,16 @@ export type LineupViewProps = {
    * surfaced to the slot footer.
    */
   gameMatchupById: Record<string, string>;
+  /**
+   * Polish spec §109 (Phase 36). Coin balance for the buy-packs
+   * modal + FAB. Kept on LineupViewProps so the modal doesn't need
+   * a round-trip before rendering.
+   */
+  coinBalance: number;
+  /** True when the daily pack hasn't been claimed in the last 24h. */
+  dailyPackReady: boolean;
+  /** Seconds until the daily pack rolls over (0 when ready). */
+  dailyPackSecondsUntilReady: number;
+  /** Coin cost of one standard pack. From economy_config. */
+  standardPackCost: number;
 };
