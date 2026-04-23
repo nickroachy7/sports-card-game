@@ -148,16 +148,14 @@ function LineupSlotInner({
     [locked, isPitcher, card, onTokenDropped],
   );
 
-  // Polish spec §78 (Phase 26). Lineup cards render at size="lineup"
-  // (120×168) — 25% bigger than bench's size="small" (96×134) so the
-  // lineup has visual weight. All per-slot chrome (position label
-  // above, SlotGameState pill below, remove button) was dropped for
-  // filled slots so three role rows fit a typical laptop viewport
-  // without scroll. Game-state info is preserved via the card's own
-  // footer (LIVE/FINAL contestFp) + the Box Score sidebar panel;
-  // remove is accessible via detail sidebar or drag-to-bench.
+  // Polish spec §82 (Phase 28). Lineup cards render at size="small"
+  // (96×134) — identical to bench. The P26 size="lineup" (120×168)
+  // was reverted along with the fixed-height grid pane; flow-based
+  // layout no longer needs bigger cards to anchor the pane, and
+  // bench-size keeps the whole page consistent (drag-from-bench is
+  // a zero-shift motion).
   const ringClass = cn(
-    "relative flex h-[168px] w-[120px] flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors",
+    "relative flex h-[134px] w-[96px] flex-col items-center justify-center rounded-md border-2 border-dashed transition-colors",
     isCardOver && canCardDrop && "border-[var(--text)] bg-[var(--surface-2)]",
     isCardOver && !canCardDrop && "border-[#C47262] bg-[#C4726222]",
     isTokenOver && canTokenDrop && "border-[var(--tier-gold,#D4A647)]",
@@ -165,11 +163,6 @@ function LineupSlotInner({
   );
 
   if (!card) {
-    // Empty slot retains its own position label + "Drag a pitcher /
-    // hitter" hint since the dashed box has no card content to signal
-    // identity. The role label above the row anchors context, but
-    // users need the specific SP1/SP2/etc label to know which empty
-    // slot they're targeting.
     return (
       <section
         ref={(el) => {
@@ -178,10 +171,10 @@ function LineupSlotInner({
         className={ringClass}
         aria-label={`${position} slot, empty`}
       >
-        <span className="font-sans text-sm font-semibold uppercase tracking-wider text-[var(--text-3)]">
+        <span className="font-sans text-xs font-semibold uppercase tracking-wider text-[var(--text-3)]">
           {position}
         </span>
-        <span className="mt-1 text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+        <span className="mt-1 text-[9px] uppercase tracking-wider text-[var(--text-3)]">
           Drag {isPitcher ? "a pitcher" : "a hitter"}
         </span>
       </section>
@@ -209,7 +202,7 @@ function LineupSlotInner({
         }}
         className={cn("relative", isDragging && "opacity-40")}
       >
-        <Card card={card} size="lineup" onClick={() => onOpenDetail(card.id)} />
+        <Card card={card} size="small" onClick={() => onOpenDetail(card.id)} />
         {/* Per-slot FP glow — post-submit only. Polish spec §21. */}
         <SlotFpGlow playerId={card.playerId} enabled={locked} />
         {/* Per-slot contract-depletion glow — post-submit only. Polish spec §30. */}
