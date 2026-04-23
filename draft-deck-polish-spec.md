@@ -4632,3 +4632,186 @@ a structured roster instead of tiny cards in a void.
 - Collection multi-day schedule view.
 - Onboarding flow pass.
 - Standard parked items.
+
+---
+
+# Phase 29 — v1.16 (Leaderboards polish + profile drawer)
+
+First non-polish-only phase since v1.13. Most infra already
+exists (leaderboards page, public profile page, API routes, schema)
+so this phase focuses on the remaining gaps that move the game
+toward launch-ready:
+
+- Profile drawer in the header (new)
+- Cards leaderboard rework (ranks cards, not users)
+- Team customization page (new)
+- Account settings page (new)
+
+---
+
+## 83. Cards leaderboard — rank cards, not users
+
+### Goal
+
+The existing "Card Prestige" leaderboard ranks users by their
+count of Diamond, unvaulted cards. User feedback: no cards
+appearing because most users don't have Diamonds yet, and the
+metric feels off for a community-wide "best cards" view.
+
+Rework: rank individual cards by career FP across the entire
+community. Each row = one card + its owner. Users see the most
+valuable cards in the game regardless of who owns them.
+
+### Scope
+
+- Rename `card-prestige` → `cards` in
+  `LEADERBOARD_TYPES` / display labels.
+- New row shape (discriminated by `kind: "user" | "card"`):
+  - `rank`
+  - `cardId`
+  - `playerName`
+  - `tier`
+  - `teamAbbreviation` (the MLB team — not owner)
+  - `careerFp` (metric)
+  - `ownerUserId`
+  - `ownerTeamName`
+- New query: `SELECT c.*, p.team_name AS owner_team FROM
+  public.card c JOIN public.profile p ON p.user_id = c.user_id
+  AND p.is_public = true ORDER BY c.career_fp DESC LIMIT 100`.
+  No tier filter. No vault filter. Any card from any user with
+  a public profile qualifies.
+- `getLeaderboard` returns `CardLeaderboardData` (different type
+  than user leaderboards) when type is `cards`.
+- `/api/leaderboards/cards` returns the card-shaped payload.
+- Leaderboard page renders a different row template for `cards`:
+  card icon + player name + tier chip + owner team (clickable
+  → `/p/{ownerTeamName}`) + FP.
+- "Your Rank" for cards = the user's single highest-FP card's
+  rank in the global card ranking. Pinned above if outside top.
+
+### Acceptance
+
+- [ ] Clicking "Cards" tab shows card-shaped rows.
+- [ ] Rows sorted by career_fp DESC, any tier, vaulted + unvaulted.
+- [ ] Owner team name is clickable, links to `/p/{teamName}`.
+- [ ] "Your Rank" pins the user's top card if outside top 100.
+
+### Trade-offs
+
+- **Different shape from the other 3 leaderboards** — forces a
+  discriminated-union type. Worth it; the metric is clearer
+  and users actually appear on it.
+
+---
+
+## 84. Profile drawer in header
+
+### Goal
+
+Header currently has a manager-level badge that's not
+clickable. Add a right-side slide-in drawer triggered by
+clicking the badge. Shows team identity + career stats +
+quick links to team / account settings + sign out.
+
+### Scope
+
+- New `ProfileDrawer` component using shadcn `sheet` primitive.
+- Triggered by click on header's manager-level badge.
+- Contents:
+  - Team identity block (name, colors, logo)
+  - Manager Level + XP progress bar to next level
+  - Career stats block (lifetime FP, contests won, diamonds
+    vaulted, tokens triggered)
+  - Links: Team customization (`/settings/team`), Account
+    settings (`/settings/account`), Sign out (server action)
+- **NOT** "View my public profile" — user explicitly skipped
+  that link this phase.
+
+### Acceptance
+
+- [ ] Badge click opens the drawer.
+- [ ] Drawer shows current team identity + stats.
+- [ ] Links route correctly.
+- [ ] Sign out clears session + redirects to `/signin`.
+
+### Trade-offs
+
+- **Uses existing shadcn sheet** — no new primitive needed.
+
+---
+
+## 85. Team customization page
+
+### Goal
+
+Users need a way to edit their team name / colors / logo
+after onboarding. Currently only settable during onboarding
+flow. Accessed via profile drawer quick link.
+
+### Scope
+
+- New route `src/app/(app)/settings/team/page.tsx`.
+- Form: team name (text input + uniqueness check),
+  primary color (color picker), secondary color (color
+  picker), logo (dropdown or icon picker from a fixed set).
+- Server Action `updateTeamProfile` — updates `public.profile`
+  row. Uniqueness check on team_name. Validation matches
+  onboarding rules.
+- Success toast + router refresh on save.
+
+### Acceptance
+
+- [ ] User can land on `/settings/team`, see current values.
+- [ ] Edit + save flows through, survives refresh.
+- [ ] Team name uniqueness enforced.
+- [ ] Header team name updates post-save.
+
+### Trade-offs
+
+- **Minimal logo picker** — use the same fixed set as
+  onboarding. Custom uploads are out of scope.
+
+---
+
+## 86. Account settings page
+
+### Goal
+
+Minimal account management surface linked from the profile
+drawer. V1 scope: view email, change password.
+
+### Scope
+
+- New route `src/app/(app)/settings/account/page.tsx`.
+- Sections:
+  - Email (read-only text, no edit)
+  - Change password form: current + new + confirm.
+- Server Action `changePassword` calls Supabase auth's
+  `updateUser({ password })` with current-password
+  verification via `signInWithPassword` first.
+
+### Acceptance
+
+- [ ] Email visible.
+- [ ] Password change form validates matching passwords.
+- [ ] Wrong current password → error toast, form stays.
+- [ ] Successful change → success toast, user stays signed in.
+
+### Trade-offs
+
+- **No email change / OAuth link management / account
+  deletion** — scoped out for v1. Safety rules prohibit
+  account deletion anyway.
+
+---
+
+## 87. Not in scope for v1.16
+
+- Onboarding flow pass.
+- Custom team logo uploads.
+- Email change / 2FA / OAuth re-linking.
+- Empty / error state sweep (follow-on phase).
+- Deep sidebar reorganization.
+- Matchup-context side panels.
+- Baserunners / pitcher-on-mound.
+- Standard parked items.
