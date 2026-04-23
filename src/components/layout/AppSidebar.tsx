@@ -127,54 +127,62 @@ function SidebarHeadline({
         label="Drafting"
         statusLine={`${filledCount} / 10 slots filled`}
         statusTone={filledCount === 10 ? "accent" : "muted"}
-        bigNumber={projectedFp.toFixed(1)}
-        bigNumberLabel="Projected FP"
-        bigNumberMuted={projectedFp === 0}
+        primary={{ value: projectedFp, label: "Projected", tone: "default" }}
       />
     );
   }
 
   if (anySlotLocked && !allFinal) {
-    const displayScore = liveScore > 0 ? liveScore : slotSum(slotFills, "liveFp");
+    const liveTotal = liveScore > 0 ? liveScore : slotSum(slotFills, "liveFp");
     return (
       <Headline
         label="Live"
         statusLine={liveLabel(latestInning, gamesActive, gamesReady)}
         statusTone="live"
-        bigNumber={displayScore.toFixed(1)}
-        bigNumberMuted={displayScore === 0}
+        primary={{ value: liveTotal, label: "Live", tone: "live" }}
+        secondary={{ value: projectedFp, label: "Projected" }}
       />
     );
   }
 
   // All final (or the contest is fully wrapped).
-  const displayScore = finalScore > 0 ? finalScore : slotSum(slotFills, "finalFp");
+  const finalTotal = finalScore > 0 ? finalScore : slotSum(slotFills, "finalFp");
   return (
     <Headline
       label="Final"
       statusLine="Contest final"
       statusTone="muted"
-      bigNumber={displayScore.toFixed(1)}
-      bigNumberMuted={displayScore === 0}
+      primary={{ value: finalTotal, label: "Final", tone: "default" }}
+      secondary={{ value: projectedFp, label: "Projected" }}
     />
   );
 }
 
+type HeadlineNumber = {
+  value: number;
+  label: string;
+  tone?: "default" | "live";
+};
+
+/**
+ * Adaptive headline that can render a primary big number alone
+ * (Drafting) or alongside a secondary smaller number (Live/Final
+ * show both the current total and the projected benchmark).
+ */
 function Headline({
   label,
   statusLine,
   statusTone,
-  bigNumber,
-  bigNumberLabel,
-  bigNumberMuted,
+  primary,
+  secondary,
 }: {
   label: string;
   statusLine: string;
   statusTone: "muted" | "accent" | "live";
-  bigNumber: string;
-  bigNumberLabel?: string;
-  bigNumberMuted: boolean;
+  primary: HeadlineNumber;
+  secondary?: HeadlineNumber;
 }) {
+  const primaryMuted = primary.value === 0;
   return (
     <section
       className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
@@ -193,19 +201,38 @@ function Headline({
           {statusLine}
         </span>
       </div>
-      <div
-        className={cn(
-          "font-mono text-3xl font-bold tabular-nums",
-          bigNumberMuted ? "text-[var(--text-3)]" : "text-[var(--text)]",
-        )}
-      >
-        {bigNumber}
-      </div>
-      {bigNumberLabel && (
-        <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-          {bigNumberLabel}
+      <div className="flex items-baseline gap-4">
+        <div className="flex flex-col">
+          <span
+            className={cn(
+              "font-mono text-3xl font-bold tabular-nums",
+              primary.tone === "live" && !primaryMuted && "text-emerald-400",
+              primary.tone !== "live" && !primaryMuted && "text-[var(--text)]",
+              primaryMuted && "text-[var(--text-3)]",
+            )}
+          >
+            {primary.value.toFixed(1)}
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+            {primary.label}
+          </span>
         </div>
-      )}
+        {secondary && (
+          <div className="flex flex-col">
+            <span
+              className={cn(
+                "font-mono text-lg font-semibold tabular-nums",
+                secondary.value === 0 ? "text-[var(--text-3)]" : "text-[var(--text-2)]",
+              )}
+            >
+              {secondary.value.toFixed(1)}
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+              {secondary.label}
+            </span>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
