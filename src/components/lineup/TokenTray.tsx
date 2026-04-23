@@ -1,7 +1,6 @@
 "use client";
 
 import { TrayTokenPip } from "@/components/token/TrayTokenPip";
-import { HorizontalScroller } from "@/components/ui/horizontal-scroller";
 import type { LineupTokenVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
@@ -41,14 +40,20 @@ export function TokenTray({ tokens, locked }: Props) {
       </header>
 
       {unapplied.length > 0 && (
-        <HorizontalScroller
-          className={cn(locked && "opacity-50")}
-          innerClassName="items-center py-1"
+        // Scroll arrows removed per user ask — tokens tray is short
+        // enough on desktop that the wheel / trackpad two-finger
+        // scroll is sufficient. Scrollbar itself stays hidden.
+        <div
+          className={cn(
+            "flex min-w-0 items-center gap-3 overflow-x-auto py-1",
+            "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            locked && "opacity-50",
+          )}
         >
           {unapplied.map((token) => (
             <TrayTokenPip key={token.id} token={token} disabled={locked} />
           ))}
-        </HorizontalScroller>
+        </div>
       )}
     </section>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import { TokenTooltipContent } from "@/components/token/TokenTooltipContent";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,15 +13,20 @@ import { TokenBadge } from "./TokenBadge";
 /**
  * Applied-state corner badge.
  *
- * Click = remove (when pending). A small X glyph sits in the top-
- * right of the pip on hover so the affordance is visible; the tooltip
- * (via wrapped <Tooltip>) explains what the token does.
+ * Pending: short-label pip (K8 / HR / etc.), gold border. Small X
+ * affordance appears in the top-right on hover for remove.
  *
- * Polish spec §129 (Phase 40): once a token resolves (the contest
- * event fires or finalize marks it missed), the badge renders with a
- * permanent status chip — ✓ (emerald) for hit, ✗ (red) for missed —
- * and the pip dims for missed state. Resolved tokens are no longer
- * removable (the game is over, the result is final).
+ * Hit: ✓ replaces the short-label in the center, border flips to
+ * emerald. No corner chip, no opacity change — the pip itself is
+ * the state indicator. Non-interactive (game's final).
+ *
+ * Missed: ✗ replaces the short-label, border flips to muted red.
+ * Same non-interactive rule.
+ *
+ * Prior (v1): resolved tokens showed a small corner chip + dimmed
+ * the pip to 50%. The corner chip read as a remove affordance and
+ * the dim was subtle; P40 follow-up moved the state to the pip
+ * center.
  */
 type Props = {
   tokenType: TokenType;
@@ -46,6 +51,7 @@ export function AppliedTokenBadge({
   const missed = triggered === false;
   // Resolved tokens aren't interactive — the state is the story.
   const effectiveDisabled = disabled || resolved;
+  const state = hit ? "hit" : missed ? "missed" : "pending";
 
   function handleClick(e: React.MouseEvent) {
     e.preventDefault();
@@ -71,31 +77,10 @@ export function AppliedTokenBadge({
           className={cn(
             "group/applied-token relative block appearance-none border-0 bg-transparent p-0",
             effectiveDisabled ? "cursor-default" : "cursor-pointer",
-            missed && "opacity-50",
             className,
           )}
         >
-          <TokenBadge tokenType={tokenType} bonusFp={bonusFp} size="applied" />
-
-          {/* Hit chip — permanent ✓ top-right. */}
-          {hit && (
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex size-4 items-center justify-center rounded-full bg-emerald-500 text-white shadow"
-            >
-              <Check className="size-2.5" strokeWidth={3} />
-            </span>
-          )}
-
-          {/* Missed chip — permanent ✗ top-right. */}
-          {missed && (
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex size-4 items-center justify-center rounded-full bg-[#C47262] text-white shadow"
-            >
-              <X className="size-2.5" strokeWidth={3} />
-            </span>
-          )}
+          <TokenBadge tokenType={tokenType} bonusFp={bonusFp} size="applied" state={state} />
 
           {/* Remove affordance — only on pending + hover. */}
           {!resolved && !disabled && (
