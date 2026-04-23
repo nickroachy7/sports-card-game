@@ -41,6 +41,14 @@ export default async function LineupPage() {
     SELECT public.create_contest_entry(${user.id}::uuid, ${contestId}::uuid)
   `);
 
+  // Polish spec §128 follow-up (Phase 40). Sweep any applied tokens
+  // whose player's game is already final but `triggered` is still
+  // null, marking them missed. Independent of entry.status so it
+  // works even though Phase 39 removed the Submit flow that used to
+  // flip entries to 'submitted'. Idempotent; cheap (single UPDATE
+  // guarded by game-status filter).
+  await db.execute(sql`SELECT public.reconcile_missed_tokens()`);
+
   type ContestRow = {
     id: string;
     name: string;
