@@ -262,6 +262,7 @@ export default async function LineupPage() {
         id: a.id,
         tokenId: a.tokenId,
         cardId: a.cardId,
+        triggered: a.triggered,
       }))}
       slotGameByCardId={slotGameByCardId}
       gameMatchupById={gameMatchupById}

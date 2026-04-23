@@ -12,6 +12,8 @@ type SlotFill = {
     type: string;
     bonusFp: number;
     applicationId: string;
+    /** P40 §128: null = pending, true = hit, false = missed. */
+    triggered: boolean | null;
   } | null;
   /** Polish spec §44 — per-slot lock derived from gameInfo + building state. */
   locked: boolean;

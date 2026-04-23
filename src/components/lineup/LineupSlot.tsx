@@ -28,6 +28,8 @@ type Props = {
     type: string;
     bonusFp: number;
     applicationId: string;
+    /** P40 §128: null = pending, true = hit, false = missed. */
+    triggered: boolean | null;
   } | null;
   /**
    * Per-slot lock (polish spec §44). True when the slot's player's
@@ -274,6 +276,7 @@ function LineupSlotInner({
             <AppliedTokenBadge
               tokenType={appliedToken.type as TokenType}
               bonusFp={appliedToken.bonusFp}
+              triggered={appliedToken.triggered}
               onRemove={() => onRemoveToken(appliedToken.applicationId)}
               disabled={locked}
             />

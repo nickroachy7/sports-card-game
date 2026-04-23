@@ -110,6 +110,12 @@ export type LineupViewProps = {
     id: string;
     tokenId: string;
     cardId: string;
+    /**
+     * Polish spec §128 (Phase 40). null = pending (no game event yet
+     * fired the trigger AND entry not yet finalized). true = hit.
+     * false = missed (set at entry finalize).
+     */
+    triggered: boolean | null;
   }[];
   /**
    * Polish spec §45. Per-card today's game info for slot footer +

@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Check, X } from "lucide-react";
 
 import { TokenTooltipContent } from "@/components/token/TokenTooltipContent";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,33 +13,52 @@ import { TokenBadge } from "./TokenBadge";
 /**
  * Applied-state corner badge.
  *
- * Click = remove. A small X glyph sits in the top-right of the pip
- * so the "click to remove" affordance is visible on hover; the
- * tooltip (via wrapped <Tooltip>) explains what the token does.
- * Tokens aren't destroyed when removed — they snap back to the tray
- * — so no confirm step is needed. The old two-click "confirming"
- * pattern was harder to use than it saved accidents for, per user
- * feedback.
+ * Click = remove (when pending). A small X glyph sits in the top-
+ * right of the pip on hover so the affordance is visible; the tooltip
+ * (via wrapped <Tooltip>) explains what the token does.
  *
- * Placement is the caller's responsibility — wrap this in a relative
- * container and position it absolutely in the card's bottom-right,
- * overlaid outside the tier frame (polish spec §5).
+ * Polish spec §129 (Phase 40): once a token resolves (the contest
+ * event fires or finalize marks it missed), the badge renders with a
+ * permanent status chip — ✓ (emerald) for hit, ✗ (red) for missed —
+ * and the pip dims for missed state. Resolved tokens are no longer
+ * removable (the game is over, the result is final).
  */
 type Props = {
   tokenType: TokenType;
   bonusFp: number;
+  /** P40 §128: null = pending, true = hit, false = missed. */
+  triggered?: boolean | null;
   onRemove: () => void;
   disabled?: boolean;
   className?: string;
 };
 
-export function AppliedTokenBadge({ tokenType, bonusFp, onRemove, disabled, className }: Props) {
+export function AppliedTokenBadge({
+  tokenType,
+  bonusFp,
+  triggered = null,
+  onRemove,
+  disabled,
+  className,
+}: Props) {
+  const resolved = triggered !== null;
+  const hit = triggered === true;
+  const missed = triggered === false;
+  // Resolved tokens aren't interactive — the state is the story.
+  const effectiveDisabled = disabled || resolved;
+
   function handleClick(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (disabled) return;
+    if (effectiveDisabled) return;
     onRemove();
   }
+
+  const ariaLabel = hit
+    ? `${TOKEN_LONG_LABEL[tokenType]} token — hit`
+    : missed
+      ? `${TOKEN_LONG_LABEL[tokenType]} token — missed`
+      : `Remove ${TOKEN_LONG_LABEL[tokenType]} token`;
 
   return (
     <Tooltip>
@@ -47,16 +66,39 @@ export function AppliedTokenBadge({ tokenType, bonusFp, onRemove, disabled, clas
         <button
           type="button"
           onClick={handleClick}
-          disabled={disabled}
-          aria-label={`Remove ${TOKEN_LONG_LABEL[tokenType]} token`}
+          disabled={effectiveDisabled}
+          aria-label={ariaLabel}
           className={cn(
             "group/applied-token relative block appearance-none border-0 bg-transparent p-0",
-            disabled ? "cursor-not-allowed" : "cursor-pointer",
+            effectiveDisabled ? "cursor-default" : "cursor-pointer",
+            missed && "opacity-50",
             className,
           )}
         >
           <TokenBadge tokenType={tokenType} bonusFp={bonusFp} size="applied" />
-          {!disabled && (
+
+          {/* Hit chip — permanent ✓ top-right. */}
+          {hit && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex size-4 items-center justify-center rounded-full bg-emerald-500 text-white shadow"
+            >
+              <Check className="size-2.5" strokeWidth={3} />
+            </span>
+          )}
+
+          {/* Missed chip — permanent ✗ top-right. */}
+          {missed && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex size-4 items-center justify-center rounded-full bg-[#C47262] text-white shadow"
+            >
+              <X className="size-2.5" strokeWidth={3} />
+            </span>
+          )}
+
+          {/* Remove affordance — only on pending + hover. */}
+          {!resolved && !disabled && (
             <span
               aria-hidden="true"
               className={cn(

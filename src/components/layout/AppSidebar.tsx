@@ -16,7 +16,11 @@ type EntryStatus = "building" | "submitted" | "live" | "final";
 
 type SlotFill = {
   card: LineupCardVM | null;
-  appliedToken: { bonusFp: number } | null;
+  appliedToken: {
+    bonusFp: number;
+    /** Phase 40 §130: drives the ✓ / ✗ glyph next to FP. */
+    triggered?: boolean | null;
+  } | null;
   liveFp: number;
   finalFp: number;
   locked?: boolean;
@@ -283,16 +287,40 @@ function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFil
       <SlotGameState info={fill.gameInfo ?? null} variant="chip" className="font-mono text-[9px]" />
       <span
         className={cn(
-          "text-right font-mono tabular-nums",
+          "flex items-baseline justify-end gap-1 text-right font-mono tabular-nums",
           fpCell.tone === "white" && "font-semibold text-[var(--text)]",
           fpCell.tone === "emerald" && "font-semibold text-emerald-400",
           fpCell.tone === "muted" && "text-[var(--text-3)]",
         )}
       >
         {fpCell.text}
+        <TriggeredGlyph triggered={fill.appliedToken?.triggered} />
       </span>
     </li>
   );
+}
+
+/**
+ * Polish spec §130 (Phase 40). Tiny ✓ / ✗ after the FP cell when
+ * the slot has an applied token. Nothing renders when there's no
+ * token or when the token is still pending.
+ */
+function TriggeredGlyph({ triggered }: { triggered?: boolean | null }) {
+  if (triggered === true) {
+    return (
+      <span title="Token hit" className="font-mono text-[9px] font-bold text-emerald-400">
+        <span className="sr-only">Token hit: </span>✓
+      </span>
+    );
+  }
+  if (triggered === false) {
+    return (
+      <span title="Token missed" className="font-mono text-[9px] font-bold text-[#C47262]">
+        <span className="sr-only">Token missed: </span>✗
+      </span>
+    );
+  }
+  return null;
 }
 
 /**

@@ -64,6 +64,8 @@ type SlotFill = {
     type: string;
     bonusFp: number;
     applicationId: string;
+    /** null = pending, true = hit, false = missed (P40 §128). */
+    triggered: boolean | null;
   } | null;
   /** Running FP during live games (populated by the scoring reducer). */
   liveFp: number;
@@ -143,7 +145,12 @@ export function LineupView(props: LineupViewProps) {
         const withoutCard = state.filter((s) => s.cardId !== patch.cardId);
         return [
           ...withoutCard,
-          { id: patch.applicationId, tokenId: patch.tokenId, cardId: patch.cardId },
+          {
+            id: patch.applicationId,
+            tokenId: patch.tokenId,
+            cardId: patch.cardId,
+            triggered: null, // optimistic entry is always pending
+          },
         ];
       }
       if (patch.type === "resolveId") {
@@ -154,8 +161,17 @@ export function LineupView(props: LineupViewProps) {
   );
 
   const tokenApps = useMemo(() => {
-    const byCardId = new Map<string, { id: string; tokenId: string }>();
-    for (const app of optimisticApps) byCardId.set(app.cardId, app);
+    const byCardId = new Map<string, { id: string; tokenId: string; triggered: boolean | null }>();
+    for (const app of optimisticApps) {
+      // Optimistic patches (apply/remove/resolveId) don't carry a
+      // `triggered` field; default to null (pending) for those. The
+      // server refresh will bring in the real value on next rebase.
+      const withTriggered = {
+        ...app,
+        triggered: (app as { triggered?: boolean | null }).triggered ?? null,
+      };
+      byCardId.set(app.cardId, withTriggered);
+    }
     return byCardId;
   }, [optimisticApps]);
 
@@ -241,6 +257,7 @@ export function LineupView(props: LineupViewProps) {
               type: tok.tokenType,
               bonusFp: Number(tok.bonusFp),
               applicationId: app.id,
+              triggered: app.triggered,
             };
           }
         }
