@@ -3670,3 +3670,160 @@ Zero rows at 'locked' in prod. Drop it from the enum.
   inning only).
 - Pitch count / pitcher on mound.
 - Auto-transition of contest_entry.status (submitted → live).
+
+---
+
+# Phase 21 batch — locked 2026-04-22
+
+Feel Pass v1.12.1 — Bench Legibility. Phases 18+20 put
+rich game-state info on every lineup slot (matchup, time,
+live inning, final score). The bench — where users
+actually pick who to start — stayed information-bare.
+This phase closes the gap.
+
+---
+
+## 58. Bench cards show game state + OFF indicator
+
+### Goal
+
+Bring the `<SlotGameState>` line from the lineup diamond
+down to the bench. Every bench card shows whether its
+player has a game today, when it starts (or what inning
+they're in), and its final result. Cards with no game
+in today's contest surface a muted `OFF` indicator so
+users know at a glance those aren't actionable tonight.
+
+### Scope
+
+- **`<BenchCard>` renders a footer line below the existing
+  stats row.** Same `<SlotGameState>` component used by
+  `LineupSlot` (polish spec §45 + §54), driven by the same
+  `slotGameByCardId` map the lineup page already computes.
+- **New `SlotGameState` "off-day" branch:** when `info` is
+  null AND the bench card is being rendered, show a muted
+  `OFF` label. When `info` is null on a lineup slot, we
+  continue to render nothing (no contest games for that
+  player — either their team's not in the slate or we
+  lack schedule data; showing `OFF` there would be
+  redundant with the lineup-slot layout).
+- **`<BenchDrawer>` threads `slotGameByCardId`** from
+  props into `<BenchCard>` per card.
+
+### Behavior
+
+- Pre-game bench card: `vs LAD · 7:40p` muted grey.
+- Live bench card: `LIVE · T5 · 2-1` emerald.
+- Final bench card: `FINAL W 5-2` neutral.
+- Off-day bench card: `OFF` (single short word, dim).
+  Card remains draggable (user can still roster for
+  future days).
+- Card height grows ~14px. Bench tray remains
+  horizontally scrollable.
+
+### Acceptance
+
+- [ ] Pre-game bench card shows the matchup + start time.
+- [ ] Live bench card shows LIVE + inning + score (same
+      as slot).
+- [ ] Final bench card shows FINAL W/L + score.
+- [ ] Off-day card shows `OFF` in muted tone.
+- [ ] Card click (to open detail) still works.
+- [ ] Drag behavior unchanged.
+
+### Trade-offs
+
+- **Bench grows taller by ~14px.** Acceptable — the
+  horizontal-scroll bench strip has vertical headroom in
+  the Phase 16 left-column layout.
+- **`SlotGameState` `variant="off"` is mildly special.**
+  A render branch just for bench; easy to maintain.
+
+---
+
+## 59. Bench sort by game state
+
+### Goal
+
+Currently alphabetical. Post-§58, the user wants
+actionable players first — the ones whose games haven't
+started yet and who can still be rostered for tonight.
+
+### Scope
+
+- **`<BenchDrawer>` sort** in the `filtered` memo changes
+  to a priority-ordered sort:
+  1. **Pre-game**, earliest `scheduledStart` first.
+  2. **Live**.
+  3. **Final**.
+  4. **Off-day** (no game today).
+  Within each bucket: alphabetical by player name.
+- The `assignedCardIds` filter (cards in a slot don't
+  appear in bench — Phase 15) stays; sort operates on
+  the filtered set.
+- Hitters / Pitchers filter chips + search continue to
+  work; they filter THEN sort.
+
+### Behavior
+
+- User with 20 bench cards: pre-game players cluster at
+  the left edge. Live players next. Final + OFF cards
+  trail right. Horizontal scroll still works.
+- Sort is stable within each bucket — cards don't shuffle
+  as minute-by-minute game-time passes.
+
+### Acceptance
+
+- [ ] Pre-game players appear first in the bench row.
+- [ ] Within pre-game, earliest-start is leftmost.
+- [ ] Live players appear after all pre-game.
+- [ ] Final players after live.
+- [ ] Off-day players last.
+- [ ] Alphabetical within each bucket.
+- [ ] Filter chips + search still work (filter → sort).
+
+### Trade-offs
+
+- **Priority-sort replaces alphabetical.** Users who
+  learned "my favorite is around position 8 in the bench"
+  have to relearn. One-time adjustment; the priority sort
+  is more useful for the actual decision moment.
+
+---
+
+## 60. Collection page stays schedule-agnostic
+
+### Goal
+
+Explicitly scoped OUT. Collection is "all your cards"
+regardless of today's contest. Game-state info there
+would be noise.
+
+### Scope
+
+- No changes to `<CollectionGrid>` or
+  `<CollectionSummaryStats>`.
+- Card detail (opened from collection) still shows
+  schedule-sensitive info when applicable — that part is
+  independent.
+
+---
+
+## 61. Not in scope for v1.12.1
+
+- Onboarding flow pass.
+- Empty / error state sweep.
+- Accessibility audit.
+- Tier foil motion.
+- Dupe panel multi-instance picker.
+- Mobile / sound / haptics / artwork.
+- Rank display on status chip.
+- Webhook retry observability.
+- CI integration for fixtures.
+- Sound cue on positive-FP events.
+- Bench filter chips for game state (could layer on top
+  of the sort; not needed yet).
+- Collection page "Has game today" filter (deferred).
+- Full doubleheader support.
+- Outs / baserunners.
+- contest_status enum cleanup (parallel to 0033).
