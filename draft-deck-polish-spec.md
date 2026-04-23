@@ -6443,3 +6443,175 @@ implicitly when each slot's game starts.
 - Manual-priority sub-order UI (third chunk of actions
   tab, deferred).
 - Baserunners + pitcher-on-mound (still Phase 31 spec).
+
+---
+
+# Phase 40 — v1.25 (Token trigger indicators: pending / hit / missed)
+
+User audit surfaced two things:
+
+1. The scoring pipeline was gated on `entry.status IN
+   ('submitted', 'live')` — and since Phase 39 removed the
+   Submit flow, every entry is stuck in 'building'. Neither
+   base FP nor token triggers were actually firing.
+2. No server-side "missed" marker — `ta.triggered = NULL`
+   meant both "not yet resolved" and "never fired."
+3. No UI surfaces the triggered / missed state at all.
+
+Migration 0043 already shipped the scoring-gate fix. This
+phase adds the missing-state mark + the UI to show all three
+states.
+
+---
+
+## 128. Mark un-triggered tokens missed at entry finalize
+
+### Goal
+
+`ta.triggered = true` is set in `_apply_game_event_to_lineups`
+the instant a condition fires. The symmetric `triggered =
+false` is never set anywhere. When all the entry's slot games
+have ended, any application still `NULL` will never fire —
+mark it `false` explicitly so the UI can tell pending from
+missed.
+
+### Changes
+
+- `_finalize_contest_entry`: after the per-slot loop and the
+  token-consumption UPDATE, add:
+  ```sql
+  UPDATE public.token_application ta
+  SET triggered = false
+  FROM public.contest_lineup_slot s
+  WHERE s.contest_entry_id = p_entry_id
+    AND s.token_application_id = ta.id
+    AND ta.triggered IS NULL;
+  ```
+- No other function changes. `_apply_game_event_to_lineups`
+  still flips `triggered = true` mid-game.
+
+### Timing
+
+- Hits: real-time (game event fires → slot receives bonus FP
+  + `triggered = true` in same transaction).
+- Misses: delayed until contest entry finalize. If Brady
+  House's game ends at 4pm but Mookie Betts's game runs to
+  11pm, Brady's missed tokens don't show "missed" until the
+  whole entry wraps up.
+
+### Out of scope — per-game reconciliation
+
+- A per-game-end hook that marks misses the moment each
+  individual player's game finalizes would give users
+  faster feedback but adds a new SQL path. Phase 31-style
+  polish; deferred.
+
+---
+
+## 129. AppliedTokenBadge — pending / hit / missed corner chip
+
+### Goal
+
+The AppliedTokenBadge in the lineup slot's corner adapts its
+visual based on the token_application's `triggered` field:
+
+| State    | `triggered` | Visual                                                       |
+|----------|-------------|--------------------------------------------------------------|
+| Pending  | null        | Current gold-bordered badge, no corner chip                  |
+| Hit      | true        | Gold-bordered badge + small green ✓ corner chip (top-right)  |
+| Missed   | false       | Dimmed badge (opacity 50%) + small red ✗ corner chip         |
+
+### Scope
+
+- `AppliedTokenBadge` takes a new `triggered?: boolean | null`
+  prop.
+- `TokenBadge` (the inner pip) accepts a new `state?: "pending"
+  | "hit" | "missed"` prop that drives the dim opacity + the
+  tier-gold border becoming muted in the missed case.
+- Corner chip renders with Lucide `Check` / `X` icons in a
+  small circle (14px), positioned absolutely at top-right of
+  the badge.
+- Data flow: `LineupView.slotFills[pos].appliedToken` already
+  has `applicationId`; add `triggered` to the shape so
+  LineupSlot can pass it through.
+
+### Files
+
+- `src/components/token/AppliedTokenBadge.tsx`
+- `src/components/token/TokenBadge.tsx`
+- `src/components/lineup/LineupSlot.tsx` (prop pass-through)
+- `src/app/(app)/lineup/lineup-view.tsx` (slotFills shape +
+  query already returns `triggered`)
+
+---
+
+## 130. Roster row — triggered glyph next to FP
+
+### Goal
+
+The sidebar roster row (`RosterRow` in AppSidebar) already
+renders `pos · name · game chip · FP`. When the slot has an
+applied token, append a tiny `✓` / `✗` glyph to the right of
+FP so users see trigger state without looking at the lineup
+card itself.
+
+### Scope
+
+- `RosterRow` accepts the slot's `appliedToken?.triggered`
+  alongside existing fill data.
+- Glyph sits after the FP cell at 8-9px tabular, with the
+  same color semantics as the badge corner chip (emerald /
+  muted red / nothing for pending).
+- Desktop tooltip on hover (reuse existing Tooltip primitive):
+  `Strikeout Game · hit · +8 FP` or `HR Bonus · missed`.
+
+### Out of scope
+
+- The tooltip (punt to a later phase if we want richer
+  hover content; P37's `TokenTooltipContent` can be
+  extended). For v1, just the glyph + default `title=""`.
+
+---
+
+## 131. Event feed — trigger rows with hit glyph
+
+### Goal
+
+The Events tab already streams per-event updates. When a
+token fires, it should stand out as a distinct event row
+with a green ✓ and the bonus FP called out:
+
+```
+✓  Brady House — HR Bonus triggered   +8 FP
+```
+
+### Scope
+
+- The `game_event` table emits rows; `token_application.triggered`
+  flips in the same transaction. The EventFeed client already
+  subscribes via `LiveEventsProvider`.
+- Check if the provider already captures token-trigger
+  events as a feed entry; if not, add a dedicated feed row
+  shape and wire it into the same Realtime channel.
+
+### Out of scope (likely)
+
+- Missed events in the feed — noisier than useful since
+  players don't "fail" at HR bonus in a feed-friendly way.
+- Feed filter chips (punted from Phase 39 spec §125).
+
+---
+
+## 132. Not in scope for v1.25
+
+- Per-game reconciliation that marks misses the moment each
+  individual player's game finalizes (vs at entry finalize).
+  Punt.
+- Retroactive data fix — any token applied to today's
+  contest before this migration shipped still has `triggered
+  = NULL`; they'll resolve naturally at finalize or stay
+  null forever for already-final contests (cosmetic; no
+  gameplay effect).
+- Token trigger animations (burst / flash / confetti).
+  Possibly a later phase.
+- Missed tokens in the Events tab (see §131).
