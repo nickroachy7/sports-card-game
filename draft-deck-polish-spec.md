@@ -4112,3 +4112,276 @@ business logic transitions to this value today.
 - Baserunners live tracking.
 - Pitcher-on-mound indicator.
 - Collection page multi-day schedule view.
+
+---
+
+# Phase 23 — Feel Pass v1.14 (Lineup layout + surface cleanup)
+
+User feedback after Phase 22 shipped:
+
+> "The way the lineup cards are laid out right now just
+> don't work. I wanted to do something with the cards on a
+> real field or something but I just don't think it's
+> working. Maybe we could do them in rows and ordered in a
+> way that works?"
+
+Plus four narrower surface fixes. One phase, five slices.
+
+---
+
+## 68. Three-role-row lineup layout
+
+### Goal
+
+Replace the 5×4 diamond-shaped CSS grid with three
+role-based rows that read top-to-bottom: pitchers,
+infielders (C + IF4), outfielders. Uniform card size
+across roles. The "diamond / field" metaphor is removed —
+the visual priority is "who's starting where + what's
+their game state" over "here are the defensive positions."
+
+### Scope
+
+- **Row 1 — Rotation:** SP1, SP2 (2 cards).
+- **Row 2 — Infield:** C, 1B, 2B, 3B, SS (5 cards).
+- **Row 3 — Outfield:** OF1, OF2, OF3 (3 cards).
+- Row 1 + Row 3 center-justify in the column so the
+  2-card and 3-card rows don't look left-biased against
+  the 5-card infield.
+- Column gap equals the gap between infield slots so the
+  three rows read as the same pixel rhythm.
+- Row labels above each row in the muted mono style the
+  bench already uses (`ROTATION · INFIELD · OUTFIELD`).
+- Retire `DiamondGrid` (or rebrand as `LineupGrid`). The
+  LineupShell `diamond` slot is renamed `grid` for
+  consistency with the new name.
+- Keep `LineupSlot` unchanged — it's the per-slot card
+  primitive and doesn't know about global layout.
+- Drop the pitcher-pair visual grouping inside DiamondGrid
+  if any (the current grid already has SP1+SP2 side-by-
+  side in the top row, which transfers cleanly).
+
+### Acceptance
+
+- [ ] Lineup page renders three rows, labeled above each.
+- [ ] Card size is uniform across all 10 slots (the old
+      diamond had some implied smaller cards on the edges).
+- [ ] Rows 1 + 3 visually center against the 5-card
+      infield row.
+- [ ] Drop behavior + per-slot lock behavior unchanged.
+- [ ] Mobile-friendly: at narrower widths (≥768px is our
+      desktop-first target), rows still hold.
+
+### Trade-offs
+
+- **Loses the "field" visual metaphor.** Upside: the
+  diamond never carried weight — users scanned left-to-
+  right anyway, not catcher-up-to-outfield. Three clearly
+  labeled rows read as a roster, which matches user mental
+  model.
+- **Uniform card size = bigger cards on the pitcher row.**
+  Two cards can breathe more. Same card component, same
+  shape; the grid column width is just less constrained.
+
+---
+
+## 69. Event feed matchup chip
+
+### Goal
+
+Each row in the Event Feed gets a small matchup chip next
+to the existing inning label so users can tell which game
+an event belongs to — currently you see "Judge HR +5.0 ·
+T5" with no indication that this happened in NYY@BOS vs.
+some other contest game.
+
+### Scope
+
+- `FeedEvent` type gains `gameMatchup: string | null` —
+  preformatted as `"NYY@BOS"` or `"vs LAD"` depending on
+  whether the tracked player is home or away.
+- `LiveEventsProvider` builds this at subscribe time from
+  `contestGameIds` + the game ↔ team mapping it already
+  joins for the per-player filter. If the mapping isn't
+  available (rare / initial render races), `gameMatchup`
+  stays null and the chip doesn't render.
+- EventFeed row adds a compact mono chip rendered inline
+  with the inning: `T5 · NYY@BOS`.
+  - Chip uses the neutral pill tone (same `border-
+    [var(--border)] bg-[var(--surface-2)] text-[var(--text-
+    3)]` as the muted state chips from §62).
+  - No hover / click behavior (future-hookable).
+- The box-score chip (same underlying render) is unchanged
+  — boxscore already surfaces which slot/player, adding a
+  matchup to every row would duplicate.
+
+### Acceptance
+
+- [ ] Event rows show matchup chip inline with inning.
+- [ ] No chip when `gameMatchup` is null (pre-data race
+      case).
+- [ ] No layout shift on initial render (reserve space
+      when matchup is expected but still loading).
+
+### Trade-offs
+
+- **Requires threading game→matchup data to
+  LiveEventsProvider.** Provider already filters by
+  `contestGameIds`; adding a `game_id → "ABC@XYZ"` lookup
+  is a small prop extension.
+- **Chip adds horizontal width.** Feed rows stay single-
+  line (`whitespace-nowrap` truncates player name if
+  needed). Right-edge truncation is the existing behavior.
+
+---
+
+## 70. Bench + Tokens scroll arrows
+
+### Goal
+
+Replace the native horizontal scrollbar on the bench tray
+and the token tray with explicit left/right arrow buttons
+positioned just outside the scrollable row, sized to match
+the tray's vertical center. The scrollbar (a visual styled
+by the OS / browser) is hidden but native wheel + touch-
+pad scroll continue to work.
+
+### Scope
+
+- New `<HorizontalScroller>` primitive in
+  `src/components/ui/horizontal-scroller.tsx` (client
+  component) wrapping an `overflow-x-auto` inner div:
+  - Exposes `children` slot for the row content.
+  - Hides the scrollbar via the Tailwind `scrollbar-
+    none`-equivalent utility (or inline CSS: `scrollbar-
+    width: none` + `&::-webkit-scrollbar { display: none }`).
+  - Renders `<` / `>` buttons on the outer flex container's
+    edges.
+  - Each click scrolls by the visible width of the inner
+    container (page scroll, not per-card step).
+  - Buttons auto-disable when the row is at scrollLeft = 0
+    or at (scrollWidth - clientWidth).
+  - Listens to `scroll` + `resize` to re-derive the
+    disabled state.
+- `BenchDrawer`: replace the existing
+  `<div className="flex gap-3 overflow-x-auto">` wrapper
+  with `<HorizontalScroller>`.
+- `TokenTray`: same replacement.
+
+### Acceptance
+
+- [ ] No horizontal scrollbar visible on bench or tokens.
+- [ ] `<` / `>` arrows appear at the edges when content
+      overflows.
+- [ ] Arrows disabled when at the ends.
+- [ ] Native wheel + touchpad scroll still works.
+- [ ] Keyboard-focusable buttons (they're real buttons —
+      tab navigation works).
+- [ ] No layout shift when the tray has few items (arrows
+      hidden when not needed — i.e. `scrollWidth <=
+      clientWidth`).
+
+### Trade-offs
+
+- **Shared primitive rather than per-surface
+  implementation.** A second consumer (TokenTray) means a
+  shared component is the right call from the start.
+- **Arrows sit outside the scroll area.** Keeps the arrow
+  buttons from overlapping card content. Minor: the tray
+  footprint widens by ~48px (24px per arrow). Acceptable.
+
+---
+
+## 71. Box score zero for played players
+
+### Goal
+
+When the contest is in live or final state and a player
+has scored 0 FP, show `0.0` (consistent with the `.toFixed
+(1)` format of non-zero values) instead of the em-dash
+`—`. Pre-game / building state keeps the dash since there
+is genuinely no data yet.
+
+### Scope
+
+- `LineupSidebar.tsx` `BoxScoreSection`: the condition
+  becomes `hasGameStarted ? fp.toFixed(1) : "—"` where
+  `hasGameStarted` is `gameInfo?.status === "live" ||
+  gameInfo?.status === "final"`.
+- The muted text treatment for `fp === 0` can stay —
+  visually it reads as "nothing scored yet" without being
+  a data-absent dash.
+
+### Acceptance
+
+- [ ] Live player with 0 FP shows `0.0`, muted.
+- [ ] Final player with 0 FP shows `0.0`, muted.
+- [ ] Pre-game player shows `—`.
+- [ ] Off-day / postponed player shows `—`.
+
+### Trade-offs
+
+- **None meaningful.** The dash-for-zero was a display
+  choice; zero-is-a-number-not-absence is more honest
+  once the game is live.
+
+---
+
+## 72. Contest header → sidebar
+
+### Goal
+
+Move the "Tonight's Slate" / contest-name / lock-status
+block from the top bar into the top of the right sidebar
+(above the box score). Drop the top bar entirely. This is
+a quick pre-cleanup pass ahead of a larger sidebar
+reorganization planned post-v1.14.
+
+### Scope
+
+- Remove the `<header>` prop from `<LineupShell>`. Shell
+  renders the grid + sidebar without a top bar.
+- New `ContestHeaderCard` component at the top of
+  `LineupSidebar` — contest name (bold), date (subtitle),
+  status/countdown (muted third line). Same copy as the
+  old header; compact card styling so it sits clean above
+  the live-score number.
+- Detail-sidebar swap continues to work — when the
+  detail-card sidebar is active, it replaces the whole
+  sidebar (including this header block), matching current
+  behavior.
+- The grid area gains the vertical space the top bar
+  vacated. Three-role-row layout (§68) benefits from this.
+
+### Acceptance
+
+- [ ] Top bar is gone; lineup grid starts at the top of
+      the content area.
+- [ ] Sidebar's first block shows contest name + date +
+      lock status.
+- [ ] Detail-card sidebar swap works unchanged.
+- [ ] Status copy identical to previous header (same
+      countdown fn, same submitted/final branches).
+
+### Trade-offs
+
+- **This is a band-aid.** Deep sidebar reorg in a later
+  phase will reshuffle the whole right column; but moving
+  this info now reclaims vertical space and the
+  reorganization will just incorporate the new block.
+- **Less prominence for contest name.** The top bar made
+  the contest name the first thing you read. In the
+  sidebar it competes with box-score FP numbers. Net:
+  trivial — the contest name is always "Daily Slate ·
+  YYYY-MM-DD" during v1.14 (no multi-contest picker yet).
+
+---
+
+## 73. Not in scope for v1.14
+
+- Standard parked items.
+- Deep sidebar reorganization (larger follow-on).
+- Baserunners live tracking.
+- Pitcher-on-mound indicator.
+- Collection multi-day schedule view.
+- Onboarding flow pass.
