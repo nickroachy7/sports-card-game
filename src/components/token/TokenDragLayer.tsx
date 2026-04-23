@@ -69,7 +69,12 @@ export function TokenDragLayer({ resolveToken }: Props) {
         x.jump(initialSourceOffset.x);
         y.jump(initialSourceOffset.y);
       }
-      scale.set(reduced ? 1 : 1.08);
+      // Phase 38 follow-up. Dropped from 1.08 → 1.03 to match the
+      // card drag ghost. At 1.08 with stiffness 700 the scale spring
+      // was still growing into the pickup for ~100ms, which read as
+      // a subtle delay even though the position was tracking on-
+      // cursor. Smaller scale change settles nearly instantly.
+      scale.set(reduced ? 1 : 1.03);
     } else if (!isDragging && prevIsDragging.current) {
       if (!dragResult.lastDropAccepted && lastPointer.current && initialSourceOffset && item) {
         const meta = resolveToken(item.tokenId);
