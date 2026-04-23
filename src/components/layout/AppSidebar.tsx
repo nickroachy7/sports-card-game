@@ -1,15 +1,14 @@
 "use client";
 
-import { SidebarSection } from "@/components/layout/sidebar-card";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { useGamesActive } from "@/components/lineup/useGamesActive";
-import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
-import { type InningInfo, liveLabel } from "@/lib/lineup/status-chip-label";
+import { liveLabel } from "@/lib/lineup/status-chip-label";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
@@ -20,42 +19,33 @@ type SlotFill = {
   appliedToken: { bonusFp: number } | null;
   liveFp: number;
   finalFp: number;
+  locked?: boolean;
   gameInfo?: SlotGameInfo | null;
 };
 
 /**
- * Polish spec §100 (Phase 34) + §103 (Phase 35) —
- * simplified lineup-only sidebar with structural parity
- * across building + post-submit states.
+ * Polish spec §122 (Phase 39) — unified lineup sidebar.
  *
- * The old team-summary block at the top (team name + vault stats +
- * career FP) was cut — that info already lives in the top nav header
- * + profile drawer, and the duplicate ate ~100px of vertical without
- * earning it. The `"summary"` variant (for the now-deleted
- * /collection page) was also dropped; AppSidebar is lineup-only.
+ * Single layout used throughout the day. No building-state vs
+ * post-submit split; no Submit button; no global lock countdown.
+ * The lineup commits implicitly when each slot's player game
+ * starts (existing per-slot lock from polish spec §44 enforces
+ * the edit rule).
  *
- * Phase 35 change: building state now mirrors the three-block
- * spatial layout of post-submit (headline → roster → action), so
- * the sidebar doesn't reflow when you submit. The user watches
- * their roster fill in as they drag cards into slots.
+ * Structure (top → bottom):
+ *   ContestHeader     — name + date, no countdown
+ *   SidebarHeadline   — one adaptive block (Drafting / Live / Final)
+ *   RosterSection     — one persistent row per slot
+ *   <Tabs>
+ *     Lineup Actions  — auto-sub mode + readiness warnings
+ *     Live Events     — existing EventFeed
  *
- * Layout (top to bottom):
- *
- *   Building state:
- *     Contest header (name + lock countdown)
- *     DraftingHeadline      — parallels ScoreHeadline
- *     RosterSection         — parallels BoxScoreSection
- *     SubmitSection         — parallels EventFeed's spatial role
- *
- *   Post-submit state (submitted / live / final):
- *     Contest header (name + status copy)
- *     ScoreHeadline         — live/final score + status
- *     BoxScoreSection       — per-slot FP
- *     EventFeed             — scrolls internally
+ * Prior phases: §100 (Phase 34) cut team-summary + introduced the
+ * post-submit three-block layout; §103 (Phase 35) gave building-
+ * state structural parity; §122 merges both into one.
  */
 type Props = {
   contestName: string;
-  lockCountdown: string;
   entryStatus: EntryStatus;
   liveScore: number;
   finalScore: number;
@@ -63,153 +53,180 @@ type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
-  canSubmit: boolean;
-  submitting: boolean;
-  locked: boolean;
-  onSubmit: () => void;
 };
 
 export function AppSidebar(props: Props) {
   return (
     <div className="flex h-full flex-col gap-4">
-      <ContestHeaderCard
-        contestName={props.contestName}
+      <ContestHeader contestName={props.contestName} />
+      <SidebarHeadline
+        slotFills={props.slotFills}
         entryStatus={props.entryStatus}
-        lockCountdown={props.lockCountdown}
+        liveScore={props.liveScore}
+        finalScore={props.finalScore}
+        contestGameIds={props.contestGameIds}
       />
-      {props.entryStatus === "building" ? (
-        <BuildingContent {...props} />
-      ) : (
-        <PostSubmitContent {...props} />
-      )}
+      <RosterSection slotFills={props.slotFills} />
+      <SidebarTabs
+        slotFills={props.slotFills}
+        autoSubMode={props.autoSubMode}
+        onAutoSubModeChange={props.onAutoSubModeChange}
+        allSlotsLocked={LINEUP_POSITIONS.every((pos) => props.slotFills[pos].locked)}
+      />
     </div>
   );
 }
 
 // ── Contest header ───────────────────────────────────────────────────
 
-function ContestHeaderCard({
-  contestName,
-  entryStatus,
-  lockCountdown,
-}: {
-  contestName: string;
-  entryStatus: EntryStatus;
-  lockCountdown: string;
-}) {
-  const submitted = entryStatus !== "building";
+function ContestHeader({ contestName }: { contestName: string }) {
   return (
     <div className="flex flex-col gap-0.5 border-b border-[var(--border)] pb-3">
       <h1 className="font-sans text-sm font-bold tracking-tight text-[var(--text)]">
         {contestName}
       </h1>
-      <span className="text-[11px] text-[var(--text-3)]">
-        {submitted ? (
-          <>{entryStatus === "final" ? "Final" : "Submitted"} · slots lock at game time</>
-        ) : (
-          <>Locks in {lockCountdown}</>
-        )}
-      </span>
+      <span className="text-[11px] text-[var(--text-3)]">Slots lock at game time</span>
     </div>
   );
 }
 
-// ── Building state (Phase 35) ────────────────────────────────────────
+// ── SidebarHeadline — adapts through Drafting → Live → Final ─────────
 
-function BuildingContent({
+function SidebarHeadline({
   slotFills,
-  autoSubMode,
-  onAutoSubModeChange,
-  canSubmit,
-  submitting,
-  locked,
-  lockCountdown,
-  onSubmit,
-}: Props) {
+  entryStatus,
+  liveScore,
+  finalScore,
+  contestGameIds,
+}: {
+  slotFills: Record<LineupPosition, SlotFill>;
+  entryStatus: EntryStatus;
+  liveScore: number;
+  finalScore: number;
+  contestGameIds: string[];
+}) {
+  // State derivation:
+  //   anySlotLocked → at least one player's game has started
+  //   allFinal      → every locked slot is final AND nothing pending
   const filledCount = LINEUP_POSITIONS.filter((pos) => slotFills[pos].card !== null).length;
+  const anySlotLocked = LINEUP_POSITIONS.some((pos) => slotFills[pos].locked);
+  const allFinal = LINEUP_POSITIONS.every((pos) => {
+    const info = slotFills[pos].gameInfo;
+    if (!slotFills[pos].card) return true;
+    return info?.status === "final" || info?.status === "canceled" || info?.status === "postponed";
+  });
+
+  const latestInning = useLatestInning();
+  const { count: gamesActive, ready: gamesReady } = useGamesActive(contestGameIds);
+
   const projectedFp = computeProjectedFp(slotFills);
 
-  return (
-    <>
-      {/* Polish spec §103 (Phase 35). Parallels ScoreHeadline in the
-          post-submit layout — label + status line + big number. */}
-      <DraftingHeadline filledCount={filledCount} projectedFp={projectedFp} />
-
-      {/* Parallels BoxScoreSection. Each slot renders as a row; empty
-          slots show a placeholder. Fills live via optimistic slot
-          updates when cards are dragged in. */}
-      <RosterSection slotFills={slotFills} />
-
-      {/* Parallels EventFeed spatial role but does action work — the
-          user's exit from building state. Pinned to the bottom via
-          mt-auto so Roster can flex-grow to take available space. */}
-      <SubmitSection
-        autoSubMode={autoSubMode}
-        onAutoSubModeChange={onAutoSubModeChange}
-        canSubmit={canSubmit}
-        submitting={submitting}
-        locked={locked}
-        lockCountdown={lockCountdown}
-        filledCount={filledCount}
-        onSubmit={onSubmit}
+  if (!anySlotLocked && entryStatus === "building") {
+    return (
+      <Headline
+        label="Drafting"
+        statusLine={`${filledCount} / 10 slots filled`}
+        statusTone={filledCount === 10 ? "accent" : "muted"}
+        bigNumber={projectedFp.toFixed(1)}
+        bigNumberLabel="Projected FP"
+        bigNumberMuted={projectedFp === 0}
       />
-    </>
+    );
+  }
+
+  if (anySlotLocked && !allFinal) {
+    const displayScore = liveScore > 0 ? liveScore : slotSum(slotFills, "liveFp");
+    return (
+      <Headline
+        label="Live"
+        statusLine={liveLabel(latestInning, gamesActive, gamesReady)}
+        statusTone="live"
+        bigNumber={displayScore.toFixed(1)}
+        bigNumberMuted={displayScore === 0}
+      />
+    );
+  }
+
+  // All final (or the contest is fully wrapped).
+  const displayScore = finalScore > 0 ? finalScore : slotSum(slotFills, "finalFp");
+  return (
+    <Headline
+      label="Final"
+      statusLine="Contest final"
+      statusTone="muted"
+      bigNumber={displayScore.toFixed(1)}
+      bigNumberMuted={displayScore === 0}
+    />
   );
 }
 
-function DraftingHeadline({
-  filledCount,
-  projectedFp,
+function Headline({
+  label,
+  statusLine,
+  statusTone,
+  bigNumber,
+  bigNumberLabel,
+  bigNumberMuted,
 }: {
-  filledCount: number;
-  projectedFp: number;
+  label: string;
+  statusLine: string;
+  statusTone: "muted" | "accent" | "live";
+  bigNumber: string;
+  bigNumberLabel?: string;
+  bigNumberMuted: boolean;
 }) {
-  const complete = filledCount === 10;
   return (
     <section
       className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
-      aria-label="Drafting status"
+      aria-label={label}
     >
       <div className="flex items-baseline justify-between">
-        <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">Drafting</span>
+        <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">{label}</span>
         <span
           className={cn(
             "font-mono text-[10px] uppercase tracking-wider",
-            complete ? "text-emerald-400" : "text-[var(--text-3)]",
+            statusTone === "accent" && "text-emerald-400",
+            statusTone === "live" && "text-emerald-400",
+            statusTone === "muted" && "text-[var(--text-3)]",
           )}
         >
-          {filledCount} / 10 slots filled
+          {statusLine}
         </span>
       </div>
       <div
         className={cn(
           "font-mono text-3xl font-bold tabular-nums",
-          projectedFp > 0 ? "text-[var(--text)]" : "text-[var(--text-3)]",
+          bigNumberMuted ? "text-[var(--text-3)]" : "text-[var(--text)]",
         )}
       >
-        {projectedFp.toFixed(1)}
+        {bigNumber}
       </div>
-      <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-        Projected FP
-      </div>
+      {bigNumberLabel && (
+        <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+          {bigNumberLabel}
+        </div>
+      )}
     </section>
   );
 }
 
+// ── RosterSection — single persistent block ──────────────────────────
+
 function RosterSection({ slotFills }: { slotFills: Record<LineupPosition, SlotFill> }) {
   return (
-    <SidebarSection title="Roster">
+    <section className="flex flex-col gap-1">
+      <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Roster</h2>
       <ol data-scroll="lineup-roster" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-        {LINEUP_POSITIONS.map((pos) => {
-          const card = slotFills[pos].card;
-          return <RosterRow key={pos} position={pos} card={card} />;
-        })}
+        {LINEUP_POSITIONS.map((pos) => (
+          <RosterRow key={pos} position={pos} fill={slotFills[pos]} />
+        ))}
       </ol>
-    </SidebarSection>
+    </section>
   );
 }
 
-function RosterRow({ position, card }: { position: LineupPosition; card: LineupCardVM | null }) {
+function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFill }) {
+  const card = fill.card;
   if (!card) {
     return (
       <li className="grid grid-cols-[2rem_1fr] items-baseline gap-1 text-[11px]">
@@ -221,6 +238,7 @@ function RosterRow({ position, card }: { position: LineupPosition; card: LineupC
     );
   }
   const warning = playerWarning(card);
+  const fpCell = pickFpCell(fill);
   return (
     <li className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 text-[11px]">
       <span className="font-mono text-[var(--text-3)]">{position}</span>
@@ -235,50 +253,104 @@ function RosterRow({ position, card }: { position: LineupPosition; card: LineupC
           </span>
         )}
       </span>
-      <TierChip tier={card.tier} />
+      <SlotGameState info={fill.gameInfo ?? null} variant="chip" className="font-mono text-[9px]" />
       <span
         className={cn(
           "text-right font-mono tabular-nums",
-          card.contractPlays <= 2 ? "text-[#D4A647]" : "text-[var(--text-3)]",
+          fpCell.tone === "white" && "font-semibold text-[var(--text)]",
+          fpCell.tone === "emerald" && "font-semibold text-emerald-400",
+          fpCell.tone === "muted" && "text-[var(--text-3)]",
         )}
       >
-        {card.contractPlays}/{card.contractMax}
+        {fpCell.text}
       </span>
     </li>
   );
 }
 
-function TierChip({ tier }: { tier: CardTier }) {
-  const colorVar = `var(--tier-${tier})`;
+/**
+ * FP cell adapts through the day:
+ *   scheduled w/ projected → projected (muted)
+ *   live                   → liveFp (emerald)
+ *   final                  → finalFp (white)
+ *   otherwise              → em-dash
+ */
+function pickFpCell(fill: SlotFill): { text: string; tone: "muted" | "emerald" | "white" } {
+  const status = fill.gameInfo?.status ?? null;
+  if (status === "live") return { text: fill.liveFp.toFixed(1), tone: "emerald" };
+  if (status === "final") return { text: fill.finalFp.toFixed(1), tone: "white" };
+  // Scheduled or off-day: show projected FP if we have a card and it makes sense.
+  if (fill.card && status === "scheduled") {
+    const proj = computeSingleProjected(fill);
+    return { text: proj.toFixed(1), tone: "muted" };
+  }
+  return { text: "—", tone: "muted" };
+}
+
+// ── Tabs — Lineup Actions + Live Events ──────────────────────────────
+
+function SidebarTabs({
+  slotFills,
+  autoSubMode,
+  onAutoSubModeChange,
+  allSlotsLocked,
+}: {
+  slotFills: Record<LineupPosition, SlotFill>;
+  autoSubMode: AutoSubMode;
+  onAutoSubModeChange: (mode: AutoSubMode) => void;
+  allSlotsLocked: boolean;
+}) {
   return (
-    <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: colorVar }}>
-      {tier.charAt(0).toUpperCase()}
-    </span>
+    <Tabs defaultValue="actions" className="mt-auto flex min-h-0 flex-1 flex-col gap-3">
+      <TabsList className="w-full">
+        <TabsTrigger value="actions" className="flex-1 text-xs">
+          Actions
+        </TabsTrigger>
+        <TabsTrigger value="events" className="flex-1 text-xs">
+          Events
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="actions" className="flex flex-col gap-3">
+        <LineupActions
+          slotFills={slotFills}
+          autoSubMode={autoSubMode}
+          onAutoSubModeChange={onAutoSubModeChange}
+          allSlotsLocked={allSlotsLocked}
+        />
+      </TabsContent>
+      <TabsContent value="events" className="min-h-0 flex-1">
+        <EventFeed />
+      </TabsContent>
+    </Tabs>
   );
 }
 
-function SubmitSection({
+function LineupActions({
+  slotFills,
   autoSubMode,
   onAutoSubModeChange,
-  canSubmit,
-  submitting,
-  locked,
-  lockCountdown,
-  filledCount,
-  onSubmit,
+  allSlotsLocked,
 }: {
+  slotFills: Record<LineupPosition, SlotFill>;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
-  canSubmit: boolean;
-  submitting: boolean;
-  locked: boolean;
-  lockCountdown: string;
-  filledCount: number;
-  onSubmit: () => void;
+  allSlotsLocked: boolean;
 }) {
+  const warnings = LINEUP_POSITIONS.flatMap((pos) => {
+    const card = slotFills[pos].card;
+    if (!card) return [];
+    const reason = cardWarning(card);
+    if (!reason) return [];
+    return [{ position: pos, playerName: shortName(card.playerName), reason }];
+  });
+
   return (
-    <div className="mt-auto flex flex-col gap-3 border-t border-[var(--border)] pt-3">
-      <fieldset disabled={locked} className="flex flex-col gap-1 disabled:opacity-60">
+    <>
+      <fieldset
+        disabled={allSlotsLocked}
+        className="flex flex-col gap-1 disabled:opacity-60"
+        aria-label="Auto-sub mode"
+      >
         <legend className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
           Auto-sub
         </legend>
@@ -295,207 +367,30 @@ function SubmitSection({
           onChange={onAutoSubModeChange}
         />
       </fieldset>
-      <div className="flex flex-col gap-2">
-        <p className="text-xs text-[var(--text-3)]">
-          {locked ? <>Locked · {lockCountdown}</> : <>Locks in {lockCountdown}</>}
-        </p>
-        <Button onClick={onSubmit} disabled={!canSubmit} className="w-full">
-          {submitting
-            ? "Submitting…"
-            : locked
-              ? "Locked"
-              : filledCount < 10
-                ? `Fill ${10 - filledCount} more`
-                : "Submit lineup"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function formatPosition(pos: LineupPosition): string {
-  switch (pos) {
-    case "C":
-      return "Catcher";
-    case "1B":
-      return "First Baseman";
-    case "2B":
-      return "Second Baseman";
-    case "3B":
-      return "Third Baseman";
-    case "SS":
-      return "Shortstop";
-    case "OF1":
-    case "OF2":
-    case "OF3":
-      return "Outfielder";
-    case "SP1":
-    case "SP2":
-      return "Pitcher";
-    default:
-      return pos;
-  }
-}
-
-function playerWarning(card: LineupCardVM): string | null {
-  if (card.isExpired) return "Contract expired";
-  if (card.playerStatus === "il") return "On IL";
-  if (card.playerStatus === "dfa") return "FA / DFA";
-  return null;
-}
-
-// ── Post-submit (submitted / live / final) ───────────────────────────
-
-function PostSubmitContent({
-  slotFills,
-  entryStatus,
-  liveScore,
-  finalScore,
-  contestGameIds,
-}: Props) {
-  const isFinal = entryStatus === "final";
-  const displayScore = isFinal
-    ? finalScore
-    : liveScore > 0
-      ? liveScore
-      : slotSum(slotFills, "liveFp") + slotSum(slotFills, "finalFp");
-
-  const latestInning = useLatestInning();
-  const { count: gamesActive, ready: gamesReady } = useGamesActive(contestGameIds);
-
-  return (
-    <>
-      {/* Polish spec §100 (Phase 34). Score + status are the headline;
-          merged into one block at the top so users see "how am I
-          doing" + "what's happening" at a glance. */}
-      <ScoreHeadline
-        isFinal={isFinal}
-        displayScore={displayScore}
-        entryStatus={entryStatus}
-        latestInning={latestInning}
-        gamesActive={gamesActive}
-        gamesReady={gamesReady}
-      />
-
-      <BoxScoreSection slotFills={slotFills} isFinal={isFinal} />
-
-      <EventFeed />
-    </>
-  );
-}
-
-function ScoreHeadline({
-  isFinal,
-  displayScore,
-  entryStatus,
-  latestInning,
-  gamesActive,
-  gamesReady,
-}: {
-  isFinal: boolean;
-  displayScore: number;
-  entryStatus: EntryStatus;
-  latestInning: InningInfo | null;
-  gamesActive: number;
-  gamesReady: boolean;
-}) {
-  let statusLabel: string;
-  switch (entryStatus) {
-    case "submitted":
-      statusLabel = "Waiting on first pitch";
-      break;
-    case "live":
-      statusLabel = liveLabel(latestInning, gamesActive, gamesReady);
-      break;
-    case "final":
-      statusLabel = "Contest final";
-      break;
-    default:
-      statusLabel = "";
-  }
-  return (
-    <section
-      className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
-      aria-label="Live score"
-    >
-      <div className="flex items-baseline justify-between">
-        <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">
-          {isFinal ? "Final" : "Live"}
-        </span>
-        <span
-          className={cn(
-            "font-mono text-[10px] uppercase tracking-wider",
-            entryStatus === "live" ? "text-emerald-400" : "text-[var(--text-3)]",
-          )}
-        >
-          {statusLabel}
-        </span>
-      </div>
-      <div
-        className={cn(
-          "font-mono text-3xl font-bold tabular-nums",
-          displayScore > 0 ? "text-[var(--text)]" : "text-[var(--text-3)]",
+      <section className="flex flex-col gap-1">
+        <h3 className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+          Warnings
+        </h3>
+        {warnings.length === 0 ? (
+          <p className="text-[11px] text-[var(--text-3)]">No warnings.</p>
+        ) : (
+          <ul className="flex flex-col gap-0.5">
+            {warnings.map((w) => (
+              <li
+                key={`${w.position}-${w.reason}`}
+                className="grid grid-cols-[2rem_1fr_auto] items-baseline gap-1 text-[11px]"
+              >
+                <span className="font-mono text-[var(--text-3)]">{w.position}</span>
+                <span className="truncate text-[var(--text-2)]">{w.playerName}</span>
+                <span className="font-mono text-[9px] uppercase tracking-wider text-[#D4A647]">
+                  {w.reason}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
-      >
-        {displayScore.toFixed(1)}
-      </div>
-    </section>
-  );
-}
-
-function BoxScoreSection({
-  slotFills,
-  isFinal,
-}: {
-  slotFills: Record<LineupPosition, SlotFill>;
-  isFinal: boolean;
-}) {
-  return (
-    <SidebarSection title="Box Score">
-      <ol className="flex flex-col gap-0.5">
-        {LINEUP_POSITIONS.map((pos) => {
-          const fill = slotFills[pos];
-          const fp = isFinal ? fill.finalFp : fill.liveFp || fill.finalFp;
-          const status = fill.gameInfo?.status ?? null;
-          const gameStarted = status === "live" || status === "final";
-          const hasPlayerInSlot = fill.card !== null;
-          const showNumber = hasPlayerInSlot && gameStarted;
-          const hasScored = fp !== 0 || fill.finalFp !== 0;
-          const playerLabel = fill.card ? shortName(fill.card.playerName) : "—";
-          return (
-            <li
-              key={pos}
-              className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 text-[11px]"
-            >
-              <span className="font-mono text-[var(--text-3)]">{pos}</span>
-              <span
-                className={cn(
-                  "truncate",
-                  fill.card ? "text-[var(--text-2)]" : "text-[var(--text-3)]",
-                )}
-              >
-                {playerLabel}
-              </span>
-              <SlotGameState
-                info={fill.gameInfo ?? null}
-                variant="chip"
-                className="font-mono text-[9px]"
-              />
-              <span
-                className={cn(
-                  "text-right font-mono tabular-nums",
-                  showNumber && hasScored
-                    ? "font-semibold text-[var(--text)]"
-                    : "text-[var(--text-3)]",
-                )}
-              >
-                {showNumber ? fp.toFixed(1) : "—"}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </SidebarSection>
+      </section>
+    </>
   );
 }
 
@@ -547,11 +442,56 @@ function ModeRadio({
   );
 }
 
-/* Phase 35: per-slot warnings moved onto the RosterRow (see
- * `playerWarning`) — displayed as a `!` glyph next to the name.
- * The old aggregated list in the Ready-to-play section was
- * removed; warning origin was never separable from the row it
- * referred to anyway. */
+function formatPosition(pos: LineupPosition): string {
+  switch (pos) {
+    case "C":
+      return "Catcher";
+    case "1B":
+      return "First Baseman";
+    case "2B":
+      return "Second Baseman";
+    case "3B":
+      return "Third Baseman";
+    case "SS":
+      return "Shortstop";
+    case "OF1":
+    case "OF2":
+    case "OF3":
+      return "Outfielder";
+    case "SP1":
+    case "SP2":
+      return "Pitcher";
+    default:
+      return pos;
+  }
+}
+
+function playerWarning(card: LineupCardVM): string | null {
+  if (card.isExpired) return "Contract expired";
+  if (card.playerStatus === "il") return "On IL";
+  if (card.playerStatus === "dfa") return "FA / DFA";
+  return null;
+}
+
+function cardWarning(card: LineupCardVM): string | null {
+  if (card.isExpired) return "expired";
+  if (card.playerStatus === "il") return "IL";
+  if (card.playerStatus === "dfa") return "FA/DFA";
+  if (card.contractPlays > 0 && card.contractPlays <= 2)
+    return `${card.contractPlays} play${card.contractPlays === 1 ? "" : "s"}`;
+  return null;
+}
+
+// Re-exported so LineupView's legacy TierChip pattern still has a
+// callable import path; the new RosterRow no longer uses it.
+export function TierChip({ tier }: { tier: CardTier }) {
+  const colorVar = `var(--tier-${tier})`;
+  return (
+    <span className="font-mono text-[9px] uppercase tracking-wider" style={{ color: colorVar }}>
+      {tier.charAt(0).toUpperCase()}
+    </span>
+  );
+}
 
 const TIER_BASELINE_FP: Record<"bronze" | "silver" | "gold" | "diamond", number> = {
   bronze: 3,
@@ -563,12 +503,14 @@ const TIER_BASELINE_FP: Record<"bronze" | "silver" | "gold" | "diamond", number>
 function computeProjectedFp(slotFills: Record<LineupPosition, SlotFill>): number {
   let total = 0;
   for (const position of LINEUP_POSITIONS) {
-    const fill = slotFills[position];
-    if (!fill.card) continue;
-    const playsUsed = Math.max(0, fill.card.contractMax - fill.card.contractPlays);
-    const perCard =
-      playsUsed > 0 ? fill.card.careerFp / playsUsed : TIER_BASELINE_FP[fill.card.tier];
-    total += perCard + (fill.appliedToken?.bonusFp ?? 0);
+    total += computeSingleProjected(slotFills[position]);
   }
   return total;
+}
+
+function computeSingleProjected(fill: SlotFill): number {
+  if (!fill.card) return 0;
+  const playsUsed = Math.max(0, fill.card.contractMax - fill.card.contractPlays);
+  const perCard = playsUsed > 0 ? fill.card.careerFp / playsUsed : TIER_BASELINE_FP[fill.card.tier];
+  return perCard + (fill.appliedToken?.bonusFp ?? 0);
 }

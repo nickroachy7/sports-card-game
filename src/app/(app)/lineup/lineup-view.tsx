@@ -7,12 +7,7 @@ import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
 import { quickSellCards } from "@/app/actions/cards";
-import {
-  setAutoSubMode,
-  submitLineup,
-  swapLineupSlots,
-  updateLineupSlot,
-} from "@/app/actions/lineup";
+import { setAutoSubMode, swapLineupSlots, updateLineupSlot } from "@/app/actions/lineup";
 import type { OpenPackResult, OpenPacksBatchResult } from "@/app/actions/packs";
 import { fetchRevealedCards, type RevealedCard } from "@/app/actions/packs-reveal";
 import { applyToken, removeToken } from "@/app/actions/tokens";
@@ -86,7 +81,6 @@ export function LineupView(props: LineupViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
-  const [submitting, startSubmit] = useTransition();
   const [mode, setMode] = useState<AutoSubMode>(props.autoSubMode);
   // Polish spec §96 (Phase 32). Auto-scroll the main container when
   // a drag is in progress near the viewport edge. Without this,
@@ -111,11 +105,6 @@ export function LineupView(props: LineupViewProps) {
   // has started. `locked=true` here only when the contest is fully
   // final — nothing can be modified.
   const locked = props.entryStatus === "final";
-  // Legacy entry-status indicator for sidebar + bench chrome — shows
-  // "locked" vibes once the user has submitted, even if individual
-  // slots are still editable.
-  const submitted = props.entryStatus !== "building";
-
   const cardsById = useMemo(() => {
     const map = new Map<string, LineupCardVM>();
     for (const c of props.cards) map.set(c.id, c);
@@ -341,8 +330,7 @@ export function LineupView(props: LineupViewProps) {
   }, [slotFills]);
 
   const filledCount = optimisticSlots.filter((s) => s.cardId !== null).length;
-  // Submit is a one-time entry step; only meaningful in building state.
-  const canSubmit = filledCount === 10 && !submitted && !submitting;
+  void filledCount; // used by the per-slot optimistic patch ordering above; no direct consumer now that Submit is gone.
 
   // Polish spec §104 (Phase 35). Multi-select state lives on
   // LineupView so CardsPanel + sidebar swap both read the same
@@ -536,19 +524,9 @@ export function LineupView(props: LineupViewProps) {
     });
   }
 
-  function handleSubmit() {
-    startSubmit(async () => {
-      const result = await submitLineup({ entryId: props.entryId });
-      if (!result.ok) {
-        toast.error(result.error.message);
-        return;
-      }
-      toast.success("Lineup submitted. Locked until first pitch.");
-      router.refresh();
-    });
-  }
-
-  const lockCountdown = useLockCountdown(props.lineupLocksAt);
+  // Polish spec §126 (Phase 39). Submit button and lock countdown
+  // are gone. Lineup commits implicitly as each slot's game starts.
+  // `useLockCountdown` + `handleSubmit` removed with this phase.
 
   const resolveCard = (cardId: string) => cardsById.get(cardId) ?? null;
 
@@ -805,11 +783,13 @@ export function LineupView(props: LineupViewProps) {
     router.refresh();
   }
 
-  // Post-submit: wrap the tree in <LiveEventsProvider> so the Event
-  // Feed + per-slot FP glow share one Realtime channel (polish spec
-  // §21). Building state skips the provider entirely — no submitted
-  // lineup means no events to narrate.
-  const isPostSubmit = props.entryStatus !== "building";
+  // Polish spec §122 (Phase 39). LiveEventsProvider +
+  // CardContractEventsProvider now mount UNCONDITIONALLY so the
+  // sidebar's Events tab has a feed (and the per-slot FP glow is
+  // ready) regardless of entry status. Previously only mounted
+  // post-submit; the unified sidebar removed that distinction.
+  // Providers are no-ops when no games are live for the user's
+  // lineup.
 
   const shell = (
     <LineupShell
@@ -857,11 +837,6 @@ export function LineupView(props: LineupViewProps) {
             contestGameIds={props.contestGameIds}
             autoSubMode={mode}
             onAutoSubModeChange={handleModeChange}
-            canSubmit={canSubmit}
-            submitting={submitting}
-            locked={locked}
-            lockCountdown={lockCountdown}
-            onSubmit={handleSubmit}
           />
         )
       }
@@ -889,19 +864,15 @@ export function LineupView(props: LineupViewProps) {
     <DndProvider backend={HTML5Backend}>
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
       <TokenDragLayer resolveToken={resolveToken} />
-      {isPostSubmit ? (
-        <LiveEventsProvider
-          lineupPlayers={lineupPlayers}
-          contestGameIds={props.contestGameIds}
-          gameMatchupById={props.gameMatchupById}
-        >
-          <CardContractEventsProvider rosteredCardIds={rosteredCardIds}>
-            {shell}
-          </CardContractEventsProvider>
-        </LiveEventsProvider>
-      ) : (
-        shell
-      )}
+      <LiveEventsProvider
+        lineupPlayers={lineupPlayers}
+        contestGameIds={props.contestGameIds}
+        gameMatchupById={props.gameMatchupById}
+      >
+        <CardContractEventsProvider rosteredCardIds={rosteredCardIds}>
+          {shell}
+        </CardContractEventsProvider>
+      </LiveEventsProvider>
       {/* Polish spec §109 (Phase 36). FAB + buy modal + reveal.
           FAB hidden while a reveal is in flight so it doesn't
           overlap the modal's dismiss affordance. */}
@@ -983,21 +954,5 @@ function DetailSidebar({
   );
 }
 
-/** Short countdown string to the lock time. 30-second tick granularity
- *  is enough for Phase 2 (Live state in Phase 3 ticks per-second). */
-function useLockCountdown(lockIso: string): string {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => tick((n) => n + 1), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  const now = Date.now();
-  const lockMs = new Date(lockIso).getTime();
-  const delta = lockMs - now;
-  if (delta <= 0) return "past lock time";
-  const hours = Math.floor(delta / 3_600_000);
-  const mins = Math.floor((delta % 3_600_000) / 60_000);
-  if (hours > 24) return `${Math.floor(hours / 24)}d`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
-}
+/* Phase 39 removed `useLockCountdown`. Kept in git history; there's
+ * no longer a user-facing lock countdown (no global lock moment). */
