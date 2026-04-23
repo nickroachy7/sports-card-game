@@ -114,3 +114,48 @@ export async function fetchSlotGameByCardId(
   }
   return out;
 }
+
+/**
+ * Polish spec §69 (Phase 23). Build a `game.id → "{away}@{home}"`
+ * matchup map for the Event Feed chip.
+ *
+ * Separate from `fetchSlotGameByCardId` because:
+ *   - Event feed receives events for any contest game (including DH
+ *     siblings that the DISTINCT ON collapses in the slot query).
+ *   - No card join needed — this is global for the contest.
+ *
+ * Lives in the same module so callers that already pull slot games
+ * can do both in one import. Returns `{}` if the contest has no
+ * games (e.g. seed rendering, empty slate).
+ */
+export async function fetchGameMatchupsById(
+  contestGameIds: string[],
+): Promise<Record<string, string>> {
+  if (contestGameIds.length === 0) return {};
+  type MatchupRow = {
+    id: string;
+    home_abbr: string | null;
+    away_abbr: string | null;
+  };
+  const db = getDb();
+  const res = await db.execute<MatchupRow>(sql`
+    SELECT
+      g.id,
+      ht.abbreviation AS home_abbr,
+      at.abbreviation AS away_abbr
+    FROM public.game g
+    LEFT JOIN public.team ht ON ht.id = g.home_team_id
+    LEFT JOIN public.team at ON at.id = g.away_team_id
+    WHERE g.id = ANY(${sql`ARRAY[${sql.join(
+      contestGameIds.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    )}]::uuid[]`})
+  `);
+  const out: Record<string, string> = {};
+  for (const row of res.rows) {
+    const away = row.away_abbr ?? "???";
+    const home = row.home_abbr ?? "???";
+    out[row.id] = `${away}@${home}`;
+  }
+  return out;
+}

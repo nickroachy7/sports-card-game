@@ -116,4 +116,12 @@ export type LineupViewProps = {
    * per-slot lock derivation. Keyed by `card.id`.
    */
   slotGameByCardId: Record<string, SlotGameInfo>;
+  /**
+   * Polish spec §69 (Phase 23). Pre-formatted "{away}@{home}" matchup
+   * strings keyed by `game.id`. Used by the Event Feed chip so each
+   * event row says which game it belongs to. Spans every contest
+   * game (including DH siblings), not just the DISTINCT ON winners
+   * surfaced to the slot footer.
+   */
+  gameMatchupById: Record<string, string>;
 };

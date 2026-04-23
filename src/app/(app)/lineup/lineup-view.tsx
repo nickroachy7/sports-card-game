@@ -18,8 +18,8 @@ import { SelectedCardSidebar } from "@/components/card/SelectedCardSidebar";
 import { SidebarFadeSwap } from "@/components/layout/SidebarFadeSwap";
 import { BenchDrawer } from "@/components/lineup/BenchDrawer";
 import { CardContractEventsProvider } from "@/components/lineup/CardContractEventsProvider";
-import { DiamondGrid } from "@/components/lineup/DiamondGrid";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
+import { LineupGrid } from "@/components/lineup/LineupGrid";
 import { LineupShell } from "@/components/lineup/LineupShell";
 import { LineupSidebar, shortName } from "@/components/lineup/LineupSidebar";
 import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
@@ -383,26 +383,8 @@ export function LineupView(props: LineupViewProps) {
 
   const shell = (
     <LineupShell
-      header={
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3">
-          <div className="flex flex-col">
-            <h1 className="font-sans text-base font-bold tracking-tight text-[var(--text)]">
-              {props.contestName}
-            </h1>
-            <span className="text-xs text-[var(--text-3)]">
-              {submitted ? (
-                <>
-                  {props.entryStatus === "final" ? "Final" : "Submitted"} · slots lock at game time
-                </>
-              ) : (
-                <>Locks in {lockCountdown}</>
-              )}
-            </span>
-          </div>
-        </header>
-      }
-      diamond={
-        <DiamondGrid
+      grid={
+        <LineupGrid
           slotFills={slotFills}
           onCardDropped={handleCardDropped}
           onTokenDropped={handleTokenDropped}
@@ -424,6 +406,7 @@ export function LineupView(props: LineupViewProps) {
             />
           ) : (
             <LineupSidebar
+              contestName={props.contestName}
               slotFills={slotFills}
               entryStatus={props.entryStatus}
               liveScore={props.liveScore}
@@ -460,7 +443,11 @@ export function LineupView(props: LineupViewProps) {
       <CardDragLayer accepts={DRAG_TYPES.CARD} resolveCard={resolveCard} />
       <TokenDragLayer resolveToken={resolveToken} />
       {isPostSubmit ? (
-        <LiveEventsProvider lineupPlayers={lineupPlayers} contestGameIds={props.contestGameIds}>
+        <LiveEventsProvider
+          lineupPlayers={lineupPlayers}
+          contestGameIds={props.contestGameIds}
+          gameMatchupById={props.gameMatchupById}
+        >
           <CardContractEventsProvider rosteredCardIds={rosteredCardIds}>
             {shell}
           </CardContractEventsProvider>

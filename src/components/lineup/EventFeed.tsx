@@ -49,6 +49,11 @@ export function EventFeed() {
 }
 
 function FeedRow({ event: e }: { event: FeedEvent }) {
+  // Polish spec §69 (Phase 23) — inline matchup chip. Rendered next to
+  // the existing timeLabel so users can tell which game an event
+  // belongs to without hunting. Chip tone mirrors the muted state
+  // pills from §62. Null matchup = no chip (token events, initial
+  // render races where the matchup map hasn't loaded).
   return (
     <li className="grid grid-cols-[1fr_auto] items-baseline gap-2 text-[11px] leading-tight">
       <span className="truncate text-[var(--text-2)]">
@@ -66,7 +71,14 @@ function FeedRow({ event: e }: { event: FeedEvent }) {
       >
         {fmtDelta(e.delta)}
       </span>
-      <span className="col-span-2 -mt-0.5 text-[10px] text-[var(--text-3)]">{e.timeLabel}</span>
+      <span className="-mt-0.5 col-span-2 flex items-center gap-1.5 text-[10px] text-[var(--text-3)]">
+        <span>{e.timeLabel}</span>
+        {e.gameMatchup && (
+          <span className="inline-flex items-center whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0 font-mono text-[9px] uppercase tracking-wider">
+            {e.gameMatchup}
+          </span>
+        )}
+      </span>
     </li>
   );
 }

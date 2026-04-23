@@ -25,6 +25,9 @@ type SlotFill = {
 type EntryStatus = "building" | "submitted" | "live" | "final";
 
 type Props = {
+  /** Polish spec §72 (Phase 23). Contest name was in the top bar pre-P23;
+   *  now rendered at the top of the sidebar above the box score. */
+  contestName: string;
   slotFills: Record<LineupPosition, SlotFill>;
   entryStatus: EntryStatus;
   liveScore: number;
@@ -42,9 +45,59 @@ type Props = {
 
 export function LineupSidebar(props: Props) {
   if (props.entryStatus === "building") {
-    return <BuildingSidebar {...props} />;
+    return (
+      <>
+        <ContestHeaderCard
+          contestName={props.contestName}
+          entryStatus={props.entryStatus}
+          lockCountdown={props.lockCountdown}
+        />
+        <BuildingSidebar {...props} />
+      </>
+    );
   }
-  return <PostSubmitSidebar {...props} />;
+  return (
+    <>
+      <ContestHeaderCard
+        contestName={props.contestName}
+        entryStatus={props.entryStatus}
+        lockCountdown={props.lockCountdown}
+      />
+      <PostSubmitSidebar {...props} />
+    </>
+  );
+}
+
+/**
+ * Polish spec §72 (Phase 23). Top-of-sidebar contest header. Relocated
+ * from the pre-P23 top bar. Copy mirrors the old header: contest name
+ * bold; status/countdown line muted underneath. Kept visually compact
+ * so it sits above the Live Score / Readiness block cleanly.
+ */
+function ContestHeaderCard({
+  contestName,
+  entryStatus,
+  lockCountdown,
+}: {
+  contestName: string;
+  entryStatus: EntryStatus;
+  lockCountdown: string;
+}) {
+  const submitted = entryStatus !== "building";
+  return (
+    <div className="flex flex-col gap-0.5 border-b border-[var(--border)] pb-3">
+      <h1 className="font-sans text-sm font-bold tracking-tight text-[var(--text)]">
+        {contestName}
+      </h1>
+      <span className="text-[11px] text-[var(--text-3)]">
+        {submitted ? (
+          <>{entryStatus === "final" ? "Final" : "Submitted"} · slots lock at game time</>
+        ) : (
+          <>Locks in {lockCountdown}</>
+        )}
+      </span>
+    </div>
+  );
 }
 
 // ── Building state ────────────────────────────────────────────────────
@@ -184,6 +237,14 @@ function BoxScoreSection({
         {LINEUP_POSITIONS.map((pos) => {
           const fill = slotFills[pos];
           const fp = isFinal ? fill.finalFp : fill.liveFp || fill.finalFp;
+          // Polish spec §71 (Phase 23). Show `0.0` once the player's
+          // game is live or final — zero-is-a-number-not-absence. Pre-
+          // game (scheduled, null, postponed/suspended/canceled) keeps
+          // the em-dash since there is genuinely no play yet.
+          const status = fill.gameInfo?.status ?? null;
+          const gameStarted = status === "live" || status === "final";
+          const hasPlayerInSlot = fill.card !== null;
+          const showNumber = hasPlayerInSlot && gameStarted;
           const hasScored = fp !== 0 || fill.finalFp !== 0;
           const playerLabel = fill.card ? shortName(fill.card.playerName) : "—";
           return (
@@ -209,10 +270,12 @@ function BoxScoreSection({
               <span
                 className={cn(
                   "text-right font-mono tabular-nums",
-                  hasScored ? "font-semibold text-[var(--text)]" : "text-[var(--text-3)]",
+                  showNumber && hasScored
+                    ? "font-semibold text-[var(--text)]"
+                    : "text-[var(--text-3)]",
                 )}
               >
-                {hasScored ? fp.toFixed(1) : "—"}
+                {showNumber ? fp.toFixed(1) : "—"}
               </span>
             </li>
           );

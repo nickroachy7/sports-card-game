@@ -57,12 +57,17 @@ export type FeedEvent = {
   timeLabel: string;
   inning: number | null;
   inningHalf: "top" | "bottom" | null;
+  /** Polish spec §69 (Phase 23). Pre-formatted `"{away}@{home}"` for
+   *  the game this event belongs to. Null if the game isn't in our
+   *  matchup map (rare initial-render race). */
+  gameMatchup: string | null;
 };
 
 export type ConnectionStatus = "connecting" | "live" | "reconnecting";
 
 type RawGameEvent = {
   id: string;
+  game_id: string;
   event_type: string;
   play_type: string | null;
   batter_player_id: string | null;
@@ -87,10 +92,19 @@ type Props = {
   lineupPlayers: FeedPlayer[];
   /** Filters the initial fetch to contest games only (reduces payload). */
   contestGameIds: string[];
+  /** Polish spec §69 (Phase 23). `game.id → "{away}@{home}"` pre-built
+   *  by the server. Events that arrive via Realtime use this to render
+   *  the matchup chip inline with the inning. */
+  gameMatchupById: Record<string, string>;
   children: ReactNode;
 };
 
-export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: Props) {
+export function LiveEventsProvider({
+  lineupPlayers,
+  contestGameIds,
+  gameMatchupById,
+  children,
+}: Props) {
   const playerIds = useMemo(() => lineupPlayers.map((p) => p.playerId), [lineupPlayers]);
   const playerLookup = useMemo(() => {
     const map = new Map<string, FeedPlayer>();
@@ -115,7 +129,7 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
       const { data, error } = await supabase
         .from("game_event")
         .select(
-          "id, event_type, play_type, batter_player_id, pitcher_player_id, event_at, inning, inning_half",
+          "id, game_id, event_type, play_type, batter_player_id, pitcher_player_id, event_at, inning, inning_half",
         )
         .in("game_id", contestGameIds)
         .or(
@@ -127,7 +141,7 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
       const rows = (data ?? []) as RawGameEvent[];
       const mapped: FeedEvent[] = [];
       for (const row of rows) {
-        const fe = projectRow(row, playerLookup);
+        const fe = projectRow(row, playerLookup, gameMatchupById);
         if (fe && !seenIdsRef.current.has(fe.id)) {
           seenIdsRef.current.add(fe.id);
           mapped.push(fe);
@@ -150,7 +164,7 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
         { event: "INSERT", schema: "public", table: "game_event" },
         (payload) => {
           const row = payload.new as RawGameEvent;
-          const fe = projectRow(row, playerLookup);
+          const fe = projectRow(row, playerLookup, gameMatchupById);
           if (!fe) return;
           if (seenIdsRef.current.has(fe.id)) return;
           seenIdsRef.current.add(fe.id);
@@ -162,7 +176,7 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
         const next = payload.new as Partial<RawGameRow>;
         const id = next.id;
         if (typeof id !== "string" || !contestGameIdSet.has(id)) return;
-        const fe = projectGameTransition(prev, next);
+        const fe = projectGameTransition(prev, next, gameMatchupById);
         if (!fe) return;
         if (seenIdsRef.current.has(fe.id)) return;
         seenIdsRef.current.add(fe.id);
@@ -193,7 +207,7 @@ export function LiveEventsProvider({ lineupPlayers, contestGameIds, children }: 
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [playerIds, playerLookup, contestGameIds]);
+  }, [playerIds, playerLookup, contestGameIds, gameMatchupById]);
 
   // Derive per-player latest + latest-inning from events. `events` is
   // already newest-first (we prepend on INSERT + initial fetch orders
@@ -256,7 +270,11 @@ export function useLatestInning(): LatestInning {
 
 // ── helpers ────────────────────────────────────────────────────────────
 
-function projectRow(row: RawGameEvent, players: Map<string, FeedPlayer>): FeedEvent | null {
+function projectRow(
+  row: RawGameEvent,
+  players: Map<string, FeedPlayer>,
+  gameMatchupById: Record<string, string>,
+): FeedEvent | null {
   if (!FEED_EVENT_TYPES.has(row.event_type)) return null;
   // A lineup player may be the batter, the pitcher, or both (rare but
   // possible if user owns both sides of a matchup). Prefer the player
@@ -279,6 +297,7 @@ function projectRow(row: RawGameEvent, players: Map<string, FeedPlayer>): FeedEv
     }),
     inning: row.inning,
     inningHalf: normalizeHalf(row.inning_half),
+    gameMatchup: gameMatchupById[row.game_id] ?? null,
   };
 }
 
@@ -306,6 +325,7 @@ type RawTokenAppRow = {
 function projectGameTransition(
   prev: Partial<RawGameRow>,
   next: Partial<RawGameRow>,
+  gameMatchupById: Record<string, string>,
 ): FeedEvent | null {
   const id = next.id;
   if (typeof id !== "string") return null;
@@ -315,6 +335,7 @@ function projectGameTransition(
 
   const now = new Date();
   const timeLabel = now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const gameMatchup = gameMatchupById[id] ?? null;
 
   if (prevStatus === "scheduled" && nextStatus === "live") {
     return {
@@ -326,6 +347,7 @@ function projectGameTransition(
       timeLabel,
       inning: null,
       inningHalf: null,
+      gameMatchup,
     };
   }
   if (prevStatus === "live" && nextStatus === "final") {
@@ -342,6 +364,7 @@ function projectGameTransition(
       timeLabel,
       inning: null,
       inningHalf: null,
+      gameMatchup,
     };
   }
   return null;
@@ -370,5 +393,9 @@ function projectTokenTrigger(
     timeLabel,
     inning: null,
     inningHalf: null,
+    // Token applications don't carry game context; the matchup chip
+    // is meaningless for a token-resolve event. Leave null — chip
+    // doesn't render.
+    gameMatchup: null,
   };
 }

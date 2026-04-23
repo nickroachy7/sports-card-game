@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 
 type Props = {
-  header: ReactNode;
-  diamond: ReactNode;
+  grid: ReactNode;
   sidebar: ReactNode;
   bench: ReactNode;
   tokens: ReactNode;
@@ -10,29 +9,29 @@ type Props = {
 
 /**
  * Fixed-viewport lineup layout.
- *   - Header row (shrink-0)
- *   - Main row: left column (diamond + bench + tokens stacked)
+ *   - Main row: left column (lineup grid + bench + tokens stacked)
  *     beside right sidebar (w-72, full height).
  *
- * Polish spec §38 (Phase 16): sidebar now extends from the header's
- * bottom edge to the viewport bottom, matching `<CollectionShell>`.
- * Bench + tokens live inside the left column (narrower than before
- * — they no longer span under the sidebar) but keep their existing
- * vertical position. The sidebar's own `overflow-auto` lets its
- * contents scroll independently when the selected-card detail
- * exceeds available height.
+ * Polish spec §72 (Phase 23): the top bar was removed. The contest
+ * name + status/countdown moved into the sidebar's first block
+ * (`<ContestHeaderCard>` inside `<LineupSidebar>`). That reclaims
+ * vertical space for the three-role-row lineup layout (§68).
  *
- * Polish spec §24 (Phase 13): the diamond lives directly in a flex
- * pane with native horizontal scroll when the viewport is narrower
- * than the minimum compressed diamond (~900px). No pan/zoom layer.
+ * Polish spec §38 (Phase 16): sidebar extends top-to-bottom.
+ * Bench + tokens live inside the left column (narrower than the
+ * sidebar-inclusive variant). The sidebar's own `overflow-auto`
+ * lets its contents scroll independently.
+ *
+ * Polish spec §24 (Phase 13): the main grid lives directly in a flex
+ * pane with native scroll if the viewport is narrower than the
+ * minimum lineup layout. No pan/zoom layer.
  */
-export function LineupShell({ header, diamond, sidebar, bench, tokens }: Props) {
+export function LineupShell({ grid, sidebar, bench, tokens }: Props) {
   return (
     <div className="flex h-full min-h-[720px] flex-col bg-[var(--bg)]">
-      {header}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex flex-1 items-center justify-center overflow-auto">{diamond}</div>
+          <div className="flex flex-1 items-start justify-center overflow-auto">{grid}</div>
           <div className="shrink-0">
             {bench}
             {tokens}

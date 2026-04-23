@@ -7,7 +7,7 @@ import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
-import { fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
+import { fetchGameMatchupsById, fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
 import type { LineupCardVM, LineupSlotVM, LineupTokenVM } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
@@ -180,10 +180,17 @@ export default async function LineupPage() {
   // `fetchSlotGameByCardId` for the DISTINCT ON + has_double_header
   // derivation. The Collection page uses the same helper so its
   // per-card "has game today" filter reads from the same source.
-  const slotGameByCardId = await fetchSlotGameByCardId(
-    contest.included_game_ids ?? [],
-    cards.map((c) => ({ id: c.id, teamId: c.teamId })),
-  );
+  //
+  // Polish spec §69 (Phase 23) — per-game matchup lookup for the
+  // Event Feed chip. Runs in parallel with the slot-game query since
+  // they're independent reads.
+  const [slotGameByCardId, gameMatchupById] = await Promise.all([
+    fetchSlotGameByCardId(
+      contest.included_game_ids ?? [],
+      cards.map((c) => ({ id: c.id, teamId: c.teamId })),
+    ),
+    fetchGameMatchupsById(contest.included_game_ids ?? []),
+  ]);
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({
     id: r.id,
@@ -227,6 +234,7 @@ export default async function LineupPage() {
         cardId: a.cardId,
       }))}
       slotGameByCardId={slotGameByCardId}
+      gameMatchupById={gameMatchupById}
     />
   );
 }
