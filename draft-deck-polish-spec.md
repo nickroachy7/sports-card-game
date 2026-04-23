@@ -6074,3 +6074,155 @@ surface the full name + trigger condition + bonus FP.
   launch; hover-only is fine).
 - Bulk remove from multiple slots at once.
 - Baserunners + pitcher-on-mound (still Phase 31 spec).
+
+---
+
+# Phase 38 — v1.23 (Drag feel polish + photo framing)
+
+Four drag-feel asks plus one unrelated photo cutoff fix.
+
+1. Tighter cursor follow + snappier motion everywhere.
+2. When a card or token is picked up, the source disappears
+   entirely (no ghost remains where it was).
+3. Invalid drops snap back fast (~150ms), not the current
+   0.55s spring-shake.
+4. Weighty drop-in — valid drops settle with a subtle
+   bounce so landing feels intentional.
+5. Player photos cut off oddly at the chin in some Card
+   renders; shift the object-position so faces sit fully
+   in frame without changing the card size.
+
+---
+
+## 116. Drag ghost tuning — tighter + snappier
+
+### Goal
+
+The drag ghost currently trails the cursor with a noticeable
+springy lag (stiffness 400, damping 30, mass 1). User wants
+tighter tracking and across-the-board snappier motion.
+
+### Changes
+
+- `CardDragLayer.tsx` + `TokenDragLayer.tsx`:
+  - Spring: `stiffness: 700, damping: 34, mass: 0.7` (was
+    `400 / 30 / 1`). Tighter follow, less overshoot.
+  - Keep the reduced-motion critical spring as-is.
+- Velocity-based card rotation: bump the multiplier slightly
+  (`vx * 0.004`, cap ±3°) so the tilt reacts faster without
+  becoming jittery.
+
+### Files
+
+- `src/components/card/CardDragLayer.tsx`
+- `src/components/token/TokenDragLayer.tsx`
+
+---
+
+## 117. Source hides fully on pickup
+
+### Goal
+
+Currently the source card (bench, lineup slot, token tray)
+dims to `opacity-40` while being dragged. The user's mental
+model is "the card is in my hand" — there shouldn't be a
+ghost at the source.
+
+### Changes
+
+- `BenchCard.tsx`: `opacity-40` → `opacity-0 pointer-events-none`.
+- `LineupSlot.tsx` (filled-slot drag source div): same.
+- `TrayTokenPip.tsx`: currently doesn't fade the source pip
+  at all — add `opacity-0 pointer-events-none` when
+  `isDragging`.
+
+### Layout note
+
+Because the source is `opacity-0` not `display-none`, the
+grid / tray layout doesn't shift during the drag. That's
+intentional (matches option A from the interview).
+
+---
+
+## 118. Invalid drop — fast snap-back (~150ms)
+
+### Goal
+
+Current `BounceBack` animates the ghost over 0.55s with a
+small side-to-side shake. Feels slow. User wants a fast
+bounce back to source (~150ms), no shake.
+
+### Changes
+
+In both `CardDragLayer.tsx` and `TokenDragLayer.tsx`
+`BounceBack`:
+
+- `duration: 0.55` → `0.15` on the x transition.
+- Drop the shake keyframes; tween straight from
+  `lastPointer` → `initialSourceOffset`.
+- `ease: "easeOut"` stays (reads as "snapping back to rest").
+- After the snap completes, the ghost unmounts instantly
+  (no lingering shake window).
+
+---
+
+## 119. Drop-in settle bounce
+
+### Goal
+
+When a valid drop lands, the destination card should briefly
+settle rather than appearing statically. Makes a drop feel
+like placing a real card.
+
+### Changes
+
+- Add `dropSettleKey` state to the drop-target slot: a
+  counter that increments whenever a drop is accepted.
+- Wrap the slot's card render in a `motion.div` with
+  `animate={{ scale: [0.92, 1.03, 1] }}` keyed by
+  `dropSettleKey` so each successful drop retriggers the
+  keyframes.
+- 180ms total duration. Skip when `useReducedMotion()` is
+  true.
+
+### Files
+
+- `src/components/lineup/LineupSlot.tsx` — wrap the filled-
+  slot card content.
+- `src/components/lineup/LineupGrid.tsx` — no changes
+  needed; `onCardDropped` already fires the trigger.
+
+---
+
+## 120. Player photo framing
+
+### Goal
+
+Some player headshots cut off the chin / jaw where the
+photo area ends and the name banner begins. Fix without
+changing the card's outer dimensions.
+
+### Changes
+
+- `mlbamHeadshotUrl()`: bump the default width. Both `small`
+  and `medium` sizes move to a 240px source width (was 120).
+  Crisper at all render scales; adequate for Retina.
+- `CardPhoto.tsx`: add `object-position: center 25%` so the
+  image's visible crop window sits higher (more head visible
+  at the top, chin stays in frame). `object-cover` kept for
+  consistent fill.
+- Test with a handful of tight-framed MLBAM shots (Nolan
+  Schanuel, Tyler Heineman) + loose-framed (Michael Busch,
+  Trea Turner) to make sure neither extreme loses face
+  integrity.
+
+---
+
+## 121. Not in scope for v1.23
+
+- Redesigning the drag ghost itself (size, shadow intensity,
+  etc.) — keeping current visual; only physics change.
+- Haptics / sound on drop. No audio pipeline yet.
+- Changing card dimensions.
+- Player photo crop overrides per-card (one global
+  `object-position` for now).
