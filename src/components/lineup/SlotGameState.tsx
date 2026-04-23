@@ -21,12 +21,35 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   info: SlotGameInfo | null;
-  variant?: "footer" | "chip";
+  /**
+   * - `footer` (default): full-copy footer rendered under lineup
+   *   slots. Returns null when `info` is null.
+   * - `chip`: compact PRE/LIVE/FINAL word for the Box Score row.
+   *   Returns null when info is null.
+   * - `bench`: same full copy as `footer`, but shows a muted
+   *   `OFF` when `info` is null so bench users know a card has
+   *   no game in today's contest (polish spec §58).
+   */
+  variant?: "footer" | "chip" | "bench";
   className?: string;
 };
 
 export function SlotGameState({ info, variant = "footer", className }: Props) {
-  if (!info) return null;
+  if (!info) {
+    if (variant === "bench") {
+      return (
+        <span
+          className={cn(
+            "whitespace-nowrap font-mono text-[10px] text-[var(--text-3)] uppercase leading-tight tracking-wider opacity-70",
+            className,
+          )}
+        >
+          OFF
+        </span>
+      );
+    }
+    return null;
+  }
 
   if (variant === "chip") {
     return (

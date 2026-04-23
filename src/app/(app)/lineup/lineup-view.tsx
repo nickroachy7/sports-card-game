@@ -445,6 +445,7 @@ export function LineupView(props: LineupViewProps) {
           cards={props.cards}
           assignedCardIds={assignedCardIds}
           appliedTokenByCardId={appliedTokenByCardId}
+          slotGameByCardId={props.slotGameByCardId}
           onRemoveToken={handleRemoveToken}
           onOpenDetail={handleOpenDetail}
           locked={locked}

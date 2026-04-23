@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
 import { Input } from "@/components/ui/input";
-import type { LineupCardVM } from "@/lib/lineup/types";
+import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 import { BenchCard } from "./BenchCard";
 
@@ -14,6 +14,9 @@ type Props = {
   cards: LineupCardVM[];
   assignedCardIds: Set<string>;
   appliedTokenByCardId: Map<string, AppliedTokenInfo>;
+  /** Polish spec §58 — keyed by card id; null entry or missing key =
+   *  no game in today's contest for that player. */
+  slotGameByCardId: Record<string, SlotGameInfo>;
   onRemoveToken: (applicationId: string) => void;
   onOpenDetail: (cardId: string) => void;
   locked: boolean;
@@ -23,6 +26,7 @@ export function BenchDrawer({
   cards,
   assignedCardIds,
   appliedTokenByCardId,
+  slotGameByCardId,
   onRemoveToken,
   onOpenDetail,
   locked,
@@ -36,6 +40,11 @@ export function BenchDrawer({
     // the bench entirely. The bench tray is for "unused" — in-use
     // cards read as clutter. Header counter below acknowledges the
     // hidden set so users know nothing was lost.
+    //
+    // Polish spec §59 (Phase 21): priority-sort by game state so
+    // actionable cards (pre-game) cluster at the front. Pre-game
+    // ordered by earliest start. Live → Final → OFF trail.
+    // Alphabetical within each bucket.
     return cards
       .filter((c) => {
         if (assignedCardIds.has(c.id)) return false;
@@ -44,8 +53,21 @@ export function BenchDrawer({
         if (q && !c.playerName.toLowerCase().includes(q)) return false;
         return true;
       })
-      .sort((a, b) => a.playerName.localeCompare(b.playerName));
-  }, [cards, filter, search, assignedCardIds]);
+      .sort((a, b) => {
+        const rA = stateRank(slotGameByCardId[a.id] ?? null);
+        const rB = stateRank(slotGameByCardId[b.id] ?? null);
+        if (rA !== rB) return rA - rB;
+        // Pre-game bucket: earliest start first.
+        if (rA === 0) {
+          const tA = slotGameByCardId[a.id]?.scheduledStart ?? null;
+          const tB = slotGameByCardId[b.id]?.scheduledStart ?? null;
+          if (tA && tB && tA !== tB) return tA < tB ? -1 : 1;
+          if (tA && !tB) return -1;
+          if (!tA && tB) return 1;
+        }
+        return a.playerName.localeCompare(b.playerName);
+      });
+  }, [cards, filter, search, assignedCardIds, slotGameByCardId]);
 
   return (
     <section className="flex flex-col gap-2 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2">
@@ -102,6 +124,7 @@ export function BenchDrawer({
               card={card}
               assigned={assignedCardIds.has(card.id)}
               appliedToken={appliedTokenByCardId.get(card.id)}
+              gameInfo={slotGameByCardId[card.id] ?? null}
               onRemoveToken={onRemoveToken}
               onOpenDetail={onOpenDetail}
               disabled={locked || assignedCardIds.has(card.id) || card.isExpired}
@@ -112,6 +135,21 @@ export function BenchDrawer({
       )}
     </section>
   );
+}
+
+/**
+ * Polish spec §59 — priority-sort rank by game state.
+ *   0 = scheduled (pre-game, actionable)
+ *   1 = live (game in progress)
+ *   2 = final (done)
+ *   3 = off-day / postponed / suspended / canceled
+ */
+function stateRank(info: SlotGameInfo | null): number {
+  if (!info) return 3;
+  if (info.status === "scheduled") return 0;
+  if (info.status === "live") return 1;
+  if (info.status === "final") return 2;
+  return 3;
 }
 
 function FilterButton({
