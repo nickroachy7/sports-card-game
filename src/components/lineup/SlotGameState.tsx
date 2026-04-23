@@ -35,16 +35,15 @@ type Props = {
 };
 
 export function SlotGameState({ info, variant = "footer", className }: Props) {
+  // Polish spec §62 — tone-washed pill wrapping for footer + bench
+  // variants. Each card's state reads as a discrete visual unit
+  // instead of a horizontal text stream on the bench. Pill shape
+  // also applies to lineup slot footer for uniform design.
   if (!info) {
     if (variant === "bench") {
       return (
-        <span
-          className={cn(
-            "whitespace-nowrap font-mono text-[10px] text-[var(--text-3)] uppercase leading-tight tracking-wider opacity-70",
-            className,
-          )}
-        >
-          OFF
+        <span className={cn("inline-flex", className)}>
+          <span className={cn(PILL_BASE, pillTone(null))}>OFF</span>
         </span>
       );
     }
@@ -62,16 +61,31 @@ export function SlotGameState({ info, variant = "footer", className }: Props) {
   const body = renderFooter(info);
   if (!body) return null;
   return (
-    <span
-      className={cn(
-        "whitespace-nowrap font-mono text-[10px] uppercase tracking-wider leading-tight",
-        toneClass(info.status),
-        className,
-      )}
-    >
-      {body}
+    <span className={cn("inline-flex", className)}>
+      <span className={cn(PILL_BASE, pillTone(info.status))}>{body}</span>
     </span>
   );
+}
+
+/** Shared pill shape: rounded, bordered, compact, whitespace-nowrap. */
+const PILL_BASE =
+  "whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase leading-tight tracking-wider";
+
+/**
+ * Tone-by-state background + border + text color for the pill. `null`
+ * means the off-day case (bench-only). Live gets an emerald wash to
+ * stand out; scheduled + off stay muted; final is a neutral surface
+ * wash.
+ */
+function pillTone(status: SlotGameInfo["status"] | null): string {
+  if (status === "live") {
+    return "border-emerald-800/60 bg-emerald-950/40 text-emerald-400";
+  }
+  if (status === "final") {
+    return "border-[var(--border)] bg-[var(--surface-2)]/60 text-[var(--text-2)]";
+  }
+  // scheduled | postponed | suspended | canceled | null (off-day)
+  return "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-3)]";
 }
 
 function stateWord(status: SlotGameInfo["status"]): string {
