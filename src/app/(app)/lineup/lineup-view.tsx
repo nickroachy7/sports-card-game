@@ -142,7 +142,11 @@ export function LineupView(props: LineupViewProps) {
   type TokenAppsState = typeof props.tokenApplications;
   type TokenAppPatch =
     | { type: "apply"; cardId: string; tokenId: string; applicationId: string }
-    | { type: "remove"; applicationId: string };
+    | { type: "remove"; applicationId: string }
+    // After applyToken resolves server-side, swap the temp id the
+    // reducer used on apply for the real UUID. Keeps subsequent
+    // remove clicks from sending "optimistic-..." through zod.
+    | { type: "resolveId"; oldId: string; newId: string };
   const [optimisticApps, patchApps] = useOptimistic<TokenAppsState, TokenAppPatch>(
     props.tokenApplications,
     (state, patch) => {
@@ -152,6 +156,9 @@ export function LineupView(props: LineupViewProps) {
           ...withoutCard,
           { id: patch.applicationId, tokenId: patch.tokenId, cardId: patch.cardId },
         ];
+      }
+      if (patch.type === "resolveId") {
+        return state.map((s) => (s.id === patch.oldId ? { ...s, id: patch.newId } : s));
       }
       return state.filter((s) => s.id !== patch.applicationId);
     },
@@ -389,7 +396,15 @@ export function LineupView(props: LineupViewProps) {
       // "both the card and the token go back to their sections."
       // Swaps (handled above) keep the token since the card is
       // still in the lineup, just in a different slot.
-      const appliedAtPosition = cardId === null ? slotFills[position].appliedToken : null;
+      //
+      // Skip the detach if the app id is an optimistic placeholder
+      // (apply's server call hasn't returned yet). Without the real
+      // UUID the zod removeToken call would throw "Invalid UUID";
+      // let apply resolve first and the user can click the badge
+      // again if they still want it detached.
+      const applied = cardId === null ? slotFills[position].appliedToken : null;
+      const appliedAtPosition =
+        applied && !applied.applicationId.startsWith("optimistic-") ? applied : null;
 
       // Bench → slot (or explicit remove with cardId=null).
       applyOptimisticPatch({ position, cardId });
@@ -426,7 +441,9 @@ export function LineupView(props: LineupViewProps) {
       return;
     }
     // Optimistic apply — badge appears on the card + tray pip hides
-    // immediately. Rebases on the next server refresh.
+    // immediately. Rebases on the next server refresh. The temp id
+    // is swapped for the real one as soon as applyToken resolves so
+    // a subsequent remove click sends a valid UUID.
     const tempAppId = `optimistic-${tokenId}-${card.id}`;
     startTransition(async () => {
       patchApps({ type: "apply", cardId: card.id, tokenId, applicationId: tempAppId });
@@ -439,11 +456,23 @@ export function LineupView(props: LineupViewProps) {
         toast.error(result.error.message);
         return;
       }
+      patchApps({ type: "resolveId", oldId: tempAppId, newId: result.data.applicationId });
       router.refresh();
     });
   }
 
   function handleRemoveToken(applicationId: string) {
+    // Guard: if the user clicks remove before the apply's server
+    // call has returned (rare — sub-second race), the badge is
+    // still showing a temp id like "optimistic-<tokenId>-<cardId>".
+    // Sending that through zod UUID validation throws "Invalid
+    // UUID". Bail out with a friendly toast; once apply resolves,
+    // the resolveId patch swaps in the real UUID and subsequent
+    // clicks work normally.
+    if (applicationId.startsWith("optimistic-")) {
+      toast.info("Still applying — try again in a moment.");
+      return;
+    }
     startTransition(async () => {
       // Optimistic remove — badge disappears from the card + tray
       // pip reappears immediately. Rebases on the next server
@@ -716,7 +745,12 @@ export function LineupView(props: LineupViewProps) {
     // Phase 38 follow-up. Detach any applied token alongside the
     // slot clear so the card + token both go back to their
     // sections — matches the × button path in handleCardDropped.
-    const applied = slotFills[detailSlotPosition].appliedToken;
+    // Same "skip when app id is still an optimistic placeholder"
+    // guard as handleCardDropped — prevents "Invalid UUID" when
+    // the user removes the card during a fast apply.
+    const rawApplied = slotFills[detailSlotPosition].appliedToken;
+    const applied =
+      rawApplied && !rawApplied.applicationId.startsWith("optimistic-") ? rawApplied : null;
     applyOptimisticPatch({ position: detailSlotPosition, cardId: null });
     const [result, tokenResult] = await Promise.all([
       updateLineupSlot({
