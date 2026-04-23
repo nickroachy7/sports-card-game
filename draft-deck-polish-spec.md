@@ -6226,3 +6226,220 @@ changing the card's outer dimensions.
 - Changing card dimensions.
 - Player photo crop overrides per-card (one global
   `object-position` for now).
+
+---
+
+# Phase 39 — v1.24 (Unified sidebar: no submit, slot-level locks only)
+
+Redesign the right sidebar around the real game dynamic:
+there's no single moment when a lineup "submits." Different
+games start at different times. A card placed in a slot
+commits implicitly when that player's game starts; slots
+lock individually thereafter.
+
+The sidebar becomes one consistent layout for the whole
+day: persistent top section (contest name, headline,
+roster), and a tabbed bottom (Lineup Actions, Live Events).
+
+---
+
+## 122. Unified sidebar structure
+
+### Goal
+
+Kill the building-state vs post-submit split that's driven
+sidebar rendering since Phase 30. One layout, used
+throughout the day, adapts per-block based on game state.
+
+### Structure (top → bottom)
+
+1. **ContestHeader**. Contest name + date, no lock
+   countdown. Static.
+2. **SidebarHeadline**. Adaptive status block — see §123.
+3. **RosterSection**. Persistent per-slot rows with
+   position · player · game-state chip · adaptive FP — see
+   §124.
+4. **Tabs** pinned below the roster — see §125.
+   - **Lineup Actions**: Auto-sub mode + readiness warnings.
+   - **Live Events**: existing EventFeed, scoped to your
+     lineup.
+
+### State-driven conditional blocks
+
+- `SidebarHeadline` adapts:
+  - No slots locked yet → "Drafting · N/10 slots filled"
+    + projected FP (muted).
+  - Any slot locked → "Live · X.X FP" + status line
+    (`live N · final M`).
+  - All slots' games final → "Final · X.X FP" + "Contest
+    final".
+- `RosterSection` always visible — the data in each row
+  changes per game state; layout doesn't.
+- Tab set is always the same two tabs.
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — full rewrite
+  around the unified structure; drop the
+  `BuildingContent` / `PostSubmitContent` branch.
+- `src/components/lineup/LiveEventsProvider.tsx` — no
+  change, but gets mounted unconditionally now (see
+  LineupView rewire below).
+- `src/app/(app)/lineup/lineup-view.tsx` — mount
+  `LiveEventsProvider` + `CardContractEventsProvider`
+  regardless of `entryStatus` (so the Live Events tab has
+  a feed to render even pre-lock).
+
+---
+
+## 123. SidebarHeadline — single adaptive block
+
+### Goal
+
+Replace the building-state `DraftingHeadline` and post-
+submit `ScoreHeadline` with one component whose label and
+score adapt through the day.
+
+### States
+
+| State          | Label row                    | Big number                  | Status line                              |
+|----------------|------------------------------|-----------------------------|------------------------------------------|
+| Drafting       | `DRAFTING`                   | `N/10` slots filled         | projected FP (muted) OR `first game 7:10p` |
+| Partially live | `LIVE`                       | live FP total (emerald)     | `live N · final M`                       |
+| All final      | `FINAL`                      | final FP total              | `contest final`                          |
+
+Derivation:
+- Locked-slot count > 0 AND any slot still not final →
+  partially-live state.
+- All slots final (or all started and now ended) → final.
+- Else → drafting.
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — new
+  `SidebarHeadline` subcomponent replacing the two
+  existing headline components.
+
+---
+
+## 124. RosterSection — single row per slot
+
+### Goal
+
+One persistent per-slot row that shows position, player,
+game-state chip, and an adaptive FP cell. Replaces the
+separate `RosterRow` (building) and `BoxScoreRow` (post-
+submit) components.
+
+### Row layout
+
+```
+POS   Player Name          [Game Chip]   FP
+C     N. Schanuel          vs SF 8:10p   22.4
+```
+
+Grid: `[2rem | 1fr | auto | 3rem]`.
+
+### FP cell behavior
+
+- Game not yet started AND no projected FP → `—`.
+- Game not yet started AND projected FP available →
+  `22.4` in `text-3` (muted).
+- Game live → running `live_fp` in `rgb(52,211,153)`
+  (emerald).
+- Game final → `final_fp` in `var(--text)`.
+- Empty slot → `—` (dashed-placeholder row as today).
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — new
+  `RosterSection` subcomponent; `BoxScoreSection` +
+  existing `RosterSection` retired.
+
+---
+
+## 125. Tabs — Lineup Actions + Live Events
+
+### Goal
+
+Two tabs below the roster. No settings, no box-score-
+detail tab. Lives inside a shadcn `Tabs` primitive with
+two triggers.
+
+### Tabs
+
+- **Lineup Actions**
+  - Auto-sub mode (`Smart Auto` / `Manual Priority`)
+    radios. Disabled once all slots are locked (no auto-
+    sub possible for fully-locked contests).
+  - Readiness warnings list: one row per affected slot
+    with `!` glyph + reason (`contract expired`, `on IL`,
+    `FA/DFA`, `2 plays left`). Empty state: "No warnings."
+- **Live Events**
+  - The existing `EventFeed` component, scoped to the
+    user's `lineupPlayers`. No filter chips (v1).
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — new tabs
+  container using the existing `Tabs` primitive.
+- `src/components/lineup/LiveEventsProvider.tsx` —
+  provider always mounts in LineupView regardless of
+  entry status (so Live Events tab isn't empty pre-lock).
+
+---
+
+## 126. Remove Submit button + global lock countdown
+
+### Goal
+
+No user-facing submission moment. The lineup commits
+implicitly when each slot's game starts.
+
+### Changes
+
+- Drop the Submit button from the sidebar entirely.
+- Drop the `lockCountdown` prop + ContestHeaderCard lock
+  line.
+- Drop `SubmitSection` from `AppSidebar`.
+- Existing per-slot lock logic (polish spec §44) already
+  enforces the "game started → slot locked" rule —
+  nothing to change there.
+- Existing server-side `contest.lineup_locks_at` logic
+  stays — backend still flips `entry.status` at that
+  moment for existing reconcile / auto-sub flows. It's
+  just not user-visible anymore.
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — drop Submit
+  chunk and `SubmitSection` entirely.
+- `src/app/(app)/lineup/lineup-view.tsx` — drop
+  `handleSubmit` + `canSubmit` + `submitting` state + the
+  Submit wiring.
+- `src/lib/lineup/types.ts` — drop lock-countdown-
+  related props that sidebar no longer needs (if unused
+  elsewhere).
+
+### Out of scope — backend follow-up
+
+- Auto-flip `entry.status` on first slot lock (currently
+  flips at `contest.lineup_locks_at` which is a contest-
+  level timestamp). If slots can lock before the global
+  lock time, `entry.status` may stay `building` past
+  some slot locks. Trigger / cron adjustment deferred.
+- Per-slot auto-sub at slot-lock time. Current auto-sub
+  fires at contest-lock; finer-grained logic can land
+  later.
+
+---
+
+## 127. Not in scope for v1.24
+
+- Live event filter chips in the Events tab.
+- Box-score-detail tab (stats per slot beyond FP).
+- Changing contest-lifecycle semantics beyond the UI
+  layer (backend `entry.status` transitions stay as-is).
+- Manual-priority sub-order UI (third chunk of actions
+  tab, deferred).
+- Baserunners + pitcher-on-mound (still Phase 31 spec).
