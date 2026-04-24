@@ -26,22 +26,35 @@ type QuickSellResult = {
   tier: string;
 };
 
+/**
+ * Drizzle wraps pg errors — SQLSTATE lives on `err.cause.code`. Check
+ * both top-level and cause so we don't fall through to INTERNAL with
+ * a raw "Failed query: ..." toast for well-understood paths.
+ */
 function mapDbError(err: unknown): { code: string; message: string } {
-  const e = err as { code?: string; message?: string };
-  const msg = e.message ?? "Unknown error";
-  if (e.code === "P0002") return { code: "NOT_FOUND", message: "Card not found." };
-  if (e.code === "23514") {
-    if (msg.includes("vaulted")) return { code: "CONFLICT", message: "Card is vaulted." };
-    if (msg.includes("applied token")) {
+  const e = err as {
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  const topMsg = e.message ?? "";
+  const causeMsg = e.cause?.message ?? "";
+  const code = e.code ?? e.cause?.code;
+  const msg = topMsg || causeMsg || "Unknown error";
+  const combined = `${topMsg} ${causeMsg}`;
+  if (code === "P0002") return { code: "NOT_FOUND", message: "Card not found." };
+  if (code === "23514") {
+    if (combined.includes("vaulted")) return { code: "CONFLICT", message: "Card is vaulted." };
+    if (combined.includes("applied token")) {
       return { code: "TOKEN_APPLIED", message: "Remove the token before quick-selling." };
     }
-    if (msg.includes("insufficient balance")) {
+    if (combined.includes("insufficient balance")) {
       return { code: "INSUFFICIENT_COINS", message: "Not enough coins." };
     }
     return { code: "CONFLICT", message: msg };
   }
-  if (e.code === "23505") return { code: "CONFLICT", message: msg };
-  if (e.code === "53100") return { code: "COLLECTION_AT_CAP", message: "Collection is full." };
+  if (code === "23505") return { code: "CONFLICT", message: msg };
+  if (code === "53100") return { code: "COLLECTION_AT_CAP", message: "Collection is full." };
   return { code: "INTERNAL", message: msg };
 }
 

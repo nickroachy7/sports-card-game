@@ -37,25 +37,40 @@ export type OpenPackResult = {
   packType: PackType;
 };
 
+/**
+ * Drizzle's execute wraps the underlying `pg.DatabaseError` — the PG
+ * SQLSTATE (e.g. "53100", "23514") often lives on `err.cause.code`
+ * instead of the top-level. Check both so we don't fall through to
+ * `INTERNAL` with a raw "Failed query: SELECT public.open_pack..."
+ * toast for well-understood error paths.
+ */
 function mapDbError(err: unknown): { code: string; message: string } {
-  const e = err as { code?: string; message?: string };
-  const msg = e.message ?? "Unknown error";
-  if (e.code === "23514" && msg.includes("insufficient balance")) {
-    return { code: "INSUFFICIENT_COINS", message: "Not enough coins." };
-  }
-  if (e.code === "23505" && msg.includes("daily pack already claimed")) {
-    return {
-      code: "CONFLICT",
-      message: "Daily pack already claimed — come back in 24 hours.",
-    };
-  }
-  if (e.code === "53100") {
+  const e = err as {
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  const topMsg = e.message ?? "";
+  const causeMsg = e.cause?.message ?? "";
+  const code = e.code ?? e.cause?.code;
+  const combined = `${topMsg} ${causeMsg}`;
+
+  if (code === "53100" || combined.includes("collection at cap")) {
     return {
       code: "COLLECTION_AT_CAP",
       message: "Collection is full — quick-sell some cards first.",
     };
   }
-  return { code: "INTERNAL", message: msg };
+  if (code === "23505" || combined.includes("daily pack already claimed")) {
+    return {
+      code: "CONFLICT",
+      message: "Daily pack already claimed — come back in 24 hours.",
+    };
+  }
+  if (code === "23514" && combined.includes("insufficient balance")) {
+    return { code: "INSUFFICIENT_COINS", message: "Not enough coins." };
+  }
+  return { code: "INTERNAL", message: topMsg || causeMsg || "Unknown error" };
 }
 
 /**

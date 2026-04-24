@@ -21,37 +21,50 @@ type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
 
-/** Postgres SQLSTATE → API error code mapping per lineup functions. */
+/**
+ * Postgres SQLSTATE → API error code mapping per lineup functions.
+ * Drizzle wraps pg errors — SQLSTATE lives on `err.cause.code`. Check
+ * both top-level and cause so we don't fall through to INTERNAL with
+ * a raw "Failed query: ..." toast.
+ */
 function mapDbError(err: unknown): { code: string; message: string } {
-  const e = err as { code?: string; message?: string };
-  const msg = e.message ?? "Unknown error";
-  if (e.code === "P0002") return { code: "NOT_FOUND", message: msg };
-  if (e.code === "23514") {
+  const e = err as {
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  const topMsg = e.message ?? "";
+  const causeMsg = e.cause?.message ?? "";
+  const code = e.code ?? e.cause?.code;
+  const msg = topMsg || causeMsg || "Unknown error";
+  const combined = `${topMsg} ${causeMsg}`;
+  if (code === "P0002") return { code: "NOT_FOUND", message: msg };
+  if (code === "23514") {
     // Polish spec §44 — per-slot lock takes precedence over the older
     // contest-level lock messaging so the toast tells the user which
     // slot is frozen.
-    if (msg.includes("SLOT_LOCKED")) {
+    if (combined.includes("SLOT_LOCKED")) {
       return {
         code: "SLOT_LOCKED",
-        message: msg.replace(/^.*SLOT_LOCKED:\s*/, ""),
+        message: combined.replace(/^.*SLOT_LOCKED:\s*/, "").trim(),
       };
     }
-    if (msg.includes("contest locked") || msg.includes("contest not pending")) {
+    if (combined.includes("contest locked") || combined.includes("contest not pending")) {
       return { code: "CONTEST_LOCKED", message: "Lineup lock has passed." };
     }
-    if (msg.includes("empty slots")) {
+    if (combined.includes("empty slots")) {
       return { code: "VALIDATION", message: msg.replace(/^.*: /, "") };
     }
-    if (msg.includes("expired")) {
+    if (combined.includes("expired")) {
       return { code: "CARD_EXPIRED", message: "Card's contract is expired." };
     }
-    if (msg.includes("vaulted")) {
+    if (combined.includes("vaulted")) {
       return { code: "CONFLICT", message: "Card is vaulted." };
     }
-    if (msg.includes("cannot fill")) {
+    if (combined.includes("cannot fill")) {
       return { code: "CARD_INELIGIBLE", message: msg.replace(/^.*: /, "") };
     }
-    if (msg.includes("insufficient balance")) {
+    if (combined.includes("insufficient balance")) {
       return { code: "INSUFFICIENT_COINS", message: "Not enough coins." };
     }
     return { code: "CONFLICT", message: msg };

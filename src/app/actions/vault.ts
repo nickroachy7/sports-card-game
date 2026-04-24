@@ -20,38 +20,51 @@ type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
 
+/**
+ * Drizzle wraps pg errors — SQLSTATE lives on `err.cause.code`. Check
+ * both top-level and cause so we don't fall through to INTERNAL with
+ * a raw "Failed query: ..." toast for well-understood paths.
+ */
 function mapDbError(err: unknown): { code: string; message: string } {
-  const e = err as { code?: string; message?: string };
-  const msg = e.message ?? "Unknown error";
-  if (e.code === "22023") {
+  const e = err as {
+    code?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  const topMsg = e.message ?? "";
+  const causeMsg = e.cause?.message ?? "";
+  const code = e.code ?? e.cause?.code;
+  const msg = topMsg || causeMsg || "Unknown error";
+  const combined = `${topMsg} ${causeMsg}`;
+  if (code === "22023") {
     return { code: "VALIDATION", message: msg.replace(/^.*: /, "") };
   }
-  if (e.code === "P0002") {
+  if (code === "P0002") {
     return { code: "NOT_FOUND", message: msg.replace(/^.*: /, "") };
   }
-  if (e.code === "23514") {
-    if (msg.includes("already committed")) {
+  if (code === "23514") {
+    if (combined.includes("already committed")) {
       return { code: "CONFLICT", message: "Vault already committed for this season." };
     }
-    if (msg.includes("season not in offseason")) {
+    if (combined.includes("season not in offseason")) {
       return { code: "CONFLICT", message: "Vault ceremony is not open yet." };
     }
-    if (msg.includes("already vaulted")) {
+    if (combined.includes("already vaulted")) {
       return { code: "VAULT_CARD_ALREADY_VAULTED", message: "Card is already in the vault." };
     }
-    if (msg.includes("vault at cap")) {
+    if (combined.includes("vault at cap")) {
       return {
         code: "VAULT_CAP_FULL",
         message: "Vault is full (10). Destroy a vaulted card to free a slot.",
       };
     }
-    if (msg.includes("locked in a submitted lineup")) {
+    if (combined.includes("locked in a submitted lineup")) {
       return {
         code: "VAULT_CARD_LOCKED_IN_LINEUP",
         message: "Card is in a locked lineup. Vault it after today's contest scores.",
       };
     }
-    if (msg.includes("not vaulted")) {
+    if (combined.includes("not vaulted")) {
       return { code: "VAULT_CARD_NOT_VAULTED", message: "Card is not in the vault." };
     }
     return { code: "CONFLICT", message: msg };
