@@ -12,14 +12,7 @@ import { QuickSellModal } from "@/components/card/QuickSellModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  cardVaultMultiplier,
-  isUnlimitedTier,
-  nextTier,
-  TIER_FRAME,
-  TIER_PLAY_BUDGET,
-  TIERS,
-} from "@/lib/card/tiers";
+import { cardVaultMultiplier, formatContract, nextTier, TIER_FRAME, TIERS } from "@/lib/card/tiers";
 import { type CardTier, TIER_LABEL } from "@/lib/contracts/cards";
 
 export type CardDetailData = {
@@ -136,13 +129,7 @@ export function CardDetailView({
               {TIER_LABEL[card.tier]}
             </span>
             <span className="font-mono">
-              {isUnlimitedTier(card.tier) ? (
-                <>Contract ∞ ({card.contractPlays} left)</>
-              ) : (
-                <>
-                  Contract {card.contractPlays}/{TIER_PLAY_BUDGET[card.tier]}
-                </>
-              )}
+              Contract {formatContract(card.contractPlays, card.tier)}
             </span>
           </div>
         </header>

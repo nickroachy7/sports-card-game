@@ -135,7 +135,7 @@ export default async function VaultPage() {
     supabase
       .from("card")
       .select(
-        `id, current_tier, career_fp_total, contract_plays_remaining, is_expired, applied_token_id,
+        `id, current_tier, career_fp_total, contract_plays_remaining, plays_used, is_expired, applied_token_id,
          vault_source,
          player:player_id (full_name, positions, status, mlbam_id, team:team_id (abbreviation))`,
       )
@@ -155,6 +155,7 @@ export default async function VaultPage() {
     current_tier: CardTier;
     career_fp_total: string | number;
     contract_plays_remaining: number;
+    plays_used: number;
     is_expired: boolean;
     applied_token_id: string | null;
     player: {
@@ -184,7 +185,11 @@ export default async function VaultPage() {
       isVaulted: true,
       photoUrl: p?.mlbam_id ? mlbamHeadshotUrl(p.mlbam_id, "medium") : null,
     };
-    return { card, refundCoins: Math.floor((qsValues[tier] ?? 0) * 0.15) };
+    return {
+      card,
+      playsUsed: r.plays_used,
+      refundCoins: Math.floor((qsValues[tier] ?? 0) * 0.15),
+    };
   });
 
   const rows = (vaultRows ?? []) as VaultRow[];

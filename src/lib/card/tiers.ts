@@ -67,6 +67,35 @@ export function isUnlimitedTier(tier: CardTier): boolean {
 }
 
 /**
+ * Render the contract line for a card. Phase 41 introduced tier-based
+ * budgets, which leaves three display cases:
+ *
+ *   1. Normal — plays <= budget.              "3/5"            "Contract 3/5"
+ *   2. Legacy inflated — plays > budget.      "14"             "14 plays left"
+ *      (Bronze card minted pre-P41 with 15
+ *      plays, or a tier-down edge case.)
+ *   3. Diamond — budget is 999 (∞).           "14"             "∞ (14 left)"
+ *
+ * Compact variant is for the card face footer (tight). Full variant is
+ * for the detail panel + tooltips. Never surfaces a broken "14/5"
+ * denominator — user direction in the Phase 41 polish interview.
+ */
+export function formatContract(
+  plays: number,
+  tier: CardTier,
+  variant: "compact" | "full" = "full",
+): string {
+  const budget = TIER_PLAY_BUDGET[tier];
+  if (tier === "diamond") {
+    return variant === "compact" ? String(plays) : `∞ (${plays} left)`;
+  }
+  if (plays > budget) {
+    return variant === "compact" ? String(plays) : `${plays} plays left`;
+  }
+  return variant === "compact" ? `${plays}/${budget}` : `${plays}/${budget}`;
+}
+
+/**
  * Vault multiplier curve (polish spec §133, Phase 41). Must stay in
  * sync with the `public.card_vault_multiplier` SQL fn. Celebrates peak
  * single-game performance: a card played once gets 5×, volume cards

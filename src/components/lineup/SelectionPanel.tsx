@@ -14,6 +14,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { formatContract } from "@/lib/card/tiers";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { LineupCardVM } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
@@ -196,7 +197,7 @@ function SelectionRow({ card }: { card: LineupCardVM }) {
           card.contractPlays <= 2 ? "text-[#D4A647]" : "text-[var(--text-3)]",
         )}
       >
-        {card.contractPlays}/{card.contractMax}
+        {formatContract(card.contractPlays, card.tier, "compact")}
       </span>
     </li>
   );

@@ -20,9 +20,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { cardVaultMultiplier, TIER_FRAME } from "@/lib/card/tiers";
 
 type Entry = {
   card: CardViewModel;
+  /** Phase 41 vault multiplier input — games this card was played in.
+   *  Pre-vaulted cards are frozen so this value doesn't drift after
+   *  freeze; the vault score is deterministic from here on. */
+  playsUsed: number;
   refundCoins: number;
 };
 
@@ -62,47 +67,73 @@ export function PreVaultedList({ entries }: Props) {
       </header>
 
       <div className="flex flex-wrap gap-4">
-        {entries.map(({ card, refundCoins }) => (
-          <div key={card.id} className="flex flex-col items-center gap-2">
-            <DissolveCard
-              active={dissolvingId === card.id}
-              onComplete={() => {
-                setDissolvingId(null);
-                router.refresh();
-              }}
-            >
-              <Card card={card} size="small" />
-            </DissolveCard>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 text-[11px]"
-                  disabled={pending || dissolvingId !== null}
+        {entries.map(({ card, playsUsed, refundCoins }) => {
+          const multiplier = cardVaultMultiplier(playsUsed);
+          const vaultScore = Math.round(card.careerFp * multiplier);
+          const accent = TIER_FRAME[card.tier].accent;
+          return (
+            <div key={card.id} className="flex flex-col items-center gap-2">
+              {/* Polish spec §135 (Phase 41). Score-forward header: the
+                  vault score is the card's lasting identity. Tall number
+                  is the score; subscript explains the formula. */}
+              <div
+                className="flex w-full max-w-[140px] flex-col items-center gap-0 rounded border px-2 py-1"
+                style={{ borderColor: accent }}
+                title={`Played in ${playsUsed} ${playsUsed === 1 ? "game" : "games"} · ${Math.round(card.careerFp)} FP × ${multiplier.toFixed(1)}×`}
+              >
+                <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--text-3)]">
+                  Vault score
+                </span>
+                <span
+                  className="font-bold font-mono text-xl leading-none"
+                  style={{ color: accent }}
                 >
-                  <Flame className="mr-1 size-3" aria-hidden="true" />
-                  Destroy · {refundCoins}c
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Destroy {card.playerName}?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Returns <strong>{refundCoins}</strong> coins. This can't be undone — the card
-                    leaves your vault permanently.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => handleDestroy(card.id)}>
-                    Destroy
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
-        ))}
+                  {vaultScore.toLocaleString()}
+                </span>
+                <span className="font-mono text-[9px] text-[var(--text-3)]">
+                  {Math.round(card.careerFp)} FP × {multiplier.toFixed(1)}×
+                </span>
+              </div>
+              <DissolveCard
+                active={dissolvingId === card.id}
+                onComplete={() => {
+                  setDissolvingId(null);
+                  router.refresh();
+                }}
+              >
+                <Card card={card} size="small" />
+              </DissolveCard>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    disabled={pending || dissolvingId !== null}
+                  >
+                    <Flame className="mr-1 size-3" aria-hidden="true" />
+                    Destroy · {refundCoins}c
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Destroy {card.playerName}?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Returns <strong>{refundCoins}</strong> coins. This can't be undone — the card
+                      leaves your vault permanently.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => handleDestroy(card.id)}>
+                      Destroy
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          );
+        })}
       </div>
     </article>
   );

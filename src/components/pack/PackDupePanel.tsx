@@ -5,6 +5,7 @@ import { Check } from "lucide-react";
 import type { RevealedCard } from "@/app/actions/packs-reveal";
 import { Card } from "@/components/card/Card";
 import { Button } from "@/components/ui/button";
+import { formatContract } from "@/lib/card/tiers";
 
 /**
  * Polish spec §10 — duplicate resolution panel.
@@ -69,7 +70,7 @@ export function PackDupePanel({
           footer={
             <span>
               {existingCard.tier.charAt(0).toUpperCase() + existingCard.tier.slice(1)} ·{" "}
-              {existingCard.contractPlays}/{existingCard.contractMax} plays ·{" "}
+              {formatContract(existingCard.contractPlays, existingCard.tier)} ·{" "}
               {Math.round(existingCard.careerFp).toLocaleString()} FP
             </span>
           }

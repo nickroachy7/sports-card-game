@@ -1,5 +1,5 @@
 import { CardPhoto } from "@/components/card/CardPhoto";
-import { contractColor, TIER_FRAME } from "@/lib/card/tiers";
+import { contractColor, formatContract, TIER_FRAME } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { cn } from "@/lib/utils";
 
@@ -97,7 +97,7 @@ export function Card({
     borderRadius: sz.radius,
   };
   const ariaLabel = `${card.playerName}, ${frame.label} tier, ${
-    card.isVaulted ? "vaulted" : `${card.contractPlays}/${card.contractMax} plays`
+    card.isVaulted ? "vaulted" : formatContract(card.contractPlays, card.tier, "full")
   }`;
 
   const body = (
@@ -242,7 +242,7 @@ export function Card({
                 color: contract.textColor,
               }}
             >
-              {card.contractPlays}/{card.contractMax}
+              {formatContract(card.contractPlays, card.tier, "compact")}
             </span>
           </div>
         </div>
