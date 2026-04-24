@@ -6615,3 +6615,213 @@ with a green ✓ and the bonus FP called out:
 - Token trigger animations (burst / flash / confetti).
   Possibly a later phase.
 - Missed tokens in the Events tab (see §131).
+
+---
+
+# Phase 41 — v1.26 (Vault multiplier + tier-based contracts)
+
+Gameplay-mechanic shift. Two linked changes.
+
+1. **Vault multiplier.** When a card is vaulted, its stored
+   vault score is `career_fp × multiplier`, where the
+   multiplier is a steep function of how many plays the
+   card has been used. Rewards single-game gems over volume
+   grind. Example: a card played 1 time for 40 FP vaults
+   at 40 × 5× = 200; a card played 3 times for 60 FP vaults
+   at 60 × 2.5× = 150.
+2. **Tier-based contracts.** 15-play contracts + extension
+   coin sink retired. Replaced with play budgets set by
+   card tier (Bronze 5 / Silver 15 / Gold 40 / Diamond
+   unlimited). Tier-up refills the budget. Lower tiers
+   rotate naturally; Diamond cards can go season-long.
+
+---
+
+## 133. `card_vault_multiplier(plays_used)` SQL fn
+
+### Goal
+
+Single deterministic source of the multiplier so server
+(vault scoring) and client (preview display in card detail)
+agree on the number.
+
+### Curve (steep — user confirmed)
+
+| Plays used | Multiplier |
+|-----------:|-----------:|
+|          0 | 0.0        |
+|          1 | 5.0        |
+|          2 | 3.5        |
+|          3 | 2.5        |
+|        4–5 | 1.8        |
+|       6–10 | 1.3        |
+|      11–20 | 1.1        |
+|        21+ | 1.0        |
+
+- `0 plays → 0` means a never-played card has no vault
+  value. You have to play it at least once to vault for
+  anything.
+- `21+ plays → 1×` means season-long loyalty cards vault at
+  their raw career FP total (no penalty, no bonus).
+
+### Signature
+
+```sql
+public.card_vault_multiplier(p_plays_used integer)
+RETURNS numeric  -- rounded to 1 decimal by convention
+```
+
+---
+
+## 134. Vault scoring uses the multiplier
+
+### Goal
+
+Both vault paths store a `vault_score` that reflects the
+multiplier. This is the number shown in the Vault page,
+used for leaderboards, and referenced by destroy-refund
+math.
+
+### Changes
+
+- **`vault_card_midseason(user_id, card_id)`**: compute
+  `plays_used = contract_max - contract_plays_remaining`,
+  multiplier = `card_vault_multiplier(plays_used)`. Store
+  `vault_score = ROUND(card.career_fp_total * multiplier)`
+  on the new `vault_entry` row. Also snapshot `plays_used`
+  and `multiplier` for audit.
+- **`commit_vault_selection(user_id, season_id, card_ids[])`**
+  (end-of-season ceremony): same multiplier logic per card.
+- `vault_entry` table: add columns `plays_used integer NOT NULL
+  DEFAULT 0`, `vault_multiplier numeric NOT NULL DEFAULT 1.0`,
+  `vault_score integer NOT NULL DEFAULT 0`. Existing rows get
+  a one-time backfill: multiplier = `card_vault_multiplier(...)`,
+  score = `ROUND(career_fp × multiplier)`.
+
+### Out of scope
+
+- Retroactive reshuffling of past-season vault scores if the
+  curve changes later. Card vault scores lock at vault time.
+
+---
+
+## 135. Tier-based play budgets on card creation
+
+### Goal
+
+A card's `contract_plays_remaining` at creation depends on
+tier, not a flat 15.
+
+| Tier    | Budget    |
+|---------|-----------|
+| Bronze  | 5         |
+| Silver  | 15        |
+| Gold    | 40        |
+| Diamond | 999 (effectively unlimited) |
+
+### Scope
+
+- `contract_max` stays as the "max capacity" concept but
+  now reflects the tier budget.
+- `open_pack` (new card creation path): sets
+  `contract_plays_remaining` + `contract_max` based on the
+  card's tier at pull time.
+- Legacy cards: **unchanged** on ship. They keep whatever
+  plays they had. Their `contract_max` stays 15 until tier-
+  up refreshes it.
+
+---
+
+## 136. Tier-up refills plays
+
+### Goal
+
+When a card crosses a tier threshold, its plays refresh to
+the new tier's budget.
+
+### Scope
+
+- Wherever tier-up happens today (likely
+  `_finalize_contest_entry` or a downstream fn), after the
+  tier flips, update:
+  ```sql
+  UPDATE card
+  SET contract_plays_remaining = GREATEST(contract_plays_remaining, <new_tier_budget>),
+      contract_max = <new_tier_budget>
+  WHERE id = <card_id>;
+  ```
+  `GREATEST` ensures you never lose plays on tier-up. This
+  also gracefully handles legacy cards whose remaining is
+  already high.
+
+### Out of scope
+
+- Tier-DOWN. Tiers only go up in the current model.
+
+---
+
+## 137. Remove contract extensions
+
+### Goal
+
+No more coin-sink extensions. Contracts wear out, and then
+the card is expired until season end. Tier-up is the only
+way to refresh plays.
+
+### Changes
+
+- `extend_card` SQL fn: keep on disk but mark deprecated /
+  comment-out body (safer than dropping — in case any
+  telemetry or migration still references it).
+- Server action `extendCardContract` removed.
+- Client:
+  - `ExtendContractModal` component deleted.
+  - CardDetailView's Actions section drops the Extend
+    Contract button.
+- Coin economy impact: extensions were a minor sink; packs
+  + pack-size tuning handle the bulk already. No
+  compensating changes needed.
+
+---
+
+## 138. Card detail panel shows vault multiplier preview
+
+### Goal
+
+Before vaulting, users can see exactly what the card will
+be worth. "3 plays × 2.5 = 150 FP" or similar.
+
+### Scope
+
+- `CardDetailView` Actions section: add a small line above
+  the Add-to-Vault button showing:
+  - Plays used + multiplier (e.g. `3 plays \u00b7 2.5\u00d7`)
+  - Projected vault score (`150 FP`)
+- Reads directly from `card.contract_plays_remaining`,
+  `card.contract_max`, `card.career_fp_total`, and the
+  local `cardVaultMultiplier()` helper (mirror the SQL
+  curve in TypeScript — tiny lookup table).
+
+### Files
+
+- `src/components/card/CardDetailView.tsx`
+- New helper `src/lib/card/vault-multiplier.ts` with the
+  curve lookup.
+
+---
+
+## 139. Not in scope for v1.26
+
+- Retroactive adjustment of legacy cards' `contract_max` /
+  `contract_plays_remaining` (only tier-up refreshes
+  touches them).
+- Vault page redesign to highlight the multiplier math —
+  the detail view covers pre-vault reasoning; vault page
+  just shows the stored score.
+- Multiplier animation on vault commit (a "3.5× MULTIPLIER"
+  burst in the ceremony) — possible Phase 42 polish.
+- Changing `quick_sell_values` per tier (those still match
+  current schedule).
+- Adjusting pack odds / coin economy to compensate for the
+  removed extension sink. Packs are the primary sink
+  already.
