@@ -129,7 +129,7 @@ export function PacksTab({
 
       <section className="flex flex-col gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
         <div className="flex items-baseline justify-between">
-          <h3 className="font-bold font-sans text-[var(--text)] text-xs">Standard packs</h3>
+          <h3 className="font-bold font-sans text-[var(--text)] text-xs">Packs</h3>
           <span className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-wider">
             {standardCost.toLocaleString()}c each
           </span>
