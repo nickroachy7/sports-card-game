@@ -6825,3 +6825,498 @@ be worth. "3 plays × 2.5 = 150 FP" or similar.
 - Adjusting pack odds / coin economy to compensate for the
   removed extension sink. Packs are the primary sink
   already.
+
+---
+
+# Phase 42 — Right sidebar redesign (v1.27)
+
+The right sidebar currently front-loads ~240px of chrome
+before the tabs start: contest-header card, 3xl-font
+Drafting/Live/Final score block, then the 10-row roster.
+The score block reads big but pushes Actions + Events far
+below the fold, and the contest header duplicates
+information already visible in the URL / nav.
+
+Phase 42 compresses the top-fixed zone into three tight
+rows (slate line · compact score · roster) and expands the
+tabs from two to three by promoting Packs from an FAB /
+modal combo to a first-class tab. Result: the same three
+sections always-visible, with ~30% more vertical room for
+the tabs content.
+
+**Estimated effort:** ~0.5 day.
+
+---
+
+## 140. Slate line replaces contest header
+
+### Goal
+
+One-line, one-value-per-chunk context anchor at the top of
+the sidebar. No secondary subtitle line, no border-bottom
+card. Reads as a date stamp rather than a document header.
+
+### Content
+
+```
+Fri, Apr 24 · 12 games
+```
+
+- Left chunk: abbreviated weekday + short month + day.
+  Date comes from `current_slate_date()` (SQL helper from
+  Phase 19 that accounts for the 4 AM ET pivot).
+- Right chunk: count of games in today's slate. Count
+  comes from `contest.included_game_ids.length` on the
+  user's lineup — already queried on `/lineup` page load.
+- Separator: middle-dot with a muted `--text-3` color.
+- Typography: 11 px, mono, uppercase tracking.
+
+### Out of scope
+
+- Showing the count of live games (pulse-chip variant). A
+  later follow-up once we have realtime game-status
+  subscriptions wired into the slate line.
+- Showing the contest name anywhere in the sidebar. Nav
+  already says "Lineup"; spec §50 guarantees one active
+  contest per user per slate, so naming it is redundant.
+
+---
+
+## 141. Compact two-line score block
+
+### Goal
+
+Shrink the Drafting/Live/Final block from a ~96px outlined
+card with a 3xl primary number to a ~48px two-line compact
+variant that keeps the outlined-card frame (for affordance)
+but halves vertical footprint.
+
+### Shape
+
+```
+ ┌────────────────────────────────┐
+ │ DRAFTING · 3 / 10 filled       │  ← line 1: label + status
+ │ 0.0 projected                  │  ← line 2: number + unit
+ └────────────────────────────────┘
+```
+
+Live state:
+
+```
+ ┌────────────────────────────────┐
+ │ LIVE · Top 3 · 2 games active  │
+ │ 47.2  (proj 52.1)              │
+ └────────────────────────────────┘
+```
+
+Final state:
+
+```
+ ┌────────────────────────────────┐
+ │ FINAL · Contest final          │
+ │ 148.6  (proj 144.0)            │
+ └────────────────────────────────┘
+```
+
+### Scope
+
+- Retain `SidebarHeadline`'s internal state derivation
+  (anySlotLocked / allFinal / projectedFp).
+- Drop the 3xl primary-number treatment → mono lg
+  tabular-nums inline with the unit label.
+- Drop the separate secondary-number column → inline
+  parenthetical `(proj 52.1)` on the same line.
+- Keep the outlined-card background + `var(--surface-2)`
+  fill so the block still reads as a distinct element.
+
+### Out of scope
+
+- Color-coding the live number emerald — keep for now
+  (current behavior), reconsider later if it conflicts
+  with the compressed scale.
+
+---
+
+## 142. Roster section with tighter spacing
+
+### Goal
+
+Same 10-row RosterSection per polish spec §122, but with
+reduced vertical padding per row so the section fits more
+tightly above the tabs.
+
+### Scope
+
+- Reduce each row's `py` padding by ~25% (8px → 6px).
+- Reduce inter-row gap to 2px if currently higher.
+- No structural changes: keep the per-row FP, position,
+  warning pill, token glyph (§130), live/final dot.
+- No collapsible / toggle behavior.
+
+### Out of scope
+
+- Converting roster to a box-score table variant. The
+  per-row treatment remains best for live-scoring feel;
+  table would be denser but lose the scoreboard affordance.
+
+---
+
+## 143. Packs tab joins Actions + Events
+
+### Goal
+
+Promote pack buying from a floating action button + modal
+combo to a first-class sidebar tab. Retires both
+`BuyPacksFab` and `BuyPacksModal` — the buy UI lives
+inline in the tab.
+
+### Scope
+
+- `<SidebarTabs>` grows from two tabs to three:
+  `actions` / `events` / `packs`. Packs ships last in the
+  tab list for secondary-action prominence.
+- Packs tab content (top → bottom):
+  1. Coin balance chip at the top. `250 coins` in mono
+     with a coin icon.
+  2. Daily pack card (claim or countdown-to-ready).
+  3. Standard packs section with `× 1 / × 5 / × 10`
+     quantity toggles + single buy button.
+- The tab retains the `dailyReady` pulse indicator — a
+  small gold dot on the tab trigger when the daily pack
+  is claimable. Goes away once claimed.
+- Ports the full decision surface from `BuyPacksModal`:
+  no loss of clarity, no scrolling needed (sidebar is
+  ~320px wide; the buy UI fits).
+
+### Files
+
+- `src/components/layout/AppSidebar.tsx` — add third tab.
+- New `src/components/pack/PacksTab.tsx` — owns the tab
+  content. Reuses bits from `BuyPacksModal` (quantity
+  toggle, daily card) via copy-port rather than import,
+  since the modal will delete.
+
+### Out of scope
+
+- Pack history (recent openings, dupe resolution
+  history). Possible Phase 44+ surface.
+- Unopened pack inventory. Packs open immediately at
+  buy time today; no inventory exists to list.
+
+---
+
+## 144. Retire BuyPacksFab and BuyPacksModal
+
+### Goal
+
+Delete the floating action button and the buy-packs modal
+entirely. All buy flows go through the Packs tab.
+
+### Changes
+
+- Delete `src/components/pack/BuyPacksFab.tsx`.
+- Delete `src/components/pack/BuyPacksModal.tsx`.
+- Remove imports + render sites from `lineup-view.tsx`
+  (two references + the `/shop` redirect already shipped
+  in Phase 36).
+- Remove the `dailyPackReady` / `dailyPackSecondsUntilReady`
+  / `standardPackCost` props from `LineupView` if they
+  were only feeding the FAB+modal combo. Rewire into
+  `AppSidebar` so the Packs tab has what it needs.
+
+### Out of scope
+
+- Removing `coins_from_dupes` / `cardResults` plumbing —
+  still used by the reveal flow.
+
+---
+
+## 145. Server-side: games-today count on lineup page
+
+### Goal
+
+The slate line needs the count of games in today's slate.
+Currently `contest.included_game_ids` is already fetched
+but never surfaced; plumb it through.
+
+### Scope
+
+- `src/app/(app)/lineup/page.tsx` already reads the
+  contest row; add `included_game_ids.length` to the
+  props passed down as `gamesInSlate: number`.
+- `LineupView` forwards to `AppSidebar` as a new prop.
+- No new SQL, no new migration.
+
+### Out of scope
+
+- Filtering out postponed / canceled games from the count.
+  The slate definition (§51) already handles postponed
+  sliding into the next date; canceled contests don't
+  render here.
+
+---
+
+## 146. Not in scope for v1.27
+
+- Mobile sidebar layout (the current sidebar is
+  desktop-only; mobile gets a dedicated phase).
+- Redesigning the Actions tab (auto-sub controls +
+  warnings). Stays as is.
+- Converting Events feed to a more condensed format.
+  Stays as is.
+- Pack reveal redesign — lands in Phase 43 and is
+  deliberately split so Phase 42 can ship standalone.
+- Inventory / unopened-packs listing. No data model for it.
+
+---
+
+# Phase 43 — In-place pack reveal (v1.28)
+
+Today's pack flow: buy from the FAB → modal opens with
+semi-transparent backdrop → peel-and-reveal sequence →
+click Done → modal closes. The modal works but feels
+layered-on-top rather than "I'm opening a pack now." Phase
+43 swaps the modal for an in-place panel that takes over
+the main content area of the lineup page while the sidebar
+stays visible. Multi-pack buys now reveal sequentially with
+a `Next pack` gate between packs so each pack feels like a
+moment, not a deluge.
+
+**Estimated effort:** ~0.8 day.
+
+---
+
+## 147. Reveal takes over main content area
+
+### Goal
+
+When the Packs tab fires a purchase, the lineup page's
+main content area (lineup diamond + cards grid) replaces
+itself with a full-height `<PackRevealPanel>`. Sidebar
+stays visible — coin balance drops in real-time, roster /
+score stay in peripheral vision.
+
+### Scope
+
+- `LineupView` gains `revealActive: boolean` state. When
+  true, `<LineupMainContent>` renders `<PackRevealPanel>`
+  in place of `<LineupDiamond>` + `<CardsPanel>`.
+- Sidebar always renders regardless of reveal state.
+- The panel receives the same props that `PackOpenerModal`
+  does today: `result`, `cards`, `existingByCardId`, plus
+  new props for sequential flow (§149).
+- Transition: brief 150ms cross-fade between lineup
+  content and reveal panel. No sliding; no backdrop.
+
+### Out of scope
+
+- Hiding / modifying the top nav or global header. Same
+  chrome as the rest of the app.
+- Routing change (e.g. `/lineup/reveal`). Reveal is a
+  transient client-side state; URL stays `/lineup`.
+
+---
+
+## 148. PackRevealPanel component
+
+### Goal
+
+A new in-place panel that owns the peel / flip / dupe
+resolution logic. Ports the content of `PackOpenerModal`
+out of the `<Dialog>` wrapper and into a full-height
+section that sits inside the lineup page's main content
+area.
+
+### Shape
+
+Top → bottom:
+
+1. **Progress header** (§150): `Pack 2 of 5 · peel pack`
+   on the left; placeholder / empty on the right.
+2. **Peel stack** — face-down cards stacked in the center,
+   tap-to-peel (current behavior).
+3. **Revealed row** — the cards that have been flipped,
+   arranged in a row below the stack. Per-card quick-sell
+   / add-to-vault buttons unlock when the stack empties.
+4. **Footer action** — either `Next pack` (mid-batch) or
+   `Done · back to lineup` (final pack). Never both.
+
+### Files
+
+- New `src/components/pack/PackRevealPanel.tsx`. Copies
+  peel / flip / resolution state from
+  `PackOpenerModal.tsx` — the modal deletes once the
+  panel is feature-equivalent.
+- Prop shape identical to the modal's `Props`, minus the
+  `open` / `onOpenChange` pair. Plus new
+  `currentPackIndex: number`, `totalPacks: number`,
+  `onAdvancePack: () => void` props.
+
+### Out of scope
+
+- Changing the peel animation. Keep the `PackCardFlip`
+  component untouched.
+- Reworking `PackDupePanel` UX. Same inline dupe panel;
+  same keep-new / keep-existing decision.
+
+---
+
+## 149. Sequential multi-pack flow
+
+### Goal
+
+Multi-pack buys (×5, ×10) reveal pack-by-pack with an
+explicit `Next pack` advance between packs. No more
+10-card stack all at once; each pack gets its own moment.
+
+### Flow
+
+1. User buys ×5 standard packs from Packs tab.
+2. `openPacksBatch` returns 5 openings. Payload is
+   partitioned in `LineupView` into an array of
+   per-pack payloads (cards + results scoped to that
+   opening).
+3. Reveal panel mounts with `currentPackIndex = 0`.
+4. User peels / flips / resolves dupes for pack 1.
+5. Once pack 1 is complete (all cards revealed + all
+   dupes resolved), the footer `Next pack (2 of 5)`
+   button unlocks.
+6. Click Next → `currentPackIndex++`; panel resets
+   per-pack peel / flip / resolution state; pack 2
+   payload loads. Previously revealed cards from packs
+   1-4 do NOT persist on screen — each pack starts
+   fresh.
+7. On the last pack, the footer swaps from `Next pack`
+   to `Done · back to lineup`.
+
+### Scope
+
+- Payload partitioning lives in `LineupView`. The panel
+  takes `packs: PackRevealPayload[]` + `currentPackIndex`;
+  rendering the active pack only.
+- Progress derived from `(currentPackIndex + 1) / packs.length`.
+- No carousel of completed packs — per §148, each pack is
+  its own moment; crossing back to see previously-opened
+  packs isn't a v1.28 flow.
+
+### Out of scope
+
+- User choice at buy time between sequential vs batch.
+  Sequential is the only mode.
+- Skip-ahead / batch-reveal shortcut. A power-user can
+  still fire multiple peels quickly — there's no forced
+  delay between cards within a pack.
+
+---
+
+## 150. Progress header
+
+### Goal
+
+Visible `Pack N of M` indicator so users always know
+where they are in a multi-pack buy. Single-pack buys
+degrade to a simpler header with no counter.
+
+### Shape
+
+Multi-pack (e.g. `×5`):
+
+```
+PACK 2 OF 5 · DAILY                  [███░░]
+Peel the pack to reveal 5 cards.
+```
+
+- Left: pack index + pack type label.
+- Right: a segmented progress bar. Each segment lights
+  when its pack completes. Active segment pulses.
+- Subtitle: contextual copy ("Peel the pack" / "Flip to
+  reveal" / "Tap a card to add to vault" / "Pack
+  complete — next pack?").
+
+Single-pack:
+
+```
+DAILY PACK
+Peel to reveal 5 cards.
+```
+
+### Out of scope
+
+- Clickable segments to skip between packs. Linear flow
+  only — no jumping back to an already-opened pack.
+- Timer showing how long the user has been revealing. Not
+  helpful.
+
+---
+
+## 151. Exit gating: Done at end only
+
+### Goal
+
+No mid-reveal escape hatch. The user commits to finishing
+the reveal once they click Buy; the Done button only
+appears on the last pack, and only once every card +
+every dupe has been resolved.
+
+### Rationale
+
+- Protects against accidental dismissal (clicking
+  outside the modal today closes it; the in-place panel
+  removes that surface area entirely).
+- Cards are already minted at buy time — closing early
+  doesn't lose them. But the user is here to enjoy the
+  reveal; forcing completion respects the moment.
+- If the user really needs to bail, they can navigate
+  away (the cards remain in their collection). But
+  there's no explicit back button / Escape-key
+  shortcut.
+
+### Scope
+
+- `Done · back to lineup` button renders only on final
+  pack AND when all cards on that pack are resolved.
+- No `X` in the header, no Escape key listener, no
+  outside-click handler.
+- Navigating away mid-reveal (sidebar link click, browser
+  back) works normally — the cards are safe in
+  collection; on return, reveal state is gone (one-shot).
+
+### Out of scope
+
+- Resumable reveal state (e.g. user closes browser mid-
+  reveal, comes back later, sees the same pulls again).
+  Cards persist in collection; the reveal is ephemeral.
+
+---
+
+## 152. Server-side impact
+
+### Goal
+
+Phase 43 is pure client / layout refactor. No new SQL, no
+migrations, no action-shape changes.
+
+### Notes
+
+- `openPacksBatch` already returns per-opening payloads
+  (`batch.openings[]`). Partitioning for sequential
+  reveal happens client-side in `LineupView`.
+- Pack_opening audit table is unchanged.
+- Card / token inserts still happen at buy time — the
+  reveal is purely UI presentation of already-persisted
+  rows.
+
+---
+
+## 153. Not in scope for v1.28
+
+- Unopened-pack inventory. Packs still open immediately
+  on buy.
+- Resumable reveals (pick up where you left off).
+- Per-pack shareable summary card (for social sharing).
+- "Reveal all" skip button. Sequential only.
+- Keyboard shortcuts during reveal (arrow keys for peel,
+  etc.). Possible polish phase.
+- Mobile-specific reveal layout. Desktop-first; mobile
+  inherits the layout but may need tuning in a later
+  phase.
