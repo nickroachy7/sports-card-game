@@ -190,16 +190,6 @@ export function CardDetailView({
               </p>
             </section>
 
-            {/* P41.8: vault multiplier preview. Shows the score the card
-                would snapshot at if vaulted right now. Encourages users
-                to vault peak single-game gems rather than grind. */}
-            <VaultScorePreview
-              playsUsed={card.playsUsed}
-              careerFp={currentFp}
-              tier={card.tier}
-              accent={frame.accent}
-            />
-
             <section className="flex flex-col gap-2">
               <h3 className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">Actions</h3>
               {/* Polish spec §106 (Phase 35). One Actions block, all
@@ -207,7 +197,7 @@ export function CardDetailView({
                   retired "Extend Contract" — plays refill automatically
                   on tier-up, so the button went with the feature.
                   Order: Remove-from-slot (if slotted) → Quick-sell →
-                  Add-to-vault. */}
+                  Add-to-vault (with inline vault-score preview §135). */}
               <div className="flex flex-col gap-2">
                 {lineupContext?.slotted && (
                   <Button
@@ -231,6 +221,16 @@ export function CardDetailView({
                     // animation completes (via DissolveCard.onComplete).
                     setDissolving(true);
                   }}
+                />
+                {/* P41 polish follow-up: the vault-score preview sits
+                    directly above the Add-to-vault button so the number
+                    is visible at the decision point. Replaces the
+                    standalone VaultScorePreview block (felt bulky in
+                    the sidebar and lived away from the action). */}
+                <InlineVaultScore
+                  playsUsed={card.playsUsed}
+                  careerFp={currentFp}
+                  accent={frame.accent}
                 />
                 <div className="flex items-stretch gap-1">
                   <Button
@@ -317,15 +317,22 @@ function Stat({ label, value }: { label: string; value: string }) {
  * (SQL fn `card_vault_multiplier` and TS `cardVaultMultiplier`) and
  * must stay synced (§133).
  */
-function VaultScorePreview({
+/**
+ * Polish spec §135 (Phase 41). Compact vault-score preview rendered
+ * directly above the Add-to-vault button. Single-line decision aid:
+ * big score on the right, formula breakdown on the left, short warning
+ * copy below for the unplayed edge case (multiplier = 0).
+ *
+ * Replaces the standalone VaultScorePreview block — the score belongs
+ * next to the action, not off in its own section.
+ */
+function InlineVaultScore({
   playsUsed,
   careerFp,
-  tier,
   accent,
 }: {
   playsUsed: number;
   careerFp: number;
-  tier: CardTier;
   accent: string;
 }) {
   const multiplier = cardVaultMultiplier(playsUsed);
@@ -333,38 +340,30 @@ function VaultScorePreview({
   const unplayed = playsUsed === 0;
 
   return (
-    <section className="flex flex-col gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Vault Preview</h3>
-        <span
-          className="rounded px-2 py-0.5 font-bold font-mono text-[10px] tracking-wider"
-          style={{ backgroundColor: accent, color: "var(--bg)" }}
-        >
-          {TIER_LABEL[tier]}
-        </span>
-      </div>
+    <div
+      className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"
+      title={
+        unplayed
+          ? "Played 0 games — vault multiplier is 0×. Play the card at least once to earn a score."
+          : `Played in ${playsUsed} ${playsUsed === 1 ? "game" : "games"} · multiplier ${multiplier.toFixed(1)}×`
+      }
+    >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="font-mono text-[var(--text-3)] text-xs">
-          {careerFp.toLocaleString()} FP × {multiplier.toFixed(1)}×
+        <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+          Would vault at
         </span>
-        <span className="font-mono font-bold text-[var(--text)] text-xl">
+        <span
+          className="font-bold font-mono text-lg leading-none"
+          style={{ color: unplayed ? "var(--text-3)" : accent }}
+        >
           {vaultScore.toLocaleString()}
         </span>
       </div>
-      <p className="text-[10px] text-[var(--text-3)] leading-relaxed">
-        {unplayed
-          ? "Never played — vaulting now snapshots 0. Play the card at least once to earn a multiplier."
-          : `Played in ${playsUsed} ${playsUsed === 1 ? "game" : "games"}. `}
-        {!unplayed &&
-          (playsUsed === 1
-            ? "Max multiplier — single-game gems vault highest."
-            : playsUsed <= 3
-              ? "Strategic play — high multiplier for focused performances."
-              : playsUsed <= 10
-                ? "Volume play — multiplier tapers as plays add up."
-                : "Long-term play — multiplier floors near 1×.")}
-      </p>
-    </section>
+      <span className="font-mono text-[10px] text-[var(--text-3)]">
+        {careerFp.toLocaleString()} FP × {multiplier.toFixed(1)}×
+        {unplayed && " · play it once to earn a multiplier"}
+      </span>
+    </div>
   );
 }
 
