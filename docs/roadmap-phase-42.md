@@ -59,15 +59,15 @@ Core intent (user):
 ┌───────────────────────────────────────┐
 │ FRI, APR 24 · 12 GAMES              │  ← SlateLine  (§140)
 ├───────────────────────────────────────┤
-│ ┌─────────────────────────────────┐ │
-│ │ DRAFTING · 3 / 10 filled        │ │  ← Compact    (§141)
-│ │ 0.0 projected                    │ │     score
-│ └─────────────────────────────────┘ │
-├───────────────────────────────────────┤
 │ C    Brady House     0.0             │
 │ 1B   —                                 │   RosterSection
 │ 2B   Jose Altuve     0.0             │   (§142)
 │ ...  (10 rows, tighter)                │
+├───────────────────────────────────────┤
+│ ┌─────────────────────────────────┐ │
+│ │ DRAFTING · 3 / 10 filled        │ │  ← Compact    (§141)
+│ │ 0.0 projected                    │ │     score
+│ └─────────────────────────────────┘ │
 ├───────────────────────────────────────┤
 │ [ Actions ] [ Events ] [ Packs ● ]     │  ← Tabs      (§143)
 │                                         │
@@ -75,6 +75,11 @@ Core intent (user):
 │                                         │
 └───────────────────────────────────────┘
 ```
+
+Roster sits above the score block — the roster IS the lineup
+(the primary object on the page), and the score is a summary
+line beneath it. Mirrors sports-app box-score convention:
+totals appear under the roster, not over it.
 
 ---
 

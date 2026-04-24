@@ -35,12 +35,18 @@ type SlotFill = {
  *
  * Structure (top → bottom):
  *   SlateLine         — date + games-today count (§140)
- *   SidebarHeadline   — compact two-line Drafting/Live/Final (§141)
  *   RosterSection     — 10 rows with tightened padding (§142)
+ *   SidebarHeadline   — compact two-line Drafting/Live/Final (§141)
  *   <Tabs>
  *     Lineup Actions  — auto-sub mode + readiness warnings
  *     Live Events     — existing EventFeed
  *     Packs           — inline buy UI (§143, replaces FAB + modal)
+ *
+ * Roster-above-score order: the roster is the primary object on
+ * the page (it IS the lineup); the score is a status indicator for
+ * it. Placing the score below reads as a summary line under the
+ * thing it summarizes, matches the sports-app box-score convention
+ * (totals under the roster, not over it).
  *
  * Prior phases: §100 (Phase 34) cut team-summary + introduced the
  * post-submit three-block layout; §103 (Phase 35) gave building-
@@ -71,6 +77,7 @@ export function AppSidebar(props: Props) {
   return (
     <div className="flex h-full flex-col gap-3">
       <SlateLine slateDate={props.slateDate} gamesInSlate={gamesInSlate} />
+      <RosterSection slotFills={props.slotFills} />
       <SidebarHeadline
         slotFills={props.slotFills}
         entryStatus={props.entryStatus}
@@ -78,7 +85,6 @@ export function AppSidebar(props: Props) {
         finalScore={props.finalScore}
         contestGameIds={props.contestGameIds}
       />
-      <RosterSection slotFills={props.slotFills} />
       <SidebarTabs
         slotFills={props.slotFills}
         autoSubMode={props.autoSubMode}

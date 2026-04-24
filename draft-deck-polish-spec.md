@@ -6838,11 +6838,14 @@ below the fold, and the contest header duplicates
 information already visible in the URL / nav.
 
 Phase 42 compresses the top-fixed zone into three tight
-rows (slate line · compact score · roster) and expands the
+rows (slate line · roster · compact score) and expands the
 tabs from two to three by promoting Packs from an FAB /
 modal combo to a first-class tab. Result: the same three
 sections always-visible, with ~30% more vertical room for
-the tabs content.
+the tabs content. Roster sits above the score — the roster
+is the primary object on the page, the score summarizes it
+(sports-app box-score convention: totals under the roster,
+not over it).
 
 **Estimated effort:** ~0.5 day.
 
