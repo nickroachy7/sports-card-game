@@ -7323,3 +7323,233 @@ migrations, no action-shape changes.
 - Mobile-specific reveal layout. Desktop-first; mobile
   inherits the layout but may need tuning in a later
   phase.
+
+---
+
+# Phase 44 — Pack reveal row redesign (v1.29)
+
+Phase 43 landed the in-place panel with sequential multi-pack
+flow. The peel stack (face-down cards z-stacked with depth
+offsets, top-only click target) carried over from Phase 36's
+original reveal shape. That shape worked as a modal moment but
+feels oversized inside the in-place panel — the cards are 60%
+bigger than anywhere else in the app, and strict top-to-bottom
+peel order forces the user through a specific path.
+
+Phase 44 swaps the peel stack for a single horizontal row of
+face-down cards at **lineup slot size**, any-order flipping,
+and **inline** dupe resolution (no overlay). The cards look like
+they belong to the rest of the app; the user picks their own
+path through the pack.
+
+**Estimated effort:** ~0.5 day.
+
+---
+
+## 154. Horizontal row replaces peel stack
+
+### Goal
+
+One row of N face-down cards in the center of the panel. Each
+card is a self-contained flip target; clicking any face-down
+card flips it in place. The StackZone (z-stacked + depth
+layers) retires. Cards flip in their existing slot — no sliding
+into a separate "revealed" row.
+
+### Layout
+
+- `flex-wrap` centered row. `justify-center`, `gap-3` horizontal,
+  `gap-y-4` vertical for wrapping.
+- 5-card pack: one row of 5.
+- 10-card pack (premium / max bulk): wraps to 5 × 2.
+- Each slot is `w-[120px]` (card width) + reserved button area
+  below (see §158).
+
+### Out of scope
+
+- Horizontal scroll behavior. If wrapping doesn't work for a
+  particular pack size, we'll revisit — for now 5 / 10 are the
+  only sizes (daily = 5, standard = 5, no premium path yet).
+
+---
+
+## 155. Lineup-slot card size
+
+### Goal
+
+Reveal cards render at the same size as cards on the lineup
+diamond and in the collection grid. Reads as "these will fit
+here when I close the reveal" rather than "this is a different
+ceremonial moment."
+
+### Scope
+
+- `PackCardFlip` accepts a new `size` prop mapping to the
+  existing `CardSize` values. Reveal passes `"lineup"`
+  (~120×168).
+- `PackDupePanel` accepts matching size; inline dupe UX (§157)
+  renders both sides at lineup size too.
+- `StarPullBurst` scales its sprite / glow to match the
+  shrunken card — currently hardcoded around the 160×224
+  medium size; needs a `size` prop or derives from its child.
+- Revealed-card action buttons (Sell / Vault) stay compact
+  `h-7 text-[11px]` — already matched to lineup-size cards.
+
+### Out of scope
+
+- A separate "big reveal" size for rare pulls (e.g. a Diamond
+  pull gets bigger). Possible polish — star-pull burst +
+  tier halo is enough signal today.
+
+---
+
+## 156. Any-order flipping
+
+### Goal
+
+Each face-down card in the row is independently clickable. No
+peel order, no stack depth, no "top card only" rule.
+
+### Scope
+
+- Click any face-down card → that card's `flipped[i]` flips
+  true; the card runs its flip animation and lands face-up in
+  its slot.
+- No `peelIndex` state — each card tracks its own `flipped`
+  bit.
+- The "activeDupeIdx" concept stays but is now assigned
+  on-flip-complete of a dupe card (whichever one the user
+  flipped). Inline dupe swap (§157) renders in that slot.
+- Subtitle copy in the progress header adapts:
+  - "Tap any card to reveal · N of M left"
+  - "Resolve the dupe to continue" (when activeDupeIdx set)
+  - "Pack complete · next up?" / "All packs opened — back to
+    lineup?"
+
+### Out of scope
+
+- Keyboard navigation. Focus + Enter could flip a focused
+  card; not wired today because touch / click is primary.
+
+---
+
+## 157. Inline dupe resolution
+
+### Goal
+
+When a flipped card turns out to be a dupe, its slot swaps
+into a side-by-side comparison with Keep New / Keep Existing
+buttons — no overlay, no backdrop. The row continues to show
+the other slots around it. Other cards remain flippable during
+dupe resolution (gate is per-card, see §158).
+
+### Shape
+
+Dupe slot footprint grows from `w-[120px]` to roughly
+`w-[252px]` (two cards + a small gap):
+
+```
+[ row of face-down / flipped cards ]
+ ↓ user flips a dupe
+[ ... ] [ NEW vs EXISTING · Keep New · Keep Existing ] [ ... ]
+ ↓ user picks
+[ ... ] [ kept-card in single slot ]                   [ ... ]
+```
+
+The other slots reflow around the expanded slot via flex-wrap.
+Fast enough that there's no distracting shuffle.
+
+### Scope
+
+- `PackDupePanel` gets a compact variant: vertical stack of
+  [new card / vs label / existing card] OR horizontal
+  side-by-side, whichever fits lineup-size cards better.
+  Implementation detail; the spec just locks "inline, no
+  overlay, stays within the row layout."
+- Resolution outcome:
+  - Keep new → existing card quick-sold, dupe slot collapses
+    to showing the new card (kept_new resolution).
+  - Keep existing → new card quick-sold, dupe slot collapses
+    to showing the existing card (kept_existing resolution,
+    dimmed 40% to signal it was sold).
+
+### Out of scope
+
+- Showing detailed stat comparison between new + existing
+  (career FP, etc.). Card footer already shows the essentials.
+- Multi-dupe batch resolution ("sell all dupes at once"). Each
+  dupe resolves independently.
+
+---
+
+## 158. Per-card action gating
+
+### Goal
+
+Keep the current completion gate: per-card Sell / Vault
+buttons stay disabled until the whole pack is flipped AND all
+dupes are resolved. Done / Next Pack button obeys the same
+gate.
+
+### Rationale
+
+Locked gate preserved because:
+- Gives the pack a completion arc — finishing the reveal is
+  a deliberate beat, not a trickle.
+- Avoids partial-pack states where 3 of 5 cards are resolved
+  and the user has to remember to come back and finish the
+  rest.
+- Matches §151 exit gating — Done button at end only.
+
+### Scope
+
+No change to gate logic. Only the flip order freedom (§156)
+and layout (§154) differ from Phase 43.
+
+---
+
+## 159. Files and architecture
+
+### Files touched
+
+- `src/components/pack/PackRevealPanel.tsx` — guts rewritten:
+  - Remove `StackZone` component + depth-layer visuals.
+  - Remove `peelIndex` state → per-card `flipped[i]` only.
+  - Single `RevealedRow`-style layout for all cards (face-
+    down + face-up both live in this row).
+  - Dupe resolution inline via expanded slot, not overlay.
+- `src/components/pack/PackCardFlip.tsx` — accept `size` prop;
+  default to previous `medium` for backwards compat (nothing
+  else calls it).
+- `src/components/pack/PackDupePanel.tsx` — add a compact
+  layout variant sized for two lineup-size cards.
+- `src/components/pack/StarPullBurst.tsx` — scale burst to
+  match card size.
+- `src/components/pack/PackRevealPanel.tsx` progress header
+  subtitle copy tweaks.
+
+### No change
+
+- `handleBatchOpened` partitioning logic in LineupView (per-pack
+  payloads already correct).
+- `handleAdvancePack` / `handleRevealDone` handlers.
+- Sequential multi-pack flow (§149). Pack-level order is still
+  sequential; only card-level order is free.
+- Progress header segmented bar. Per-pack moments stay
+  distinct.
+
+---
+
+## 160. Not in scope for v1.29
+
+- Mobile reveal layout. Desktop-first; current wrap-to-2-rows
+  degrades reasonably on narrow viewports.
+- Card size variation per tier (e.g. Diamond pull shows
+  bigger). Star-pull burst + border color carry tier weight
+  today.
+- Keyboard shortcuts during reveal.
+- "Reveal all" bulk-flip button. Per-card click is the only
+  path (matches the "any order" freedom — batch flip would
+  defeat that).
+- Resumable reveals (browser-close then return). Still
+  ephemeral.
