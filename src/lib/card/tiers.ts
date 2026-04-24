@@ -50,6 +50,40 @@ export function nextTier(tier: CardTier): CardTier | null {
 }
 
 /**
+ * Tier-based contract budget (polish spec §134, Phase 41). Must stay in
+ * sync with the `public.tier_play_budget` SQL fn. Diamond returns 999 as
+ * a practical sentinel for "unlimited"; UI should render ∞.
+ */
+export const TIER_PLAY_BUDGET: Record<CardTier, number> = {
+  bronze: 5,
+  silver: 15,
+  gold: 40,
+  diamond: 999,
+};
+
+/** True if this tier's budget is the "unlimited" Diamond tier. */
+export function isUnlimitedTier(tier: CardTier): boolean {
+  return tier === "diamond";
+}
+
+/**
+ * Vault multiplier curve (polish spec §133, Phase 41). Must stay in
+ * sync with the `public.card_vault_multiplier` SQL fn. Celebrates peak
+ * single-game performance: a card played once gets 5×, volume cards
+ * trend toward 1×.
+ */
+export function cardVaultMultiplier(plays: number): number {
+  if (plays <= 0) return 0.0;
+  if (plays === 1) return 5.0;
+  if (plays === 2) return 3.5;
+  if (plays === 3) return 2.5;
+  if (plays <= 5) return 1.8;
+  if (plays <= 10) return 1.3;
+  if (plays <= 20) return 1.1;
+  return 1.0;
+}
+
+/**
  * Contract-count color coding — UI/UX spec §4.8.
  *   ≥ 5   → cream (text) / no halo
  *   3–4   → amber/gold (low)

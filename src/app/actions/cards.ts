@@ -4,10 +4,9 @@ import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 import type { CardDetailData } from "@/components/card/CardDetailView";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import {
   type CardTier,
-  type ExtendContractInput,
-  extendContractInputSchema,
   type PlayerStatus,
   type QuickSellInput,
   quickSellInputSchema,
@@ -25,13 +24,6 @@ type QuickSellResult = {
   coinsEarned: number;
   balanceAfter: number;
   tier: string;
-};
-
-type ExtendResult = {
-  newPlaysRemaining: number;
-  coinCost: number;
-  extensionNumber: number;
-  balanceAfter: number;
 };
 
 function mapDbError(err: unknown): { code: string; message: string } {
@@ -170,65 +162,10 @@ async function quickSellCardsImpl(input: {
 
 export const quickSellCards = wrapAction(quickSellCardsImpl, { name: "quickSellCards" });
 
-/** API spec §3.3 extendCardContract. Wraps public.extend_card(user_id, card_id, plays). */
-async function extendCardContractImpl(
-  input: ExtendContractInput,
-): Promise<ActionResult<ExtendResult>> {
-  const parsed = extendContractInputSchema.safeParse(input);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
-    };
-  }
-  const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
-
-  try {
-    const res = await getDb().execute<{
-      extend_card: {
-        new_plays_remaining: number;
-        coin_cost: number | string;
-        extension_number: number;
-        balance_after: number | string;
-      };
-    }>(sql`
-      SELECT public.extend_card(
-        ${user.id}::uuid, ${parsed.data.cardId}::uuid, ${parsed.data.plays}::int
-      ) AS extend_card
-    `);
-    const raw = res.rows[0]?.extend_card;
-    if (!raw) {
-      return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
-    }
-    revalidatePath("/collection");
-    revalidatePath("/lineup", "layout");
-    const data: ExtendResult = {
-      newPlaysRemaining: Number(raw.new_plays_remaining),
-      coinCost: Number(raw.coin_cost),
-      extensionNumber: Number(raw.extension_number),
-      balanceAfter: Number(raw.balance_after),
-    };
-    await captureServerEvent(user.id, "contract_extended", {
-      card_id: parsed.data.cardId,
-      plays: parsed.data.plays,
-      coin_cost: data.coinCost,
-      extension_number: data.extensionNumber,
-      new_plays_remaining: data.newPlaysRemaining,
-      balance_after: data.balanceAfter,
-    });
-    return { ok: true, data };
-  } catch (err) {
-    return { ok: false, error: mapDbError(err) };
-  }
-}
-
-export const extendCardContract = wrapAction(extendCardContractImpl, {
-  name: "extendCardContract",
-});
+// Phase 41 retired the "extend contract" mechanic. Cards have tier-based
+// play budgets (Bronze 5, Silver 15, Gold 40, Diamond 999) that refill
+// automatically on tier-up via the recompute_card_tier trigger.
+// public.extend_card was dropped in migration 0049.
 
 /**
  * Fetches CardDetailData for the drawer opened from lineup / bench clicks.
@@ -248,7 +185,7 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
   const { data: cardRow, error } = await supabase
     .from("card")
     .select(
-      `id, career_fp_total, current_tier, contract_plays_remaining, extension_count,
+      `id, career_fp_total, current_tier, contract_plays_remaining, plays_used,
        is_expired, applied_token_id, tokens_applied_count, tokens_triggered_count,
        acquired_at,
        player:player_id ( full_name, positions, status, mlbam_id, team:team_id ( abbreviation ) )`,
@@ -263,9 +200,7 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
 
   type EconCfg = {
     quick_sell_values: Record<CardTier, number>;
-    extension_cost_per_play: Record<CardTier, number>;
     tier_fp_thresholds: Record<CardTier, number>;
-    extension_escalator: number | string;
     collection_cap: number | string;
   };
   const cfgRes = await supabase.rpc("get_active_economy_config").single();
@@ -281,7 +216,6 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
   const mlbamId = (player as { mlbam_id?: number | null } | null)?.mlbam_id ?? null;
   const tier = cardRow.current_tier as CardTier;
   const quickSellValues = (cfg?.quick_sell_values ?? {}) as Record<CardTier, number>;
-  const extensionCostPerPlay = (cfg?.extension_cost_per_play ?? {}) as Record<CardTier, number>;
   const tierFpThresholds = (cfg?.tier_fp_thresholds ?? {}) as Record<CardTier, number>;
   const position =
     player?.positions && Array.isArray(player.positions) ? (player.positions[0] ?? null) : null;
@@ -295,21 +229,19 @@ async function getCardDetailImpl(cardId: string): Promise<ActionResult<CardDetai
       tier,
       careerFp: Number(cardRow.career_fp_total ?? 0),
       contractPlays: cardRow.contract_plays_remaining,
-      contractMax: 15,
+      contractMax: TIER_PLAY_BUDGET[tier],
       playerStatus: (player?.status ?? "active") as PlayerStatus,
       isExpired: cardRow.is_expired,
       hasAppliedToken: cardRow.applied_token_id !== null,
       photoUrl: mlbamId ? mlbamHeadshotUrl(mlbamId, "large") : null,
       quickSellValue: quickSellValues[tier] ?? 0,
-      extensionCount: cardRow.extension_count,
+      playsUsed: cardRow.plays_used,
       tokensApplied: cardRow.tokens_applied_count,
       tokensTriggered: cardRow.tokens_triggered_count,
       acquiredAt: cardRow.acquired_at,
       tierFpThresholds,
     },
     coinBalance: Number(state?.coins ?? 0),
-    extensionCostPerPlay,
-    extensionEscalator: Number(cfg?.extension_escalator ?? 1.5),
   };
 
   return { ok: true, data };

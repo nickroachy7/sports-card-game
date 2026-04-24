@@ -1,0 +1,22 @@
+-- ─────────────────────────────────────────────────────────────────────────
+-- 0049_deprecate_extend_card.sql — Phase 41 P41.6.
+--
+-- The "extend contract" feature is retired. Contracts are now tier-
+-- budgeted (Bronze 5, Silver 15, Gold 40, Diamond 999) and replenish
+-- automatically on tier-up via the recompute_card_tier trigger
+-- (0047). Manually extending is no longer a mechanic.
+--
+-- We DROP public.extend_card(uuid, uuid, integer) outright. The
+-- contract_extension audit table and its historical rows are kept
+-- untouched — useful season-over-season audit data that stops growing
+-- now that the function is gone. No columns are removed from `card`;
+-- extension_count stays at its current value per row (a harmless
+-- historical snapshot).
+--
+-- extendCardContract (the Server Action) is removed in the same
+-- polish phase; calls to public.extend_card from any surface would now
+-- fail loudly with "function does not exist", which is the intended
+-- belt + suspenders if stale client code ever hits the DB directly.
+-- ─────────────────────────────────────────────────────────────────────────
+
+DROP FUNCTION IF EXISTS public.extend_card(uuid, uuid, integer);

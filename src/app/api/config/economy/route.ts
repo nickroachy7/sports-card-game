@@ -14,13 +14,16 @@ export const revalidate = 300;
  */
 export async function GET(): Promise<Response> {
   try {
+    // Phase 41 retired the contract-extension feature (extend_card SQL
+    // fn + extendCardContract action dropped in migration 0049). The
+    // extension_cost_per_play / extension_escalator columns remain in
+    // economy_config for historical rows but are no longer surfaced
+    // to clients.
     const res = await getDb().execute<{
       collection_cap: number | string;
       contract_default_plays: number | string;
       tier_fp_thresholds: Record<string, number>;
       quick_sell_values: Record<string, number>;
-      extension_cost_per_play: Record<string, number>;
-      extension_escalator: number | string;
       pack_prices_coins: Record<string, number>;
       pack_sizes: Record<string, number>;
       token_bonus_fp: Record<string, number>;
@@ -28,7 +31,6 @@ export async function GET(): Promise<Response> {
     }>(sql`
       SELECT collection_cap, contract_default_plays,
              tier_fp_thresholds, quick_sell_values,
-             extension_cost_per_play, extension_escalator,
              pack_prices_coins, pack_sizes, token_bonus_fp,
              milestone_tiers
       FROM public.get_active_economy_config()
@@ -49,8 +51,6 @@ export async function GET(): Promise<Response> {
           contractDefaultPlays: Number(row.contract_default_plays),
           tierFpThresholds: row.tier_fp_thresholds,
           quickSellValues: row.quick_sell_values,
-          extensionCostPerPlay: row.extension_cost_per_play,
-          extensionEscalator: Number(row.extension_escalator),
           packPricesCoins: row.pack_prices_coins,
           packSizes: row.pack_sizes,
           tokenBonusFp: row.token_bonus_fp,

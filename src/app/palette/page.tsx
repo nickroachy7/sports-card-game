@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Card, type CardSize, type CardViewModel } from "@/components/card/Card";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 
 import { DissolveDemo } from "./dissolve-demo";
@@ -52,7 +53,7 @@ function mockCard(
     tier,
     careerFp: 1247,
     contractPlays: 12,
-    contractMax: 15,
+    contractMax: TIER_PLAY_BUDGET[tier],
     playerStatus: "active" as PlayerStatus,
     isExpired: false,
     hasAppliedToken: false,

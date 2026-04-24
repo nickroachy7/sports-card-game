@@ -8,26 +8,30 @@ import { toast } from "sonner";
 import { vaultCardMidseason } from "@/app/actions/vault";
 import { Card, type CardViewModel } from "@/components/card/Card";
 import { DissolveCard } from "@/components/card/DissolveCard";
-import { ExtendContractModal } from "@/components/card/ExtendContractModal";
 import { QuickSellModal } from "@/components/card/QuickSellModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { nextTier, TIER_FRAME, TIERS } from "@/lib/card/tiers";
+import {
+  cardVaultMultiplier,
+  isUnlimitedTier,
+  nextTier,
+  TIER_FRAME,
+  TIER_PLAY_BUDGET,
+  TIERS,
+} from "@/lib/card/tiers";
 import { type CardTier, TIER_LABEL } from "@/lib/contracts/cards";
 
 export type CardDetailData = {
   card: CardViewModel & {
     tierFpThresholds: Record<CardTier, number>;
     quickSellValue: number;
-    extensionCount: number;
+    playsUsed: number;
     tokensApplied: number;
     tokensTriggered: number;
     acquiredAt: string;
   };
   coinBalance: number;
-  extensionCostPerPlay: Record<CardTier, number>;
-  extensionEscalator: number;
 };
 
 /**
@@ -132,11 +136,14 @@ export function CardDetailView({
               {TIER_LABEL[card.tier]}
             </span>
             <span className="font-mono">
-              Contract {card.contractPlays}/{card.contractMax}
+              {isUnlimitedTier(card.tier) ? (
+                <>Contract ∞ ({card.contractPlays} left)</>
+              ) : (
+                <>
+                  Contract {card.contractPlays}/{TIER_PLAY_BUDGET[card.tier]}
+                </>
+              )}
             </span>
-            {card.extensionCount > 0 && (
-              <span className="text-[var(--text-3)]">· {card.extensionCount} ext.</span>
-            )}
           </div>
         </header>
 
@@ -185,7 +192,7 @@ export function CardDetailView({
               <h3 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Status</h3>
               <p className="text-sm text-[var(--text-2)]">
                 {card.isExpired
-                  ? "Expired — extend the contract to play this card again."
+                  ? "Expired — tier-up refills plays to the new tier's budget."
                   : card.playerStatus === "il"
                     ? "On the injured list; ineligible until cleared."
                     : card.playerStatus === "dfa"
@@ -196,15 +203,24 @@ export function CardDetailView({
               </p>
             </section>
 
+            {/* P41.8: vault multiplier preview. Shows the score the card
+                would snapshot at if vaulted right now. Encourages users
+                to vault peak single-game gems rather than grind. */}
+            <VaultScorePreview
+              playsUsed={card.playsUsed}
+              careerFp={currentFp}
+              tier={card.tier}
+              accent={frame.accent}
+            />
+
             <section className="flex flex-col gap-2">
               <h3 className="text-[10px] uppercase tracking-wider text-[var(--text-3)]">Actions</h3>
               {/* Polish spec §106 (Phase 35). One Actions block, all
-                  outline-variant buttons for equal visual weight.
-                  Order: Remove-from-slot (if slotted) → Extend →
-                  Quick-sell → Add-to-vault. The duplicate "Lineup
-                  Actions" block that used to live in CardDetailPanel
-                  was removed in this phase; Remove-from-slot folded
-                  in here. */}
+                  outline-variant buttons for equal visual weight. P41
+                  retired "Extend Contract" — plays refill automatically
+                  on tier-up, so the button went with the feature.
+                  Order: Remove-from-slot (if slotted) → Quick-sell →
+                  Add-to-vault. */}
               <div className="flex flex-col gap-2">
                 {lineupContext?.slotted && (
                   <Button
@@ -217,20 +233,6 @@ export function CardDetailView({
                     {lineupContext.removing ? "Removing…" : "Remove from slot"}
                   </Button>
                 )}
-                <ExtendContractModal
-                  cardId={card.id}
-                  playerName={card.playerName}
-                  tier={card.tier}
-                  extensionCount={card.extensionCount}
-                  contractPlays={card.contractPlays}
-                  coinBalance={data.coinBalance}
-                  extensionCostPerPlay={data.extensionCostPerPlay}
-                  extensionEscalator={data.extensionEscalator}
-                  disabled={card.hasAppliedToken}
-                  onExtended={() => {
-                    router.refresh();
-                  }}
-                />
                 <QuickSellModal
                   cardId={card.id}
                   playerName={card.playerName}
@@ -268,7 +270,7 @@ export function CardDetailView({
               </div>
               {card.hasAppliedToken && (
                 <p className="text-xs text-[var(--text-3)]">
-                  Remove the applied token before quick-selling or extending.
+                  Remove the applied token before quick-selling or vaulting.
                 </p>
               )}
             </section>
@@ -318,6 +320,67 @@ function Stat({ label, value }: { label: string; value: string }) {
  * explainer. Previously this paragraph sat always-visible below
  * the button.
  */
+/**
+ * Polish spec §135 (Phase 41). Shows the vault score the card would
+ * snapshot at if vaulted right now. The multiplier celebrates peak
+ * single-game performance: 1 play × high FP = rare, 21+ plays = 1×.
+ *
+ * `vaultScore = careerFp × cardVaultMultiplier(playsUsed)`. Static
+ * lookup on the client — the multiplier curve lives in two places
+ * (SQL fn `card_vault_multiplier` and TS `cardVaultMultiplier`) and
+ * must stay synced (§133).
+ */
+function VaultScorePreview({
+  playsUsed,
+  careerFp,
+  tier,
+  accent,
+}: {
+  playsUsed: number;
+  careerFp: number;
+  tier: CardTier;
+  accent: string;
+}) {
+  const multiplier = cardVaultMultiplier(playsUsed);
+  const vaultScore = Math.round(careerFp * multiplier);
+  const unplayed = playsUsed === 0;
+
+  return (
+    <section className="flex flex-col gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Vault Preview</h3>
+        <span
+          className="rounded px-2 py-0.5 font-bold font-mono text-[10px] tracking-wider"
+          style={{ backgroundColor: accent, color: "var(--bg)" }}
+        >
+          {TIER_LABEL[tier]}
+        </span>
+      </div>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-mono text-[var(--text-3)] text-xs">
+          {careerFp.toLocaleString()} FP × {multiplier.toFixed(1)}×
+        </span>
+        <span className="font-mono font-bold text-[var(--text)] text-xl">
+          {vaultScore.toLocaleString()}
+        </span>
+      </div>
+      <p className="text-[10px] text-[var(--text-3)] leading-relaxed">
+        {unplayed
+          ? "Never played — vaulting now snapshots 0. Play the card at least once to earn a multiplier."
+          : `Played in ${playsUsed} ${playsUsed === 1 ? "game" : "games"}. `}
+        {!unplayed &&
+          (playsUsed === 1
+            ? "Max multiplier — single-game gems vault highest."
+            : playsUsed <= 3
+              ? "Strategic play — high multiplier for focused performances."
+              : playsUsed <= 10
+                ? "Volume play — multiplier tapers as plays add up."
+                : "Long-term play — multiplier floors near 1×.")}
+      </p>
+    </section>
+  );
+}
+
 function VaultHelpToggle() {
   return (
     <details className="group relative flex items-center">

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { LineupView } from "@/app/(app)/lineup/lineup-view";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier, PackType, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
@@ -175,7 +176,7 @@ export default async function LineupPage() {
     tier: r.current_tier,
     careerFp: Number(r.career_fp_total ?? 0),
     contractPlays: r.contract_plays_remaining,
-    contractMax: 15,
+    contractMax: TIER_PLAY_BUDGET[r.current_tier as CardTier],
     playerStatus: r.status,
     isExpired: r.is_expired,
     hasAppliedToken: r.applied_token_id !== null,

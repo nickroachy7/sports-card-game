@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import type { CardViewModel } from "@/components/card/Card";
 import { PreVaultedList } from "@/components/vault/PreVaultedList";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { createServerClient } from "@/lib/db/supabase";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
@@ -176,7 +177,7 @@ export default async function VaultPage() {
       tier,
       careerFp: Number(r.career_fp_total ?? 0),
       contractPlays: r.contract_plays_remaining,
-      contractMax: 15,
+      contractMax: TIER_PLAY_BUDGET[tier],
       playerStatus: (p?.status ?? "active") as PlayerStatus,
       isExpired: r.is_expired,
       hasAppliedToken: r.applied_token_id !== null,

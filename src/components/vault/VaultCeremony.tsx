@@ -10,6 +10,7 @@ import { Card, type CardViewModel } from "@/components/card/Card";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { DissolveCard } from "@/components/card/DissolveCard";
 import { dragResult } from "@/components/card/drag-layer-state";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier } from "@/lib/contracts/cards";
 import type { VaultCeremonyPreview, VaultEligibleCard } from "@/lib/contracts/vault";
 
@@ -58,7 +59,7 @@ function toViewModel(card: VaultEligibleCard): CardViewModel {
     tier: card.current_tier,
     careerFp: Number(card.career_fp_total),
     contractPlays: card.contract_plays_remaining,
-    contractMax: 15,
+    contractMax: TIER_PLAY_BUDGET[card.current_tier],
     playerStatus: "active",
     isExpired: card.is_expired,
     hasAppliedToken: false,

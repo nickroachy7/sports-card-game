@@ -3,6 +3,7 @@
 import { sql } from "drizzle-orm";
 
 import type { CardViewModel } from "@/components/card/Card";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
@@ -96,7 +97,7 @@ export async function fetchRevealedCards(cardIds: string[]): Promise<RevealedCar
       tier: r.current_tier,
       careerFp: Number(r.career_fp_total ?? 0),
       contractPlays: r.contract_plays_remaining,
-      contractMax: 15,
+      contractMax: TIER_PLAY_BUDGET[r.current_tier as CardTier],
       playerStatus: r.status,
       isExpired: r.is_expired,
       hasAppliedToken: r.applied_token_id !== null,

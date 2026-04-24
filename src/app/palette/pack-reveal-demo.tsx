@@ -6,6 +6,7 @@ import type { RevealedCard } from "@/app/actions/packs-reveal";
 import { PackCardFlip } from "@/components/pack/PackCardFlip";
 import { PackDupePanel } from "@/components/pack/PackDupePanel";
 import { StarPullBurst } from "@/components/pack/StarPullBurst";
+import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier, PlayerStatus } from "@/lib/contracts/cards";
 
 /**
@@ -30,8 +31,8 @@ function mock(
     teamAbbreviation: "NYY",
     tier,
     careerFp: 0,
-    contractPlays: 15,
-    contractMax: 15,
+    contractPlays: TIER_PLAY_BUDGET[tier],
+    contractMax: TIER_PLAY_BUDGET[tier],
     playerStatus: "active" as PlayerStatus,
     isExpired: false,
     hasAppliedToken: false,
@@ -66,13 +67,17 @@ export function PackRevealDemo(_: Props) {
     setCelebration(null);
   }
 
-  const dupeNew = mock({ tier: "bronze", valueTier: "starter", contractPlays: 15 });
+  const dupeNew = mock({
+    tier: "bronze",
+    valueTier: "starter",
+    contractPlays: TIER_PLAY_BUDGET.bronze,
+  });
   const dupeExisting = mock({
     tier: "gold",
     valueTier: "starter",
     careerFp: 5400,
     contractPlays: 7,
-    contractMax: 15,
+    contractMax: TIER_PLAY_BUDGET.gold,
   });
 
   return (
