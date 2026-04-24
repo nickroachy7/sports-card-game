@@ -50,6 +50,17 @@ export default async function LineupPage() {
   // guarded by game-status filter).
   await db.execute(sql`SELECT public.reconcile_missed_tokens()`);
 
+  // Post-P39 sweep: Submit button retired, so entries stay in
+  // 'building' across slate-date rollovers. Yesterday's entry keeps
+  // starter_card_id + token bindings indefinitely, which then
+  // blocks today's quick-sell / vault on those cards ("card has an
+  // applied token" from yesterday's ghost lineup). Release the
+  // holds for any of the user's entries in contests OTHER than
+  // today's. Cheap: bounded by user's historical entry count.
+  await db.execute(sql`
+    SELECT public.release_stale_contest_holds(${user.id}::uuid, ${contestId}::uuid)
+  `);
+
   type ContestRow = {
     id: string;
     name: string;
