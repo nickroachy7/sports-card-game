@@ -39,8 +39,16 @@ export async function GET(req: Request): Promise<Response> {
     // Ranking CTE: per-player 365-day FP via game_event aggregation.
     // FP is computed via the same scoring helpers the live pipeline
     // uses (_score_batter_event / _score_pitcher_event), so tier
-    // classification matches real contest FP. RANK() so ties don't
-    // push past cutoff.
+    // classification matches real contest FP.
+    //
+    // Gate on fp > 0 via HAVING. If we left in 0-FP players (inner
+    // join then COALESCE), they'd tie-rank at the floor and catch
+    // star/starter assignments purely from positional rank. Instead:
+    // only players with real performance qualify for star/starter;
+    // everyone else (unplayed, sparse data, fresh season) stays role.
+    //
+    // ROW_NUMBER() deterministic tiebreak by id — avoids RANK()
+    // ties that would skip past the limit band.
     const result = await db.execute<{
       stars: number;
       starters: number;
@@ -48,38 +56,42 @@ export async function GET(req: Request): Promise<Response> {
     }>(sql`
       WITH hitter_fp AS (
         SELECT ge.batter_player_id AS player_id,
-               COALESCE(SUM(public._score_batter_event(
+               SUM(public._score_batter_event(
                  ge.event_type, ge.play_type, ge.score_value
-               )), 0) AS fp
+               )) AS fp
         FROM public.game_event ge
         WHERE ge.batter_player_id IS NOT NULL
           AND ge.event_at > (now() - INTERVAL '365 days')
         GROUP BY ge.batter_player_id
+        HAVING SUM(public._score_batter_event(
+          ge.event_type, ge.play_type, ge.score_value
+        )) > 0
       ),
       pitcher_fp AS (
         SELECT ge.pitcher_player_id AS player_id,
-               COALESCE(SUM(public._score_pitcher_event(
+               SUM(public._score_pitcher_event(
                  ge.event_type, ge.play_type
-               )), 0) AS fp
+               )) AS fp
         FROM public.game_event ge
         WHERE ge.pitcher_player_id IS NOT NULL
           AND ge.event_at > (now() - INTERVAL '365 days')
         GROUP BY ge.pitcher_player_id
+        HAVING SUM(public._score_pitcher_event(
+          ge.event_type, ge.play_type
+        )) > 0
       ),
       hitter_ranks AS (
-        SELECT p.id AS player_id,
-               COALESCE(h.fp, 0) AS fp,
-               RANK() OVER (ORDER BY COALESCE(h.fp, 0) DESC) AS rnk
+        SELECT p.id AS player_id, h.fp,
+               ROW_NUMBER() OVER (ORDER BY h.fp DESC, p.id) AS rnk
         FROM public.player p
-        LEFT JOIN hitter_fp h ON h.player_id = p.id
+        JOIN hitter_fp h ON h.player_id = p.id
         WHERE p.is_26_man = true AND p.is_pitcher = false
       ),
       pitcher_ranks AS (
-        SELECT p.id AS player_id,
-               COALESCE(pf.fp, 0) AS fp,
-               RANK() OVER (ORDER BY COALESCE(pf.fp, 0) DESC) AS rnk
+        SELECT p.id AS player_id, pf.fp,
+               ROW_NUMBER() OVER (ORDER BY pf.fp DESC, p.id) AS rnk
         FROM public.player p
-        LEFT JOIN pitcher_fp pf ON pf.player_id = p.id
+        JOIN pitcher_fp pf ON pf.player_id = p.id
         WHERE p.is_26_man = true AND p.is_pitcher = true
       ),
       new_tiers AS (
@@ -114,16 +126,37 @@ export async function GET(req: Request): Promise<Response> {
       FROM applied
     `);
 
-    // Additionally: anyone NOT on 26-man gets reset to 'role'. Keeps
-    // the column consistent if a player was previously star but then
-    // optioned. Doesn't affect gameplay (open_pack filters on is_26_man)
-    // but removes stale high-tier labels from the audit.
+    // Reset-to-role pass: catches two cases that the main classifier
+    // (which only updates players with fp > 0) misses.
+    //   1. Players no longer on 26-man but with a stale high tier —
+    //      open_pack filters them out anyway, but the audit stays clean.
+    //   2. 26-man players whose 365-day FP dropped to 0 as old games
+    //      aged out of the window, AND were previously classified as
+    //      star/starter. Without this pass they'd keep their stale tier
+    //      forever (since the HAVING clause excludes them from the
+    //      main classifier).
     const resetRes = await db.execute<{ n: number }>(sql`
       WITH upd AS (
-        UPDATE public.player
+        UPDATE public.player p
         SET designated_value_tier = 'role'::player_value_tier, updated_at = now()
-        WHERE is_26_man = false
-          AND designated_value_tier <> 'role'
+        WHERE p.designated_value_tier <> 'role'
+          AND (
+            p.is_26_man = false
+            OR (
+              p.is_26_man = true
+              AND NOT EXISTS (
+                SELECT 1 FROM public.game_event ge
+                WHERE (
+                  (p.is_pitcher = false AND ge.batter_player_id = p.id AND
+                   public._score_batter_event(ge.event_type, ge.play_type, ge.score_value) > 0)
+                  OR
+                  (p.is_pitcher = true AND ge.pitcher_player_id = p.id AND
+                   public._score_pitcher_event(ge.event_type, ge.play_type) > 0)
+                )
+                AND ge.event_at > (now() - INTERVAL '365 days')
+              )
+            )
+          )
         RETURNING 1
       )
       SELECT COUNT(*)::int AS n FROM upd
@@ -147,7 +180,7 @@ export async function GET(req: Request): Promise<Response> {
         starters: result.rows[0]?.starters ?? 0,
         roles: result.rows[0]?.roles ?? 0,
       },
-      reset_to_role_off_26_man: resetRes.rows[0]?.n ?? 0,
+      reset_to_role: resetRes.rows[0]?.n ?? 0,
       current_distribution: distRes.rows.map((r) => ({ tier: r.tier, count: r.n })),
     });
   } catch (err) {
