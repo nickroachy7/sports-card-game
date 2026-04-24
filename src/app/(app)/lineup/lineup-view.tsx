@@ -24,7 +24,7 @@ import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEve
 import { SelectionPanel } from "@/components/lineup/SelectionPanel";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
-import { PackOpenerModal } from "@/components/pack/PackOpenerModal";
+import { PackRevealPanel, type PerPackPayload } from "@/components/pack/PackRevealPanel";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import { Button } from "@/components/ui/button";
 import type { PackType, TokenType } from "@/lib/contracts/cards";
@@ -362,15 +362,14 @@ export function LineupView(props: LineupViewProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkSubmitting, startBulk] = useTransition();
 
-  // Polish spec §109 (Phase 36) → §143 (Phase 42). Pack reveal state.
-  // Buy flow moved into the sidebar Packs tab; onPacksOpened threads
-  // into handleBatchOpened which stages the reveal payload that
-  // drives PackOpenerModal. Phase 43 swaps the modal for an in-place
-  // panel — this state shape stays the same.
-  const [revealPayload, setRevealPayload] = useState<{
-    result: OpenPackResult;
-    cards: RevealedCard[];
-    existingByCardId: Map<string, RevealedCard>;
+  // Polish spec §147–§151 (Phase 43). Pack reveal state — in-place
+  // panel replaces the modal. Each pack is its own moment; user
+  // advances with a `Next pack` button between packs. `Done` on the
+  // last pack returns them to the lineup (clears the state).
+  const [revealState, setRevealState] = useState<{
+    packs: PerPackPayload[];
+    currentPackIndex: number;
+    packType: PackType;
   } | null>(null);
 
   function handleCardDropped(
@@ -677,60 +676,64 @@ export function LineupView(props: LineupViewProps) {
     });
   }, [selectedIds, router]);
 
-  // Polish spec §109 (Phase 36). After openPacksBatch returns,
-  // flatten all openings' cardResults into a single synthetic
-  // OpenPackResult so the reveal modal renders the whole batch as
-  // one continuous flow. Dupe existing-instance lookup happens the
-  // same way a single pack does; we just union everyone's existing
-  // IDs into the fetchRevealedCards call.
+  // Polish spec §149 (Phase 43). After openPacksBatch returns, we
+  // partition the openings into per-pack payloads so PackRevealPanel
+  // can walk them one at a time with a `Next pack` advance gate
+  // between each. Single fetchRevealedCards call still pulls all IDs
+  // (new + existing dupes) at once; we split the result by pack
+  // afterwards so each pack carries only its own cards + dupe map.
   const handleBatchOpened = useCallback(async (batch: OpenPacksBatchResult, packType: PackType) => {
     if (batch.openings.length === 0) return;
-    const flatCardIds: string[] = [];
-    const flatCardResults: OpenPackResult["cardResults"] = [];
-    const flatTokenIds: string[] = [];
-    let totalDupes = 0;
-    let totalCoinsFromDupes = 0;
-    for (const op of batch.openings) {
-      flatCardIds.push(...op.cardIds);
-      flatCardResults.push(...op.cardResults);
-      flatTokenIds.push(...op.tokenIds);
-      totalDupes += op.duplicateCount;
-      totalCoinsFromDupes += op.coinsFromDupes;
-    }
-    const existingIds = flatCardResults
+    const allNewIds = batch.openings.flatMap((op) => op.cardIds);
+    const allExistingIds = batch.openings
+      .flatMap((op) => op.cardResults)
       .map((c) => c.existingCardId)
       .filter((id): id is string => !!id);
-    const allIds = Array.from(new Set([...flatCardIds, ...existingIds]));
+    const allIds = Array.from(new Set([...allNewIds, ...allExistingIds]));
     const all = await fetchRevealedCards(allIds);
-    const newCardIds = new Set(flatCardIds);
-    const newCards = flatCardIds
-      .map((id) => all.find((c) => c.id === id))
-      .filter((c): c is RevealedCard => !!c);
-    const existingMap = new Map<string, RevealedCard>();
-    for (const c of all) {
-      if (!newCardIds.has(c.id)) existingMap.set(c.id, c);
-    }
-    // Synthesize a single OpenPackResult that covers the whole batch.
-    const synthetic: OpenPackResult = {
-      openingId: batch.openings[0]?.openingId ?? "",
-      cardIds: flatCardIds,
-      cardResults: flatCardResults,
-      tokenIds: flatTokenIds,
-      duplicateCount: totalDupes,
-      coinsFromDupes: totalCoinsFromDupes,
-      coinCost: batch.totalCoinCost,
-      balanceAfter: batch.balanceAfter,
-      packType,
-    };
-    setRevealPayload({
-      result: synthetic,
-      cards: newCards,
-      existingByCardId: existingMap,
+    const byId = new Map<string, RevealedCard>();
+    for (const c of all) byId.set(c.id, c);
+
+    const packs: PerPackPayload[] = batch.openings.map((op) => {
+      const packCards = op.cardIds.map((id) => byId.get(id)).filter((c): c is RevealedCard => !!c);
+      const packExisting = new Map<string, RevealedCard>();
+      for (const cr of op.cardResults) {
+        if (cr.existingCardId) {
+          const existing = byId.get(cr.existingCardId);
+          if (existing) packExisting.set(cr.existingCardId, existing);
+        }
+      }
+      const perPackResult: OpenPackResult = {
+        openingId: op.openingId,
+        cardIds: op.cardIds,
+        cardResults: op.cardResults,
+        tokenIds: op.tokenIds,
+        duplicateCount: op.duplicateCount,
+        coinsFromDupes: op.coinsFromDupes,
+        coinCost: op.coinCost,
+        balanceAfter: op.balanceAfter,
+        packType: op.packType,
+      };
+      return {
+        result: perPackResult,
+        cards: packCards,
+        existingByCardId: packExisting,
+      };
     });
+
+    setRevealState({ packs, currentPackIndex: 0, packType });
   }, []);
 
-  const handleRevealClosed = useCallback(() => {
-    setRevealPayload(null);
+  const handleAdvancePack = useCallback(() => {
+    setRevealState((s) =>
+      s && s.currentPackIndex + 1 < s.packs.length
+        ? { ...s, currentPackIndex: s.currentPackIndex + 1 }
+        : s,
+    );
+  }, []);
+
+  const handleRevealDone = useCallback(() => {
+    setRevealState(null);
     router.refresh();
   }, [router]);
 
@@ -814,8 +817,31 @@ export function LineupView(props: LineupViewProps) {
   // Providers are no-ops when no games are live for the user's
   // lineup.
 
+  // Polish spec §147 (Phase 43). When a reveal is active, the shell's
+  // main content swaps to PackRevealPanel — lineup diamond + tokens
+  // tray + cards grid all hide, sidebar stays visible. Cross-fade
+  // handled inline with a 150ms opacity animation (§148). Using a
+  // keyed render so React discards the panel's internal state when
+  // the reveal closes, preventing stale peel state from leaking into
+  // a subsequent buy.
+  const mainOverride = revealState ? (
+    <div
+      key={`reveal-${revealState.packs[0]?.result.openingId ?? "batch"}`}
+      className="flex h-full min-h-0 flex-1 animate-in fade-in duration-150"
+    >
+      <PackRevealPanel
+        packs={revealState.packs}
+        currentPackIndex={revealState.currentPackIndex}
+        packType={revealState.packType}
+        onAdvancePack={handleAdvancePack}
+        onDone={handleRevealDone}
+      />
+    </div>
+  ) : null;
+
   const shell = (
     <LineupShell
+      mainOverride={mainOverride}
       grid={
         <LineupGrid
           slotFills={slotFills}
@@ -865,8 +891,9 @@ export function LineupView(props: LineupViewProps) {
             dailyPackSecondsUntilReady={props.dailyPackSecondsUntilReady}
             standardPackCost={props.standardPackCost}
             onPacksOpened={(result, packType) => {
-              // Fire-and-forget; handleBatchOpened stages the reveal
-              // payload that opens PackOpenerModal.
+              // Fire-and-forget; handleBatchOpened partitions the batch
+              // into per-pack payloads + stages revealState, which
+              // replaces the main content with PackRevealPanel (§147).
               void handleBatchOpened(result, packType);
             }}
           />
@@ -905,19 +932,8 @@ export function LineupView(props: LineupViewProps) {
           {shell}
         </CardContractEventsProvider>
       </LiveEventsProvider>
-      {/* Polish spec §143 (Phase 42). Buy flow lives in the sidebar
-          Packs tab — no more FAB, no more buy modal. The reveal
-          modal stays until Phase 43 swaps it for an in-place panel. */}
-      <PackOpenerModal
-        open={revealPayload !== null}
-        onOpenChange={(next) => {
-          if (!next) handleRevealClosed();
-        }}
-        result={revealPayload?.result ?? null}
-        cards={revealPayload?.cards ?? []}
-        existingByCardId={revealPayload?.existingByCardId ?? new Map()}
-        onClosed={handleRevealClosed}
-      />
+      {/* Phase 43: PackOpenerModal deleted. Reveal happens in-place
+          in the shell's main content area; see mainOverride above. */}
     </DndProvider>
   );
 }

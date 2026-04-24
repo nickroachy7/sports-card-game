@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Check } from "lucide-react";
+import { Archive, ArrowRight, Check } from "lucide-react";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -9,13 +9,7 @@ import type { OpenPackResult } from "@/app/actions/packs";
 import type { RevealedCard } from "@/app/actions/packs-reveal";
 import { vaultCardMidseason } from "@/app/actions/vault";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import type { PackType } from "@/lib/contracts/cards";
 import { cn } from "@/lib/utils";
 
 import { PackCardFlip } from "./PackCardFlip";
@@ -23,46 +17,57 @@ import { PackDupePanel } from "./PackDupePanel";
 import { StarPullBurst } from "./StarPullBurst";
 
 /**
- * Polish spec §111 (Phase 36) — pack reveal redesign.
+ * Polish spec §147–§151 (Phase 43) — in-place pack reveal.
  *
- * The old carousel showed one card at a time with progress dots and
- * a Next button. The new layout stacks every face-down card in the
- * center, tap the top to peel, each peeled card flips + settles in
- * a revealed row below. Once the stack is empty and all dupes are
- * resolved, per-card Quick-sell / Add-to-vault buttons unlock + the
- * Done button becomes enabled.
+ * Replaces the PackOpenerModal (§111 from Phase 36) with a non-modal
+ * panel that takes over the lineup page's main content area. Lineup
+ * diamond + cards grid hide during reveal; sidebar stays visible.
  *
- * Accepts the SAME input shape as the prior version; LineupView
- * flattens batch openings (§109) into a single synthetic
- * `OpenPackResult` so the component stays oblivious to whether this
- * was one pack or ten.
+ * Sequential multi-pack flow: each pack gets its own peel/flip
+ * moment. Between packs the user clicks `Next pack (N of M)`;
+ * on the last pack that button becomes `Done · back to lineup`.
+ * No mid-reveal escape — the footer button is the only exit path.
+ *
+ * Per-pack state (peel index, flip array, dupe resolutions, per-card
+ * actions) resets when `currentPackIndex` advances.
  */
 
-type Props = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  result: OpenPackResult | null;
-  /** New cards pulled this reveal, in the same order as result.cardResults. */
+export type PerPackPayload = {
+  /** Per-pack result payload. cardIds scoped to this pack only. */
+  result: OpenPackResult;
+  /** Cards pulled this pack, in cardResults order. */
   cards: RevealedCard[];
-  /** Map of existing-instance cardId → RevealedCard, for dupe resolution. */
+  /** Dupe lookup map: existingCardId → RevealedCard. Only entries for
+   *  dupes in this pack. */
   existingByCardId: Map<string, RevealedCard>;
-  onClosed?: () => void;
 };
 
 type DupeResolution = "pending" | "kept_new" | "kept_existing";
 type PerCardAction = "quickSold" | "vaulted" | null;
 
-export function PackOpenerModal({
-  open,
-  onOpenChange,
-  result,
-  cards,
-  existingByCardId,
-  onClosed,
+type Props = {
+  packs: PerPackPayload[];
+  currentPackIndex: number;
+  packType: PackType;
+  onAdvancePack: () => void;
+  onDone: () => void;
+};
+
+export function PackRevealPanel({
+  packs,
+  currentPackIndex,
+  packType,
+  onAdvancePack,
+  onDone,
 }: Props) {
-  // Peel order: cards[0] is on top of the stack, last index is at the
-  // bottom. Peeling advances `peelIndex`. Flipped cards persist in
-  // the revealed row.
+  const pack = packs[currentPackIndex] ?? null;
+  const cards = pack?.cards ?? [];
+  const result = pack?.result ?? null;
+  const existingByCardId = pack?.existingByCardId ?? new Map<string, RevealedCard>();
+
+  const totalPacks = packs.length;
+  const isFinalPack = currentPackIndex >= totalPacks - 1;
+
   const [peelIndex, setPeelIndex] = useState(0);
   const [flipped, setFlipped] = useState<boolean[]>([]);
   const [resolution, setResolution] = useState<DupeResolution[]>([]);
@@ -71,9 +76,12 @@ export function PackOpenerModal({
   const [activeDupeIdx, setActiveDupeIdx] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Reset on open.
+  // Reset per-pack state whenever the pack pointer changes — each
+  // pack is its own fresh moment (§149). `cards` + `result` are
+  // derived from `packs[currentPackIndex]`, so their pointer identity
+  // flips exactly when `currentPackIndex` advances. No need to list
+  // the index explicitly (Biome flags it as an unused dep).
   useEffect(() => {
-    if (!open) return;
     setPeelIndex(0);
     setFlipped(Array(cards.length).fill(false));
     setResolution(
@@ -85,15 +93,12 @@ export function PackOpenerModal({
     setPerCardAction(Array(cards.length).fill(null));
     setCelebratingIdx(null);
     setActiveDupeIdx(null);
-  }, [open, cards, result]);
+  }, [cards, result]);
 
-  // When the ACTIVELY peeling card is a dupe, its flip handler queues
-  // `activeDupeIdx` so the dupe panel modal shows up centered over
-  // the deck. Resolving advances peelIndex.
   const stackRemaining = Math.max(0, cards.length - peelIndex);
   const allPeeled = peelIndex >= cards.length;
   const allResolved = resolution.every((r) => r !== "pending");
-  const canDone = allPeeled && allResolved;
+  const packComplete = allPeeled && allResolved;
 
   function handlePeel() {
     if (peelIndex >= cards.length) return;
@@ -112,9 +117,6 @@ export function PackOpenerModal({
         setCelebratingIdx((cur) => (cur === idx ? null : cur));
       }, hold);
     }
-    // Advance peel index. If this card was a dupe, park the dupe panel
-    // as a modal-within-modal and wait for resolution before
-    // advancing to the next peel.
     const isDupe = result?.cardResults?.[idx]?.isDupe ?? false;
     if (isDupe) {
       setActiveDupeIdx(idx);
@@ -153,9 +155,6 @@ export function PackOpenerModal({
   function handlePerCardQuickSell(idx: number) {
     const card = cards[idx];
     if (!card) return;
-    // Only the new-instance side of a dupe can be quick-sold here —
-    // if the user kept-existing, the new instance was already sold,
-    // so hide the button.
     const pulled = result?.cardResults?.[idx];
     if (pulled?.isDupe && resolution[idx] === "kept_existing") return;
     startTransition(async () => {
@@ -191,26 +190,20 @@ export function PackOpenerModal({
     });
   }
 
-  function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen && !canDone) return; // force Done button
-    onOpenChange(nextOpen);
-    if (!nextOpen) onClosed?.();
+  function handleFooterAction() {
+    if (!packComplete) return;
+    if (isFinalPack) onDone();
+    else onAdvancePack();
   }
 
-  const summary = useMemo(() => {
-    if (!result) return null;
-    const parts: string[] = [];
-    parts.push(`${cards.length} card${cards.length === 1 ? "" : "s"}`);
-    if (result.duplicateCount > 0) {
-      parts.push(`${result.duplicateCount} dupe${result.duplicateCount === 1 ? "" : "s"}`);
-    }
-    if (result.tokenIds.length > 0) {
-      parts.push(`${result.tokenIds.length} token${result.tokenIds.length === 1 ? "" : "s"}`);
-    }
-    return parts.join(" · ");
-  }, [result, cards.length]);
+  const subtitle = useMemo(() => {
+    if (!pack) return "";
+    if (!allPeeled) return `Tap the top card to peel · ${stackRemaining} left`;
+    if (!allResolved) return "Resolve the dupe to continue";
+    if (isFinalPack) return "All packs opened — back to lineup?";
+    return "Pack complete · next up?";
+  }, [pack, allPeeled, allResolved, isFinalPack, stackRemaining]);
 
-  // Dupe panel payload (only when the orchestrator has parked us).
   const dupePayload = useMemo(() => {
     if (activeDupeIdx === null) return null;
     const newCard = cards[activeDupeIdx] ?? null;
@@ -221,57 +214,53 @@ export function PackOpenerModal({
     return { idx: activeDupeIdx, newCard, existing };
   }, [activeDupeIdx, cards, result, existingByCardId]);
 
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      {/* sm:max-w-5xl force-overrides the Dialog primitive's
-          sm:max-w-lg default so the reveal has room for a row of
-          revealed cards. Close button hidden until canDone so the
-          user can't bail mid-reveal. */}
-      <DialogContent className="sm:max-w-5xl" showCloseButton={canDone}>
-        <DialogHeader>
-          <DialogTitle className="uppercase tracking-wider">Pack opened</DialogTitle>
-          {summary && <p className="text-sm text-[var(--text-2)]">{summary}</p>}
-        </DialogHeader>
+  if (!pack) {
+    return (
+      <div className="flex h-full items-center justify-center py-12 text-sm text-[var(--text-3)]">
+        No packs to reveal.
+      </div>
+    );
+  }
 
+  return (
+    <div className="flex h-full flex-col gap-4 px-6 py-5">
+      <RevealHeader
+        currentPackIndex={currentPackIndex}
+        totalPacks={totalPacks}
+        packType={packType}
+        packComplete={packComplete}
+        subtitle={subtitle}
+      />
+
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-6">
         {cards.length === 0 ? (
-          <div className="py-12 text-center text-sm text-[var(--text-3)]">No cards to reveal.</div>
+          <p className="text-sm text-[var(--text-3)]">No cards in this pack.</p>
         ) : (
-          <div className="relative flex flex-col items-center gap-5 py-2">
-            {/* Stack — disappears once the last card is peeled. */}
+          <>
             {!allPeeled && (
-              <div className="flex flex-col items-center gap-2">
-                <StackZone
-                  activeIdx={peelIndex}
-                  remaining={stackRemaining}
-                  activeCard={cards[peelIndex] ?? null}
-                  activeFlipped={flipped[peelIndex] ?? false}
-                  onPeel={handlePeel}
-                  onFlipComplete={handleFlipComplete}
-                  celebrating={celebratingIdx === peelIndex}
-                />
-                <p className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-                  {stackRemaining} remaining · Tap the top card
-                </p>
-              </div>
+              <StackZone
+                activeIdx={peelIndex}
+                remaining={stackRemaining}
+                activeCard={cards[peelIndex] ?? null}
+                activeFlipped={flipped[peelIndex] ?? false}
+                onPeel={handlePeel}
+                onFlipComplete={handleFlipComplete}
+                celebrating={celebratingIdx === peelIndex}
+              />
             )}
 
-            {/* Revealed row — fills in as cards are peeled. Only
-                renders revealed cards (no ghost placeholders) so the
-                row visually grows as you peel. */}
             <RevealedRow
               cards={cards}
               cardResults={result?.cardResults ?? []}
               flipped={flipped}
               resolution={resolution}
               perCardAction={perCardAction}
-              actionsEnabled={canDone}
+              actionsEnabled={packComplete}
               pending={pending}
               onQuickSell={handlePerCardQuickSell}
               onVault={handlePerCardVault}
             />
 
-            {/* Dupe resolution modal-within-modal. Parks the peel flow
-                until the user decides; then advances. */}
             {dupePayload && (
               <DupeResolutionOverlay
                 newCard={dupePayload.newCard}
@@ -281,32 +270,105 @@ export function PackOpenerModal({
                 onKeepExisting={() => handleKeepExisting(dupePayload.idx)}
               />
             )}
-          </div>
+          </>
         )}
+      </div>
 
-        <DialogFooter>
-          <Button onClick={() => handleOpenChange(false)} disabled={!canDone} className="w-full">
-            {canDone
-              ? "Done"
-              : allPeeled
-                ? "Resolve dupes to continue"
-                : "Reveal all cards to continue"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      <footer className="flex justify-end">
+        <Button
+          size="lg"
+          disabled={!packComplete}
+          onClick={handleFooterAction}
+          className="min-w-[180px]"
+        >
+          {!packComplete ? (
+            allPeeled ? (
+              "Resolve dupe to continue"
+            ) : (
+              "Reveal all cards"
+            )
+          ) : isFinalPack ? (
+            <>
+              <Check className="mr-1 size-4" aria-hidden="true" />
+              Done · back to lineup
+            </>
+          ) : (
+            <>
+              Next pack ({currentPackIndex + 2} of {totalPacks})
+              <ArrowRight className="ml-1 size-4" aria-hidden="true" />
+            </>
+          )}
+        </Button>
+      </footer>
+    </div>
   );
 }
 
 /**
- * StackZone — z-stacked face-down cards with a small 2px offset per
- * card for depth. Only the top card receives a flip click; after
- * flipping, its onComplete fires the advance in the parent.
- *
- * The revealed card briefly stays visible here during its flip
- * animation before the parent's `peelIndex` advance hides the stack
- * card (letting the RevealedRow take over).
+ * Polish spec §150. Progress header at the top of the panel. Segmented
+ * progress bar on the right: one segment per pack. Active segment
+ * pulses; completed segments light; pending segments are muted.
+ * Single-pack reveals degrade to a simpler "PACK · TYPE" label
+ * (no counter, empty progress column).
  */
+function RevealHeader({
+  currentPackIndex,
+  totalPacks,
+  packType,
+  packComplete,
+  subtitle,
+}: {
+  currentPackIndex: number;
+  totalPacks: number;
+  packType: PackType;
+  packComplete: boolean;
+  subtitle: string;
+}) {
+  const isMultiPack = totalPacks > 1;
+  return (
+    <header className="flex items-center justify-between gap-4 border-[var(--border)] border-b pb-3">
+      <div className="flex flex-col">
+        <h1 className="font-bold font-mono text-[var(--text)] text-xs uppercase tracking-wider">
+          {isMultiPack ? (
+            <>
+              Pack {currentPackIndex + 1} of {totalPacks}
+              <span className="ml-2 text-[var(--text-3)]">· {packType}</span>
+            </>
+          ) : (
+            <>{packType} pack</>
+          )}
+        </h1>
+        <p className="mt-0.5 text-[var(--text-3)] text-xs">{subtitle}</p>
+      </div>
+      {isMultiPack && (
+        <ol aria-hidden="true" className="flex items-center gap-1">
+          {Array.from({ length: totalPacks }, (_, i) => i).map((i) => {
+            const state =
+              i < currentPackIndex
+                ? "done"
+                : i === currentPackIndex
+                  ? packComplete
+                    ? "done"
+                    : "active"
+                  : "pending";
+            return (
+              <li
+                key={`progress-${i}`}
+                className={cn(
+                  "h-1.5 w-6 rounded-full transition-colors",
+                  state === "done" && "bg-[var(--tier-gold)]",
+                  state === "active" && "animate-pulse bg-[var(--tier-gold)]/60",
+                  state === "pending" && "bg-[var(--border)]",
+                )}
+              />
+            );
+          })}
+        </ol>
+      )}
+    </header>
+  );
+}
+
 function StackZone({
   activeIdx,
   remaining,
@@ -324,13 +386,9 @@ function StackZone({
   onFlipComplete: (idx: number) => void;
   celebrating: boolean;
 }) {
-  // Cap the visible depth at 6 layers for readability; beyond that the
-  // offsets compound into nonsense.
   const visibleLayers = Math.min(remaining - 1, 6);
   return (
     <div className="relative flex h-[260px] w-[200px] items-center justify-center">
-      {/* Depth layers under the top card. Keyed by layer offset —
-          decorative, never reorders, so index-as-key is fine here. */}
       {Array.from({ length: visibleLayers }, (_, i) => i).map((i) => (
         <div
           key={`depth-layer-${i}`}
@@ -344,7 +402,6 @@ function StackZone({
           }}
         />
       ))}
-      {/* Top card — the active peel target. */}
       {activeCard && (
         <div className="relative">
           <StarPullBurst active={celebrating} tier={activeCard.playerValueTier}>
@@ -361,16 +418,6 @@ function StackZone({
   );
 }
 
-/**
- * RevealedRow — flex-wrap grid that fills in as cards are peeled.
- * Only renders revealed cards (no ghost placeholders) so the row
- * visually grows outward from the center as each card settles.
- *
- * Per-card Quick-sell / Vault buttons stay disabled until the whole
- * stack is peeled AND all dupes are resolved (`actionsEnabled`).
- * Before then the buttons show as placeholders so the layout
- * doesn't shift once they become available.
- */
 function RevealedRow({
   cards,
   cardResults,
@@ -414,7 +461,7 @@ function RevealedRow({
               <PackCardFlip card={card} faceUp={true} onFlip={() => {}} />
               {action === "vaulted" && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
-                  <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--tier-gold)]">
+                  <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] text-[var(--tier-gold)] uppercase tracking-wider">
                     <Archive className="size-3" aria-hidden="true" />
                     Vaulted
                   </span>
@@ -422,7 +469,7 @@ function RevealedRow({
               )}
               {action === "quickSold" && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
-                  <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--text-2)]">
+                  <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] text-[var(--text-2)] uppercase tracking-wider">
                     <Check className="size-3" aria-hidden="true" />
                     Sold
                   </span>
@@ -464,12 +511,6 @@ function RevealedRow({
   );
 }
 
-/**
- * DupeResolutionOverlay — centered panel that pauses the reveal flow
- * whenever a freshly-peeled card is a duplicate. Uses the existing
- * PackDupePanel side-by-side comparison; wraps it in a scrim so the
- * row underneath stays visible but non-interactive.
- */
 function DupeResolutionOverlay({
   newCard,
   existingCard,

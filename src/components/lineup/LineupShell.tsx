@@ -10,6 +10,11 @@ type Props = {
    *  panel shows the user's entire collection in a responsive grid
    *  below the tokens. `/collection` page was killed in this phase. */
   cards: ReactNode;
+  /** Polish spec §147 (Phase 43). When set, the left column replaces
+   *  its grid / tokens / cards stack with this single node. Used by
+   *  the in-place pack reveal panel — lineup hides while the user
+   *  peels through a pack batch; sidebar stays visible. */
+  mainOverride?: ReactNode;
 };
 
 /**
@@ -36,7 +41,7 @@ type Props = {
  * is for other pages; the lineup shell just fills it exactly so it
  * never triggers.
  */
-export function LineupShell({ grid, sidebar, tokens, cards }: Props) {
+export function LineupShell({ grid, sidebar, tokens, cards, mainOverride }: Props) {
   return (
     <div
       className="flex h-full flex-col bg-[var(--bg)]"
@@ -48,9 +53,13 @@ export function LineupShell({ grid, sidebar, tokens, cards }: Props) {
     >
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto" data-scroll="lineup-main">
-          {grid}
-          {tokens}
-          {cards}
+          {mainOverride ?? (
+            <>
+              {grid}
+              {tokens}
+              {cards}
+            </>
+          )}
         </div>
         <aside
           className="hidden w-72 shrink-0 flex-col gap-5 overflow-y-auto border-[var(--border)] border-l bg-[var(--surface)] p-4 md:flex"
