@@ -212,7 +212,7 @@ export function PackRevealPanel({
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 px-6 py-5">
+    <div className="flex h-full w-full flex-col gap-4 px-6 py-5">
       <RevealHeader
         currentPackIndex={currentPackIndex}
         totalPacks={totalPacks}
@@ -439,13 +439,17 @@ function RevealCardSlot({
           </div>
         )}
       </div>
-      {isFlipped && (
+      {/* §158: buttons only render once the pack-complete gate unlocks
+          (all cards flipped + dupes resolved). Keeps mid-flip slots
+          visually clean and avoids the row jumping when each card's
+          buttons would pop in independently. */}
+      {isFlipped && actionsEnabled && (
         <div className="flex w-full flex-col items-stretch gap-1">
           <Button
             variant="outline"
             size="sm"
             onClick={onQuickSell}
-            disabled={!actionsEnabled || pending || action !== null || dimmed}
+            disabled={pending || action !== null || dimmed}
             className="h-6 px-1 text-[10px]"
           >
             Sell ({card.quickSellValue.toLocaleString()})
@@ -455,12 +459,7 @@ function RevealCardSlot({
             size="sm"
             onClick={onVault}
             disabled={
-              !actionsEnabled ||
-              pending ||
-              action !== null ||
-              dimmed ||
-              card.isExpired ||
-              card.hasAppliedToken
+              pending || action !== null || dimmed || card.isExpired || card.hasAppliedToken
             }
             className="h-6 px-1 text-[10px]"
           >
