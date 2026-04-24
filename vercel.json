@@ -6,6 +6,14 @@
       "schedule": "0 8 * * *"
     },
     {
+      "path": "/api/cron/mlb-26man-sync",
+      "schedule": "5 8 * * *"
+    },
+    {
+      "path": "/api/cron/player-tier-classify",
+      "schedule": "15 9 * * *"
+    },
+    {
       "path": "/api/cron/bdl-injuries-sync",
       "schedule": "15 8 * * *"
     },
