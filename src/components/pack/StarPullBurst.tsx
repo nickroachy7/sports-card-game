@@ -25,11 +25,16 @@ type Props = {
   active: boolean;
   tier: PlayerValueTier;
   children: ReactNode;
+  /** Polish spec §155 (Phase 44). Scales particle radius + glow
+   *  blur so the burst feels proportional at smaller card sizes.
+   *  Defaults to 1 (medium-size card baseline). Pass 0.75 for
+   *  lineup-size reveals. */
+  sizeScale?: number;
 };
 
 const SCALE_SPRING = { type: "spring" as const, stiffness: 300, damping: 22, mass: 1 };
 
-export function StarPullBurst({ active, tier, children }: Props) {
+export function StarPullBurst({ active, tier, children, sizeScale = 1 }: Props) {
   const reduced = useReducedMotion();
 
   // Only star + starter trigger. role + prospect are normal flips.
@@ -98,7 +103,7 @@ export function StarPullBurst({ active, tier, children }: Props) {
             ~500ms. */}
         <AnimatePresence>
           {active && variant === "star" && !reduced && (
-            <Particles key="star-particles" count={12} />
+            <Particles key="star-particles" count={12} sizeScale={sizeScale} />
           )}
         </AnimatePresence>
 
@@ -115,16 +120,16 @@ export function StarPullBurst({ active, tier, children }: Props) {
   );
 }
 
-function Particles({ count }: { count: number }) {
+function Particles({ count, sizeScale = 1 }: { count: number; sizeScale?: number }) {
   // Pre-compute particle vectors so each particle has a stable trajectory.
   const particles = Array.from({ length: count }, (_, i) => {
     const angle = (i / count) * Math.PI * 2;
-    const distance = 120 + Math.random() * 80;
+    const distance = (120 + Math.random() * 80) * sizeScale;
     return {
       id: i,
       dx: Math.cos(angle) * distance,
       dy: Math.sin(angle) * distance,
-      size: 6 + Math.random() * 6,
+      size: (6 + Math.random() * 6) * sizeScale,
     };
   });
   return (

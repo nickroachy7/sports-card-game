@@ -17,19 +17,19 @@ import { PackDupePanel } from "./PackDupePanel";
 import { StarPullBurst } from "./StarPullBurst";
 
 /**
- * Polish spec §147–§151 (Phase 43) — in-place pack reveal.
+ * Polish spec §147–§151 (Phase 43) → §154–§158 (Phase 44) — in-place
+ * pack reveal.
  *
- * Replaces the PackOpenerModal (§111 from Phase 36) with a non-modal
- * panel that takes over the lineup page's main content area. Lineup
- * diamond + cards grid hide during reveal; sidebar stays visible.
+ * Phase 43 shape: peel stack at top, revealed row below. Phase 44
+ * merges both into a single horizontal flex-wrap row of lineup-size
+ * cards (§154, §155). Any card can be flipped in any order (§156);
+ * dupe resolution happens inline — the dupe slot expands to show a
+ * side-by-side new/existing comparison right where the card sits,
+ * no overlay (§157). Per-card Sell / Vault gate unchanged — all
+ * cards flipped + all dupes resolved is the unlock (§158).
  *
- * Sequential multi-pack flow: each pack gets its own peel/flip
- * moment. Between packs the user clicks `Next pack (N of M)`;
- * on the last pack that button becomes `Done · back to lineup`.
- * No mid-reveal escape — the footer button is the only exit path.
- *
- * Per-pack state (peel index, flip array, dupe resolutions, per-card
- * actions) resets when `currentPackIndex` advances.
+ * Sequential multi-pack flow preserved from Phase 43: each pack gets
+ * its own peel/flip arc; Next Pack / Done button at the bottom.
  */
 
 export type PerPackPayload = {
@@ -68,7 +68,6 @@ export function PackRevealPanel({
   const totalPacks = packs.length;
   const isFinalPack = currentPackIndex >= totalPacks - 1;
 
-  const [peelIndex, setPeelIndex] = useState(0);
   const [flipped, setFlipped] = useState<boolean[]>([]);
   const [resolution, setResolution] = useState<DupeResolution[]>([]);
   const [perCardAction, setPerCardAction] = useState<PerCardAction[]>([]);
@@ -76,13 +75,10 @@ export function PackRevealPanel({
   const [activeDupeIdx, setActiveDupeIdx] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Reset per-pack state whenever the pack pointer changes — each
-  // pack is its own fresh moment (§149). `cards` + `result` are
-  // derived from `packs[currentPackIndex]`, so their pointer identity
-  // flips exactly when `currentPackIndex` advances. No need to list
-  // the index explicitly (Biome flags it as an unused dep).
+  // Reset per-pack state whenever the pack pointer changes (§149).
+  // `cards` + `result` are derived from `packs[currentPackIndex]`, so
+  // their pointer identity flips exactly when the active pack changes.
   useEffect(() => {
-    setPeelIndex(0);
     setFlipped(Array(cards.length).fill(false));
     setResolution(
       cards.map((_, i) => {
@@ -95,14 +91,15 @@ export function PackRevealPanel({
     setActiveDupeIdx(null);
   }, [cards, result]);
 
-  const stackRemaining = Math.max(0, cards.length - peelIndex);
-  const allPeeled = peelIndex >= cards.length;
+  const flippedCount = flipped.filter(Boolean).length;
+  const cardsRemaining = cards.length - flippedCount;
+  const allFlipped = flippedCount === cards.length && cards.length > 0;
   const allResolved = resolution.every((r) => r !== "pending");
-  const packComplete = allPeeled && allResolved;
+  const packComplete = allFlipped && allResolved;
 
-  function handlePeel() {
-    if (peelIndex >= cards.length) return;
-    const idx = peelIndex;
+  function handleFlip(idx: number) {
+    // Any face-down card is a valid click target (§156).
+    if (flipped[idx]) return;
     setFlipped((f) => f.map((v, i) => (i === idx ? true : v)));
   }
 
@@ -121,7 +118,6 @@ export function PackRevealPanel({
     if (isDupe) {
       setActiveDupeIdx(idx);
     }
-    setPeelIndex((p) => Math.max(p, idx + 1));
   }
 
   function handleKeepNew(idx: number) {
@@ -134,7 +130,7 @@ export function PackRevealPanel({
         return;
       }
       setResolution((r) => r.map((v, i) => (i === idx ? "kept_new" : v)));
-      setActiveDupeIdx(null);
+      setActiveDupeIdx((cur) => (cur === idx ? null : cur));
     });
   }
 
@@ -148,7 +144,7 @@ export function PackRevealPanel({
         return;
       }
       setResolution((r) => r.map((v, i) => (i === idx ? "kept_existing" : v)));
-      setActiveDupeIdx(null);
+      setActiveDupeIdx((cur) => (cur === idx ? null : cur));
     });
   }
 
@@ -198,21 +194,14 @@ export function PackRevealPanel({
 
   const subtitle = useMemo(() => {
     if (!pack) return "";
-    if (!allPeeled) return `Tap the top card to peel · ${stackRemaining} left`;
+    if (activeDupeIdx !== null) return "Resolve the dupe to continue";
+    if (!allFlipped) {
+      return `Tap any card to reveal · ${cardsRemaining} of ${cards.length} left`;
+    }
     if (!allResolved) return "Resolve the dupe to continue";
     if (isFinalPack) return "All packs opened — back to lineup?";
     return "Pack complete · next up?";
-  }, [pack, allPeeled, allResolved, isFinalPack, stackRemaining]);
-
-  const dupePayload = useMemo(() => {
-    if (activeDupeIdx === null) return null;
-    const newCard = cards[activeDupeIdx] ?? null;
-    const pulled = result?.cardResults?.[activeDupeIdx];
-    const existingId = pulled?.existingCardId ?? null;
-    const existing = existingId ? (existingByCardId.get(existingId) ?? null) : null;
-    if (!newCard || !existing) return null;
-    return { idx: activeDupeIdx, newCard, existing };
-  }, [activeDupeIdx, cards, result, existingByCardId]);
+  }, [pack, activeDupeIdx, allFlipped, allResolved, isFinalPack, cards.length, cardsRemaining]);
 
   if (!pack) {
     return (
@@ -232,45 +221,61 @@ export function PackRevealPanel({
         subtitle={subtitle}
       />
 
-      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-6">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center">
         {cards.length === 0 ? (
           <p className="text-sm text-[var(--text-3)]">No cards in this pack.</p>
         ) : (
-          <>
-            {!allPeeled && (
-              <StackZone
-                activeIdx={peelIndex}
-                remaining={stackRemaining}
-                activeCard={cards[peelIndex] ?? null}
-                activeFlipped={flipped[peelIndex] ?? false}
-                onPeel={handlePeel}
-                onFlipComplete={handleFlipComplete}
-                celebrating={celebratingIdx === peelIndex}
-              />
-            )}
+          <div className="flex flex-wrap items-start justify-center gap-x-3 gap-y-5">
+            {cards.map((card, i) => {
+              const isFlipped = flipped[i] ?? false;
+              const res = resolution[i] ?? "kept_new";
+              const action = perCardAction[i];
+              const isDupe = result?.cardResults?.[i]?.isDupe ?? false;
+              const showingDupePanel = activeDupeIdx === i && res === "pending";
 
-            <RevealedRow
-              cards={cards}
-              cardResults={result?.cardResults ?? []}
-              flipped={flipped}
-              resolution={resolution}
-              perCardAction={perCardAction}
-              actionsEnabled={packComplete}
-              pending={pending}
-              onQuickSell={handlePerCardQuickSell}
-              onVault={handlePerCardVault}
-            />
+              // Dupe card in active resolution → render the compact
+              // comparison panel in place of the card slot.
+              if (showingDupePanel) {
+                const pulled = result?.cardResults?.[i];
+                const existingId = pulled?.existingCardId ?? null;
+                const existing = existingId ? (existingByCardId.get(existingId) ?? null) : null;
+                if (existing) {
+                  return (
+                    <PackDupePanel
+                      key={card.id}
+                      compact
+                      newCard={card}
+                      existingCard={existing}
+                      pending={pending}
+                      onKeepNew={() => handleKeepNew(i)}
+                      onKeepExisting={() => handleKeepExisting(i)}
+                    />
+                  );
+                }
+              }
 
-            {dupePayload && (
-              <DupeResolutionOverlay
-                newCard={dupePayload.newCard}
-                existingCard={dupePayload.existing}
-                pending={pending}
-                onKeepNew={() => handleKeepNew(dupePayload.idx)}
-                onKeepExisting={() => handleKeepExisting(dupePayload.idx)}
-              />
-            )}
-          </>
+              // After kept_existing, the "new" card was sold — dim its
+              // slot to signal absence (§157 exit state).
+              const dimmedForKeptExisting = isDupe && res === "kept_existing";
+
+              return (
+                <RevealCardSlot
+                  key={card.id}
+                  card={card}
+                  isFlipped={isFlipped}
+                  celebrating={celebratingIdx === i}
+                  action={action}
+                  dimmed={dimmedForKeptExisting || action === "quickSold"}
+                  actionsEnabled={packComplete}
+                  pending={pending}
+                  onFlip={() => handleFlip(i)}
+                  onFlipComplete={() => handleFlipComplete(i)}
+                  onQuickSell={() => handlePerCardQuickSell(i)}
+                  onVault={() => handlePerCardVault(i)}
+                />
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -282,7 +287,7 @@ export function PackRevealPanel({
           className="min-w-[180px]"
         >
           {!packComplete ? (
-            allPeeled ? (
+            allFlipped ? (
               "Resolve dupe to continue"
             ) : (
               "Reveal all cards"
@@ -305,11 +310,11 @@ export function PackRevealPanel({
 }
 
 /**
- * Polish spec §150. Progress header at the top of the panel. Segmented
- * progress bar on the right: one segment per pack. Active segment
- * pulses; completed segments light; pending segments are muted.
- * Single-pack reveals degrade to a simpler "PACK · TYPE" label
- * (no counter, empty progress column).
+ * Polish spec §150 (Phase 43). Progress header at the top of the
+ * panel. Segmented bar on the right: one segment per pack. Active
+ * segment pulses; completed segments light; pending segments are
+ * muted. Single-pack reveals degrade to a simpler "PACK · TYPE"
+ * label (no counter, empty progress column).
  */
 function RevealHeader({
   currentPackIndex,
@@ -369,170 +374,101 @@ function RevealHeader({
   );
 }
 
-function StackZone({
-  activeIdx,
-  remaining,
-  activeCard,
-  activeFlipped,
-  onPeel,
-  onFlipComplete,
+/**
+ * Polish spec §154 (Phase 44). Single reveal card slot — face-down
+ * click target, flip-to-reveal, action buttons below once the
+ * pack-complete gate unlocks. Self-contained so the row can flex-wrap
+ * cleanly.
+ */
+function RevealCardSlot({
+  card,
+  isFlipped,
   celebrating,
-}: {
-  activeIdx: number;
-  remaining: number;
-  activeCard: RevealedCard | null;
-  activeFlipped: boolean;
-  onPeel: () => void;
-  onFlipComplete: (idx: number) => void;
-  celebrating: boolean;
-}) {
-  const visibleLayers = Math.min(remaining - 1, 6);
-  return (
-    <div className="relative flex h-[260px] w-[200px] items-center justify-center">
-      {Array.from({ length: visibleLayers }, (_, i) => i).map((i) => (
-        <div
-          key={`depth-layer-${i}`}
-          aria-hidden="true"
-          className="absolute rounded-[10px] border border-[var(--border)]"
-          style={{
-            width: 160,
-            height: 224,
-            transform: `translate(${(i + 1) * 2}px, ${(i + 1) * 2}px)`,
-            background: "linear-gradient(135deg, #8A6422 0%, #5A4315 50%, #8A6422 100%)",
-          }}
-        />
-      ))}
-      {activeCard && (
-        <div className="relative">
-          <StarPullBurst active={celebrating} tier={activeCard.playerValueTier}>
-            <PackCardFlip
-              card={activeCard}
-              faceUp={activeFlipped}
-              onFlip={onPeel}
-              onComplete={() => onFlipComplete(activeIdx)}
-            />
-          </StarPullBurst>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RevealedRow({
-  cards,
-  cardResults,
-  flipped,
-  resolution,
-  perCardAction,
+  action,
+  dimmed,
   actionsEnabled,
   pending,
+  onFlip,
+  onFlipComplete,
   onQuickSell,
   onVault,
 }: {
-  cards: RevealedCard[];
-  cardResults: OpenPackResult["cardResults"];
-  flipped: boolean[];
-  resolution: DupeResolution[];
-  perCardAction: PerCardAction[];
+  card: RevealedCard;
+  isFlipped: boolean;
+  celebrating: boolean;
+  action: PerCardAction;
+  dimmed: boolean;
   actionsEnabled: boolean;
   pending: boolean;
-  onQuickSell: (idx: number) => void;
-  onVault: (idx: number) => void;
+  onFlip: () => void;
+  onFlipComplete: () => void;
+  onQuickSell: () => void;
+  onVault: () => void;
 }) {
-  const anyRevealed = flipped.some(Boolean);
-  if (!anyRevealed) return null;
   return (
-    <div className="flex w-full flex-wrap items-start justify-center gap-x-3 gap-y-4">
-      {cards.map((card, i) => {
-        const isRevealed = flipped[i] ?? false;
-        if (!isRevealed) return null;
-        const action = perCardAction[i];
-        const dupeRes = cardResults[i]?.isDupe ? resolution[i] : null;
-        const hidden = dupeRes === "kept_existing" || action === "quickSold";
-        return (
-          <div
-            key={card.id}
-            className={cn(
-              "flex w-[160px] flex-col items-center gap-2 transition-opacity",
-              hidden && "opacity-40",
-            )}
-          >
-            <div className="relative">
-              <PackCardFlip card={card} faceUp={true} onFlip={() => {}} />
-              {action === "vaulted" && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
-                  <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] text-[var(--tier-gold)] uppercase tracking-wider">
-                    <Archive className="size-3" aria-hidden="true" />
-                    Vaulted
-                  </span>
-                </div>
-              )}
-              {action === "quickSold" && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[10px] bg-[var(--bg)]/75">
-                  <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[10px] text-[var(--text-2)] uppercase tracking-wider">
-                    <Check className="size-3" aria-hidden="true" />
-                    Sold
-                  </span>
-                </div>
-              )}
-            </div>
-            <div className="flex w-full flex-col items-stretch gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onQuickSell(i)}
-                disabled={!actionsEnabled || pending || action !== null || hidden}
-                className="h-7 px-2 text-[11px]"
-              >
-                Sell ({card.quickSellValue.toLocaleString()})
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onVault(i)}
-                disabled={
-                  !actionsEnabled ||
-                  pending ||
-                  action !== null ||
-                  hidden ||
-                  card.isExpired ||
-                  card.hasAppliedToken
-                }
-                className="h-7 px-2 text-[11px]"
-              >
-                <Archive className="mr-1 size-3" aria-hidden="true" />
-                Vault
-              </Button>
-            </div>
+    <div
+      className={cn(
+        "flex w-[120px] flex-col items-center gap-2 transition-opacity",
+        dimmed && "opacity-40",
+      )}
+    >
+      <div className="relative">
+        <StarPullBurst active={celebrating} tier={card.playerValueTier} sizeScale={0.75}>
+          <PackCardFlip
+            card={card}
+            faceUp={isFlipped}
+            onFlip={onFlip}
+            onComplete={onFlipComplete}
+            size="lineup"
+          />
+        </StarPullBurst>
+        {action === "vaulted" && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[8px] bg-[var(--bg)]/75">
+            <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--tier-gold)] uppercase tracking-wider">
+              <Archive className="size-2.5" aria-hidden="true" />
+              Vaulted
+            </span>
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function DupeResolutionOverlay({
-  newCard,
-  existingCard,
-  pending,
-  onKeepNew,
-  onKeepExisting,
-}: {
-  newCard: RevealedCard;
-  existingCard: RevealedCard;
-  pending: boolean;
-  onKeepNew: () => void;
-  onKeepExisting: () => void;
-}) {
-  return (
-    <div className="absolute inset-0 flex items-center justify-center rounded-md bg-[var(--bg)]/80 p-4 backdrop-blur-sm">
-      <PackDupePanel
-        newCard={newCard}
-        existingCard={existingCard}
-        pending={pending}
-        onKeepNew={onKeepNew}
-        onKeepExisting={onKeepExisting}
-      />
+        )}
+        {action === "quickSold" && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[8px] bg-[var(--bg)]/75">
+            <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--text-2)] uppercase tracking-wider">
+              <Check className="size-2.5" aria-hidden="true" />
+              Sold
+            </span>
+          </div>
+        )}
+      </div>
+      {isFlipped && (
+        <div className="flex w-full flex-col items-stretch gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onQuickSell}
+            disabled={!actionsEnabled || pending || action !== null || dimmed}
+            className="h-6 px-1 text-[10px]"
+          >
+            Sell ({card.quickSellValue.toLocaleString()})
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onVault}
+            disabled={
+              !actionsEnabled ||
+              pending ||
+              action !== null ||
+              dimmed ||
+              card.isExpired ||
+              card.hasAppliedToken
+            }
+            className="h-6 px-1 text-[10px]"
+          >
+            <Archive className="mr-0.5 size-2.5" aria-hidden="true" />
+            Vault
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
