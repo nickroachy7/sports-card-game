@@ -24,8 +24,6 @@ import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEve
 import { SelectionPanel } from "@/components/lineup/SelectionPanel";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
-import { BuyPacksFab } from "@/components/pack/BuyPacksFab";
-import { BuyPacksModal } from "@/components/pack/BuyPacksModal";
 import { PackOpenerModal } from "@/components/pack/PackOpenerModal";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import { Button } from "@/components/ui/button";
@@ -364,10 +362,11 @@ export function LineupView(props: LineupViewProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [bulkSubmitting, startBulk] = useTransition();
 
-  // Polish spec §109 (Phase 36). Buy-packs + reveal state. The FAB
-  // opens the buy modal; confirming a purchase fires the batch
-  // action and stages a reveal payload that drives PackOpenerModal.
-  const [buyOpen, setBuyOpen] = useState(false);
+  // Polish spec §109 (Phase 36) → §143 (Phase 42). Pack reveal state.
+  // Buy flow moved into the sidebar Packs tab; onPacksOpened threads
+  // into handleBatchOpened which stages the reveal payload that
+  // drives PackOpenerModal. Phase 43 swaps the modal for an in-place
+  // panel — this state shape stays the same.
   const [revealPayload, setRevealPayload] = useState<{
     result: OpenPackResult;
     cards: RevealedCard[];
@@ -853,7 +852,7 @@ export function LineupView(props: LineupViewProps) {
           />
         ) : (
           <AppSidebar
-            contestName={props.contestName}
+            slateDate={props.slateDate}
             slotFills={slotFills}
             entryStatus={props.entryStatus}
             liveScore={props.liveScore}
@@ -861,6 +860,15 @@ export function LineupView(props: LineupViewProps) {
             contestGameIds={props.contestGameIds}
             autoSubMode={mode}
             onAutoSubModeChange={handleModeChange}
+            coinBalance={props.coinBalance}
+            dailyPackReady={props.dailyPackReady}
+            dailyPackSecondsUntilReady={props.dailyPackSecondsUntilReady}
+            standardPackCost={props.standardPackCost}
+            onPacksOpened={(result, packType) => {
+              // Fire-and-forget; handleBatchOpened stages the reveal
+              // payload that opens PackOpenerModal.
+              void handleBatchOpened(result, packType);
+            }}
           />
         )
       }
@@ -897,27 +905,9 @@ export function LineupView(props: LineupViewProps) {
           {shell}
         </CardContractEventsProvider>
       </LiveEventsProvider>
-      {/* Polish spec §109 (Phase 36). FAB + buy modal + reveal.
-          FAB hidden while a reveal is in flight so it doesn't
-          overlap the modal's dismiss affordance. */}
-      <BuyPacksFab
-        dailyReady={props.dailyPackReady}
-        disabled={revealPayload !== null}
-        onClick={() => setBuyOpen(true)}
-      />
-      <BuyPacksModal
-        open={buyOpen}
-        onOpenChange={setBuyOpen}
-        coinBalance={props.coinBalance}
-        dailyReady={props.dailyPackReady}
-        dailySecondsUntilReady={props.dailyPackSecondsUntilReady}
-        standardCost={props.standardPackCost}
-        onOpened={(result, packType) => {
-          // Fire-and-forget; handleBatchOpened sets revealPayload
-          // which opens the PackOpenerModal.
-          void handleBatchOpened(result, packType);
-        }}
-      />
+      {/* Polish spec §143 (Phase 42). Buy flow lives in the sidebar
+          Packs tab — no more FAB, no more buy modal. The reveal
+          modal stays until Phase 43 swaps it for an in-place panel. */}
       <PackOpenerModal
         open={revealPayload !== null}
         onOpenChange={(next) => {

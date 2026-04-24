@@ -1,11 +1,13 @@
 "use client";
 
+import type { OpenPacksBatchResult } from "@/app/actions/packs";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { useGamesActive } from "@/components/lineup/useGamesActive";
+import { PacksTab } from "@/components/pack/PacksTab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { CardTier } from "@/lib/contracts/cards";
+import type { CardTier, PackType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { liveLabel } from "@/lib/lineup/status-chip-label";
@@ -28,28 +30,27 @@ type SlotFill = {
 };
 
 /**
- * Polish spec §122 (Phase 39) — unified lineup sidebar.
- *
- * Single layout used throughout the day. No building-state vs
- * post-submit split; no Submit button; no global lock countdown.
- * The lineup commits implicitly when each slot's player game
- * starts (existing per-slot lock from polish spec §44 enforces
- * the edit rule).
+ * Polish spec §122 (Phase 39) → §140–§143 (Phase 42) — unified lineup
+ * sidebar.
  *
  * Structure (top → bottom):
- *   ContestHeader     — name + date, no countdown
- *   SidebarHeadline   — one adaptive block (Drafting / Live / Final)
- *   RosterSection     — one persistent row per slot
+ *   SlateLine         — date + games-today count (§140)
+ *   SidebarHeadline   — compact two-line Drafting/Live/Final (§141)
+ *   RosterSection     — 10 rows with tightened padding (§142)
  *   <Tabs>
  *     Lineup Actions  — auto-sub mode + readiness warnings
  *     Live Events     — existing EventFeed
+ *     Packs           — inline buy UI (§143, replaces FAB + modal)
  *
  * Prior phases: §100 (Phase 34) cut team-summary + introduced the
  * post-submit three-block layout; §103 (Phase 35) gave building-
- * state structural parity; §122 merges both into one.
+ * state structural parity; §122 merged both into one; §140–§143
+ * compressed the top zone + promoted Packs to a tab.
  */
 type Props = {
-  contestName: string;
+  /** Pre-formatted slate date like "Fri, Apr 24". Server formats
+   *  in ET so timezone drift doesn't surface in the sidebar. */
+  slateDate: string;
   entryStatus: EntryStatus;
   liveScore: number;
   finalScore: number;
@@ -57,12 +58,19 @@ type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
+  // Packs tab inputs (§143). Moved up from the deleted FAB + modal.
+  coinBalance: number;
+  dailyPackReady: boolean;
+  dailyPackSecondsUntilReady: number;
+  standardPackCost: number;
+  onPacksOpened: (result: OpenPacksBatchResult, packType: PackType) => void;
 };
 
 export function AppSidebar(props: Props) {
+  const gamesInSlate = props.contestGameIds.length;
   return (
-    <div className="flex h-full flex-col gap-4">
-      <ContestHeader contestName={props.contestName} />
+    <div className="flex h-full flex-col gap-3">
+      <SlateLine slateDate={props.slateDate} gamesInSlate={gamesInSlate} />
       <SidebarHeadline
         slotFills={props.slotFills}
         entryStatus={props.entryStatus}
@@ -76,20 +84,32 @@ export function AppSidebar(props: Props) {
         autoSubMode={props.autoSubMode}
         onAutoSubModeChange={props.onAutoSubModeChange}
         allSlotsLocked={LINEUP_POSITIONS.every((pos) => props.slotFills[pos].locked)}
+        coinBalance={props.coinBalance}
+        dailyPackReady={props.dailyPackReady}
+        dailyPackSecondsUntilReady={props.dailyPackSecondsUntilReady}
+        standardPackCost={props.standardPackCost}
+        onPacksOpened={props.onPacksOpened}
       />
     </div>
   );
 }
 
-// ── Contest header ───────────────────────────────────────────────────
+// ── Slate line (§140) ────────────────────────────────────────────────
 
-function ContestHeader({ contestName }: { contestName: string }) {
+/**
+ * Compressed top-of-sidebar anchor. One-line, one-value-per-chunk,
+ * no secondary subtitle. Replaces the old ContestHeader (contest
+ * name + "Slots lock at game time" subtitle) — the contest name is
+ * redundant (spec §50 guarantees one per user per slate), and the
+ * lock-at subtitle is already implied by the per-row game status.
+ */
+function SlateLine({ slateDate, gamesInSlate }: { slateDate: string; gamesInSlate: number }) {
   return (
-    <div className="flex flex-col gap-0.5 border-b border-[var(--border)] pb-3">
-      <h1 className="font-sans text-sm font-bold tracking-tight text-[var(--text)]">
-        {contestName}
-      </h1>
-      <span className="text-[11px] text-[var(--text-3)]">Slots lock at game time</span>
+    <div className="flex items-baseline justify-between border-[var(--border)] border-b pb-2 font-mono text-[11px] uppercase tracking-wider text-[var(--text-3)]">
+      <span className="text-[var(--text-2)]">{slateDate}</span>
+      <span>
+        {gamesInSlate} {gamesInSlate === 1 ? "game" : "games"}
+      </span>
     </div>
   );
 }
@@ -169,9 +189,17 @@ type HeadlineNumber = {
 };
 
 /**
- * Adaptive headline that can render a primary big number alone
- * (Drafting) or alongside a secondary smaller number (Live/Final
- * show both the current total and the projected benchmark).
+ * Polish spec §141 (Phase 42). Compact two-line headline replacing
+ * the previous ~96px three-part block. Keeps the outlined-card
+ * affordance so the section reads as a distinct element, but halves
+ * vertical footprint:
+ *
+ *   Line 1: LABEL · status text (mono, 10px, uppercase)
+ *   Line 2: primary.value unit  (proj secondary.value)
+ *
+ * Prior phases used a 3xl-font primary with a separate secondary
+ * column; the Phase 42 redesign inlines both values into line 2 with
+ * a parenthetical for the projected benchmark.
  */
 function Headline({
   label,
@@ -189,14 +217,14 @@ function Headline({
   const primaryMuted = primary.value === 0;
   return (
     <section
-      className="flex flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
+      className="flex flex-col gap-0.5 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5"
       aria-label={label}
     >
-      <div className="flex items-baseline justify-between">
-        <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">{label}</span>
+      <div className="flex items-baseline justify-between gap-2 font-mono text-[10px] uppercase tracking-wider">
+        <span className="text-[var(--text-3)]">{label}</span>
         <span
           className={cn(
-            "font-mono text-[10px] uppercase tracking-wider",
+            "truncate",
             statusTone === "accent" && "text-emerald-400",
             statusTone === "live" && "text-emerald-400",
             statusTone === "muted" && "text-[var(--text-3)]",
@@ -205,49 +233,51 @@ function Headline({
           {statusLine}
         </span>
       </div>
-      <div className="flex items-baseline gap-4">
-        <div className="flex flex-col">
-          <span
-            className={cn(
-              "font-mono text-3xl font-bold tabular-nums",
-              primary.tone === "live" && !primaryMuted && "text-emerald-400",
-              primary.tone !== "live" && !primaryMuted && "text-[var(--text)]",
-              primaryMuted && "text-[var(--text-3)]",
-            )}
-          >
-            {primary.value.toFixed(1)}
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+      <div className="flex items-baseline justify-between gap-2">
+        <span
+          className={cn(
+            "font-bold font-mono text-lg leading-none tabular-nums",
+            primary.tone === "live" && !primaryMuted && "text-emerald-400",
+            primary.tone !== "live" && !primaryMuted && "text-[var(--text)]",
+            primaryMuted && "text-[var(--text-3)]",
+          )}
+        >
+          {primary.value.toFixed(1)}
+          <span className="ml-1 font-mono font-normal text-[10px] text-[var(--text-3)] uppercase tracking-wider">
             {primary.label}
           </span>
-        </div>
+        </span>
         {secondary && (
-          <div className="flex flex-col">
-            <span
-              className={cn(
-                "font-mono text-lg font-semibold tabular-nums",
-                secondary.value === 0 ? "text-[var(--text-3)]" : "text-[var(--text-2)]",
-              )}
-            >
-              {secondary.value.toFixed(1)}
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-              {secondary.label}
-            </span>
-          </div>
+          <span
+            className={cn(
+              "font-mono text-[10px] tabular-nums",
+              secondary.value === 0 ? "text-[var(--text-3)]" : "text-[var(--text-2)]",
+            )}
+          >
+            ({secondary.label.toLowerCase()} {secondary.value.toFixed(1)})
+          </span>
         )}
       </div>
     </section>
   );
 }
 
-// ── RosterSection — single persistent block ──────────────────────────
+// ── RosterSection — single persistent block (§142) ─────────────────
 
+/**
+ * Polish spec §142 (Phase 42). Tightened roster. Dropped the "ROSTER"
+ * header (redundant — the row format is self-describing); zero-gap
+ * list with per-row `py-0.5` gives consistent rhythm at reduced
+ * height. Structurally unchanged: 10 rows, per-row FP cell, warning
+ * pill, token glyph, slot-game chip.
+ */
 function RosterSection({ slotFills }: { slotFills: Record<LineupPosition, SlotFill> }) {
   return (
-    <section className="flex flex-col gap-1">
-      <h2 className="text-xs uppercase tracking-wider text-[var(--text-3)]">Roster</h2>
-      <ol data-scroll="lineup-roster" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+    <section className="flex flex-col">
+      <ol
+        data-scroll="lineup-roster"
+        className="flex min-h-0 flex-col divide-y divide-[var(--border)]/50 overflow-y-auto"
+      >
         {LINEUP_POSITIONS.map((pos) => (
           <RosterRow key={pos} position={pos} fill={slotFills[pos]} />
         ))}
@@ -260,7 +290,7 @@ function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFil
   const card = fill.card;
   if (!card) {
     return (
-      <li className="grid grid-cols-[2rem_1fr] items-baseline gap-1 text-[11px]">
+      <li className="grid grid-cols-[2rem_1fr] items-baseline gap-1 py-0.5 text-[11px]">
         <span className="font-mono text-[var(--text-3)]">{position}</span>
         <span className="truncate text-[var(--text-3)] italic">
           Drag a {formatPosition(position)}
@@ -271,7 +301,7 @@ function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFil
   const warning = playerWarning(card);
   const fpCell = pickFpCell(fill);
   return (
-    <li className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 text-[11px]">
+    <li className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 py-0.5 text-[11px]">
       <span className="font-mono text-[var(--text-3)]">{position}</span>
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate text-[var(--text-2)]">{shortName(card.playerName)}</span>
@@ -342,18 +372,34 @@ function pickFpCell(fill: SlotFill): { text: string; tone: "muted" | "emerald" |
   return { text: "—", tone: "muted" };
 }
 
-// ── Tabs — Lineup Actions + Live Events ──────────────────────────────
+// ── Tabs — Actions / Events / Packs (§143) ──────────────────────────
 
+/**
+ * Polish spec §143 (Phase 42). Third tab joins the sidebar: Packs,
+ * with an inline buy UI that retired the FAB + modal combo. The
+ * tab trigger gets a small gold pulse in the top-right corner when
+ * the daily pack is claimable; dismisses once claimed.
+ */
 function SidebarTabs({
   slotFills,
   autoSubMode,
   onAutoSubModeChange,
   allSlotsLocked,
+  coinBalance,
+  dailyPackReady,
+  dailyPackSecondsUntilReady,
+  standardPackCost,
+  onPacksOpened,
 }: {
   slotFills: Record<LineupPosition, SlotFill>;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
   allSlotsLocked: boolean;
+  coinBalance: number;
+  dailyPackReady: boolean;
+  dailyPackSecondsUntilReady: number;
+  standardPackCost: number;
+  onPacksOpened: (result: OpenPacksBatchResult, packType: PackType) => void;
 }) {
   return (
     <Tabs defaultValue="actions" className="mt-auto flex min-h-0 flex-1 flex-col gap-3">
@@ -363,6 +409,15 @@ function SidebarTabs({
         </TabsTrigger>
         <TabsTrigger value="events" className="flex-1 text-xs">
           Events
+        </TabsTrigger>
+        <TabsTrigger value="packs" className="relative flex-1 text-xs">
+          Packs
+          {dailyPackReady && (
+            <span
+              aria-hidden="true"
+              className="absolute top-1.5 right-1.5 size-1.5 animate-pulse rounded-full bg-[var(--tier-gold)]"
+            />
+          )}
         </TabsTrigger>
       </TabsList>
       <TabsContent value="actions" className="flex flex-col gap-3">
@@ -375,6 +430,15 @@ function SidebarTabs({
       </TabsContent>
       <TabsContent value="events" className="min-h-0 flex-1">
         <EventFeed />
+      </TabsContent>
+      <TabsContent value="packs" className="min-h-0 flex-1 overflow-y-auto">
+        <PacksTab
+          coinBalance={coinBalance}
+          dailyReady={dailyPackReady}
+          dailySecondsUntilReady={dailyPackSecondsUntilReady}
+          standardCost={standardPackCost}
+          onOpened={onPacksOpened}
+        />
       </TabsContent>
     </Tabs>
   );

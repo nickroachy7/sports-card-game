@@ -253,10 +253,20 @@ export default async function LineupPage() {
   // Readiness/Projected/Auto-sub/Submit to Live Score/Box Score/Event
   // Feed/Status chip when entry.status !== 'building'. Bench + tokens
   // stay visible but become non-interactive once locked.
+  // Polish spec §140 (Phase 42). Format the slate date server-side in
+  // ET so the sidebar doesn't need to worry about timezone drift.
+  // Uses lineup_locks_at as the slate anchor (first game time in ET).
+  const slateDate = new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "America/New_York",
+  }).format(new Date(contest.lineup_locks_at));
+
   return (
     <LineupView
       contestId={contest.id}
-      contestName={contest.name}
+      slateDate={slateDate}
       lineupLocksAt={contest.lineup_locks_at}
       entryId={entry.id}
       entryStatus={entry.status}

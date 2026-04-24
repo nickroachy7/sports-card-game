@@ -89,7 +89,10 @@ export type LineupSlotVM = {
 
 export type LineupViewProps = {
   contestId: string;
-  contestName: string;
+  /** Phase 42 §140. Pre-formatted slate date (e.g. "Fri, Apr 24")
+   *  for the sidebar top line. Formatted server-side in ET so the
+   *  sidebar doesn't have to worry about timezone drift. */
+  slateDate: string;
   lineupLocksAt: string; // ISO
   entryId: string;
   entryStatus: "building" | "submitted" | "live" | "final";
