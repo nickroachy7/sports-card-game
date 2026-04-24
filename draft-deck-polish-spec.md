@@ -7548,8 +7548,308 @@ and layout (§154) differ from Phase 43.
   bigger). Star-pull burst + border color carry tier weight
   today.
 - Keyboard shortcuts during reveal.
-- "Reveal all" bulk-flip button. Per-card click is the only
-  path (matches the "any order" freedom — batch flip would
-  defeat that).
 - Resumable reveals (browser-close then return). Still
   ephemeral.
+
+---
+
+# Phase 45 — Pack pool quality (v1.30)
+
+The pack-draw pool currently includes every player on a
+40-man roster with `status='active'`. That's ~936 players,
+but ~30% of them are optioned to AAA affiliates today. Users
+are pulling unfamiliar minor-league names — the fantasy
+collecting loop falls flat when your daily pack delivers
+"Jhonny Ramírez, AAA reliever never been on an MLB mound."
+
+Gameplay spec §6.3 defined the remedy (star / starter / role
+/ prospect tiers with per-pack weighting) but it was never
+wired. Every player in the DB is tagged `role`; pack weights
+in `economy_config.pack_value_weights` exist but are ignored
+by `open_pack`.
+
+Phase 45 closes the gap:
+- New MLB Stats API integration (statsapi.mlb.com, free
+  public) delivers authoritative 26-man active-roster
+  state. Industry standard for DFS / fantasy products.
+- Daily tier classification cron sorts the 26-man pool by
+  rolling-365-day FP; top 80 become `star`, next 200
+  `starter`, rest `role`. Matches §6.3 targets.
+- `open_pack` filters to 26-man + draws tier-weighted per
+  `pack_value_weights`. Premium packs feel meaningfully
+  better; daily pack is bench-weighted.
+
+**Estimated effort:** ~0.8 day.
+
+---
+
+## 161. MLB Stats API as authoritative roster source
+
+### Goal
+
+Second data integration alongside BDL. BDL's
+`active: boolean` can't distinguish 26-man from
+40-man-optioned; MLB's official Stats API does. DraftKings,
+FanDuel, Topps Bunt all source from here — industry standard.
+
+### Scope
+
+- New `src/lib/mlb/stats-api.ts` provider:
+  - `fetchActiveRosters(): Promise<{team_id, mlbam_ids[]}[]>`
+  - Hits `https://statsapi.mlb.com/api/v1/teams/{id}/roster?rosterType=active`
+    for each of 30 teams. Response includes the 26-man.
+  - No auth, no rate limits for public endpoints.
+- Provider exposes `mlbam_id` as its primary key — already
+  the join column against `player.mlbam_id`.
+- Wraps fetch in a 10s timeout + Sentry breadcrumb on
+  failure so partial syncs degrade gracefully.
+
+### Out of scope
+
+- Real-time roster-move detection. Daily cron only — a
+  player called up Monday morning enters packs Monday at 4
+  AM ET the following day. Acceptable for v1; revisit if
+  users notice.
+- Using Stats API for anything beyond roster sync (stats,
+  games, scores all stay on BDL).
+- Webhook-style MLB Stats integration (it doesn't support it).
+
+---
+
+## 162. `player.is_26_man` column
+
+### Goal
+
+New boolean on `player`, separate from `is_active_40_man`.
+The 26-man is the subset of the 40-man that's currently on
+the active MLB roster. `is_active_40_man` stays as-is (BDL-
+sourced); `is_26_man` is new (MLB Stats API-sourced).
+
+### Scope
+
+- Migration adds `is_26_man boolean NOT NULL DEFAULT false`.
+- Daily cron `/api/cron/mlb-26man-sync` (new) sweeps:
+  1. Fetch all 30 teams' active rosters.
+  2. Build the union mlbam_id set across all 30 teams.
+  3. Single UPDATE: `SET is_26_man = (mlbam_id = ANY(...))`.
+  4. Audit row emitted per player whose flag flipped.
+- Cron schedule: `0 9 * * *` (4 AM ET / 9 AM UTC, matching
+  existing slate pivot).
+
+### Out of scope
+
+- Back-populating historical 26-man state. Forward-only.
+- Handling double-A / triple-A roster distinction. Anything
+  not 26-man is lumped as "not drawable" for pack purposes.
+
+---
+
+## 163. Tier classification cron
+
+### Goal
+
+Daily recompute of `player.designated_value_tier` from
+rolling-365-day FP performance. Matches §6.3 targets:
+
+- **Star**: top 50 hitters + top 30 pitchers = ~80 players
+  (≈10% of 26-man).
+- **Starter**: next 200 by FP = ≈25% of pool.
+- **Role**: remainder of 26-man pool = ≈65%.
+- **Prospect**: unused in v1 (26-man filter already
+  excludes fringe players; kept in the enum for future use).
+
+### Scope
+
+- New `/api/cron/player-tier-classify` (runs after
+  26-man-sync):
+  1. Derive each 26-man player's 365-day rolling FP from
+     `game_event` aggregated by `batter_player_id` /
+     `pitcher_player_id`.
+  2. Rank separately: hitters by FP desc, pitchers by FP
+     desc.
+  3. Assign tier by rank: top 50 hitters = star, next
+     250 = starter, rest = role. Top 30 pitchers = star,
+     next 100 = starter, rest = role. (Targets tunable in
+     `economy_config.tier_classification_limits` — new
+     JSON key; defaults land in seed.)
+  4. Non-26-man players → reset to `role` (default; they
+     won't be drawn anyway).
+- Opening-Day bootstrap: during first 30 days of a new
+  season when current-season FP is thin, tier classification
+  uses prior-season FP. Rolling-365-day window handles this
+  organically (prior season's late-year games are still
+  within 365 days).
+
+### Out of scope
+
+- Separate tier tracking per position (e.g. "top 3 SS").
+  Simpler flat ranking now; can revisit if the user wants
+  positional scarcity.
+- Manual overrides for specific players (e.g. "Shohei is
+  always a star"). The 365-day window self-corrects.
+
+---
+
+## 164. open_pack filters + weights
+
+### Goal
+
+`open_pack` SQL fn rewrites its draw to:
+1. Filter pool: `is_26_man = true AND status = 'active'`
+   (replaces `is_active_40_man = true AND status = 'active'`).
+2. For each card slot, draw tier per `pack_value_weights`
+   for that pack type, then draw a random unowned player
+   within that tier.
+
+### Algorithm
+
+```
+FOR each card slot in pack_size:
+  r := random() * 100
+  accumulated := 0
+  tier_to_draw := 'role'
+  FOR tier IN ('star', 'starter', 'role', 'prospect'):
+    accumulated += weights[tier]
+    IF r < accumulated: tier_to_draw = tier; BREAK
+  END FOR
+
+  SELECT random unowned player WHERE
+    is_26_man=true AND status='active'
+    AND designated_value_tier = tier_to_draw
+
+  IF no unowned in tier → fall back to next tier down
+    (star → starter → role) to avoid empty draws.
+END FOR
+```
+
+### Premium guaranteed star
+
+Premium packs reserve the **last** card slot for a star-tier
+draw (before the general draw loop). If no star is available
+(owned all of them), falls back to `starter`. Keeps premium
+tangibly better.
+
+### Out of scope
+
+- Pity system for unlucky users. No.
+- Drop-rate-displayed-to-user UI. Odds are internal per §6.3.
+
+---
+
+## 165. Updated `pack_value_weights`
+
+### Goal
+
+Adjust the existing `economy_config.pack_value_weights` JSON
+to match the Phase 45 gradient. `prospect` weight goes to 0
+across the board (tier unused).
+
+### New weights
+
+```json
+{
+  "daily":    { "star": 0,  "starter": 25, "role": 75, "prospect": 0 },
+  "standard": { "star": 8,  "starter": 40, "role": 52, "prospect": 0 },
+  "premium":  { "star": 18, "starter": 52, "role": 30, "prospect": 0 }
+}
+```
+
+Premium also gets `guaranteed_star_slot: true` as a new
+config flag (new JSON field).
+
+### Scope
+
+- Migration updates the active `economy_config` row.
+- No deprecation of `prospect` enum value (kept for future
+  re-use if we ever open up minor-league packs as a theme).
+
+### Out of scope
+
+- Separate weights per card slot within a pack. Uniform per
+  slot. Position-based slot weighting is a future polish.
+
+---
+
+## 166. Rollout sequence
+
+### Order-of-operations
+
+1. Add `is_26_man` column (default false). Safe — no
+   behavior change yet.
+2. Ship cron + run first sync. Column populates.
+3. Ship tier classification cron. Tiers populate.
+4. Update `pack_value_weights` in economy_config.
+5. Ship `open_pack` rewrite. **This is the flip point.**
+   Prior steps are no-ops for live behavior.
+6. Verify on dev first; apply to prod in same order.
+
+### Fallback
+
+If `is_26_man = true` returns 0 players (e.g. cron never
+ran, MLB Stats API was down), `open_pack` falls back to the
+prior `is_active_40_man = true` filter so users can still
+open packs. Logs a warning.
+
+---
+
+## 167. Cards already minted as `role`
+
+### Goal
+
+Existing cards (e.g. the user's collection pre-P45) carry
+`card.current_tier = 'bronze'` and their player's
+`designated_value_tier = 'role'`. Nothing to migrate —
+`designated_value_tier` is a player-level classification
+used only by `open_pack` at draw time. Once classification
+runs, existing cards' player tier updates in place; the
+player's tier shift doesn't retroactively rewrite card
+records.
+
+---
+
+## 168. Monitoring
+
+### Metrics to capture
+
+- `pack_opened` PostHog event gets a new property
+  `drawn_tier_distribution` — counts per tier in the pack.
+  Lets us see the live distribution vs the configured
+  weights.
+- Sentry breadcrumb on MLB Stats API 5xx / timeout.
+- Cron success rate dashboard for the two new crons.
+
+---
+
+## 169. Files touched
+
+- `src/lib/mlb/stats-api.ts` — NEW (MLB Stats API
+  provider).
+- `src/lib/mlb/mlb-stats-sdk.md` — provider docs if we want
+  a mirror of the methods used; optional.
+- `src/app/api/cron/mlb-26man-sync/route.ts` — NEW.
+- `src/app/api/cron/player-tier-classify/route.ts` — NEW.
+- `supabase/migrations/0051_player_is_26_man.sql` — column
+  + index.
+- `supabase/migrations/0052_open_pack_tier_weighted.sql` —
+  fn rewrite.
+- `supabase/migrations/0053_pack_value_weights_p45.sql` —
+  economy_config update.
+- `src/app/actions/packs.ts` — no change (action-layer
+  agnostic to SQL internals).
+- `vercel.json` (if present) or cron config — two new
+  entries.
+
+---
+
+## 170. Not in scope for v1.30
+
+- Manual tier override admin UI.
+- Position-specific tier buckets (top 10 SS, etc.).
+- Themed packs (rookie pack, division pack, team pack).
+- Player-photo refresh triggered by roster moves (handled
+  separately by the existing photo-sync).
+- Historical tier tracking (no audit of "when did Player X
+  become a star").
+- IL-aware filtering (players on IL still have `status=
+  'active'` via BDL; the 26-man roster from MLB Stats
+  excludes them naturally).
