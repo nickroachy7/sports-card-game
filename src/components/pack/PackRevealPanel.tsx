@@ -1,13 +1,12 @@
 "use client";
 
-import { Archive, ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check } from "lucide-react";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { quickSellCard } from "@/app/actions/cards";
 import type { OpenPackResult } from "@/app/actions/packs";
 import type { RevealedCard } from "@/app/actions/packs-reveal";
-import { vaultCardMidseason } from "@/app/actions/vault";
 import { Button } from "@/components/ui/button";
 import type { PackType } from "@/lib/contracts/cards";
 import { cn } from "@/lib/utils";
@@ -43,7 +42,7 @@ export type PerPackPayload = {
 };
 
 type DupeResolution = "pending" | "kept_new" | "kept_existing";
-type PerCardAction = "quickSold" | "vaulted" | null;
+type PerCardAction = "quickSold" | null;
 
 type Props = {
   packs: PerPackPayload[];
@@ -72,7 +71,6 @@ export function PackRevealPanel({
   const [resolution, setResolution] = useState<DupeResolution[]>([]);
   const [perCardAction, setPerCardAction] = useState<PerCardAction[]>([]);
   const [celebratingIdx, setCelebratingIdx] = useState<number | null>(null);
-  const [activeDupeIdx, setActiveDupeIdx] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
 
   // Reset per-pack state whenever the pack pointer changes (§149).
@@ -88,7 +86,6 @@ export function PackRevealPanel({
     );
     setPerCardAction(Array(cards.length).fill(null));
     setCelebratingIdx(null);
-    setActiveDupeIdx(null);
   }, [cards, result]);
 
   const flippedCount = flipped.filter(Boolean).length;
@@ -96,11 +93,20 @@ export function PackRevealPanel({
   const allFlipped = flippedCount === cards.length && cards.length > 0;
   const allResolved = resolution.every((r) => r !== "pending");
   const packComplete = allFlipped && allResolved;
+  const hasFaceDown = cards.length > 0 && !allFlipped;
 
   function handleFlip(idx: number) {
     // Any face-down card is a valid click target (§156).
     if (flipped[idx]) return;
     setFlipped((f) => f.map((v, i) => (i === idx ? true : v)));
+  }
+
+  function handleRevealAll() {
+    // Bulk-flip every remaining face-down card. Each PackCardFlip
+    // sees faceUp=true on its next render and runs its own flip
+    // animation; onFlipComplete fires per-card so celebrations /
+    // dupe flags still resolve independently.
+    setFlipped(Array(cards.length).fill(true));
   }
 
   function handleFlipComplete(idx: number) {
@@ -114,10 +120,9 @@ export function PackRevealPanel({
         setCelebratingIdx((cur) => (cur === idx ? null : cur));
       }, hold);
     }
-    const isDupe = result?.cardResults?.[idx]?.isDupe ?? false;
-    if (isDupe) {
-      setActiveDupeIdx(idx);
-    }
+    // Dupes don't need an active-idx pointer anymore — the card's
+    // own resolution state ("pending") is the render signal. This
+    // lets multiple dupes resolve in parallel after Reveal All.
   }
 
   function handleKeepNew(idx: number) {
@@ -130,7 +135,6 @@ export function PackRevealPanel({
         return;
       }
       setResolution((r) => r.map((v, i) => (i === idx ? "kept_new" : v)));
-      setActiveDupeIdx((cur) => (cur === idx ? null : cur));
     });
   }
 
@@ -144,7 +148,6 @@ export function PackRevealPanel({
         return;
       }
       setResolution((r) => r.map((v, i) => (i === idx ? "kept_existing" : v)));
-      setActiveDupeIdx((cur) => (cur === idx ? null : cur));
     });
   }
 
@@ -164,44 +167,33 @@ export function PackRevealPanel({
     });
   }
 
-  function handlePerCardVault(idx: number) {
-    const card = cards[idx];
-    if (!card) return;
-    if (card.isExpired || card.hasAppliedToken) {
-      toast.error(
-        card.isExpired
-          ? "Expired cards can't be vaulted."
-          : "Remove the applied token before vaulting.",
-      );
+  function handleFooterAction() {
+    // Three modes depending on pack state:
+    //   1. Cards still face-down → Reveal all (§160 was "out of
+    //      scope"; user feedback flipped it — testers read the copy
+    //      as a functional button and clicked it).
+    //   2. All flipped but dupes pending → disabled, waits for dupes.
+    //   3. Pack complete → advance to next pack or done.
+    if (hasFaceDown) {
+      handleRevealAll();
       return;
     }
-    startTransition(async () => {
-      const res = await vaultCardMidseason({ cardId: card.id });
-      if (!res.ok) {
-        toast.error(res.error.message);
-        return;
-      }
-      toast.success(`Vaulted ${card.playerName}`);
-      setPerCardAction((a) => a.map((v, i) => (i === idx ? "vaulted" : v)));
-    });
-  }
-
-  function handleFooterAction() {
     if (!packComplete) return;
     if (isFinalPack) onDone();
     else onAdvancePack();
   }
 
+  const footerDisabled = allFlipped && !allResolved; // waiting on dupes
+
   const subtitle = useMemo(() => {
     if (!pack) return "";
-    if (activeDupeIdx !== null) return "Resolve the dupe to continue";
     if (!allFlipped) {
       return `Tap any card to reveal · ${cardsRemaining} of ${cards.length} left`;
     }
     if (!allResolved) return "Resolve the dupe to continue";
     if (isFinalPack) return "All packs opened — back to lineup?";
     return "Pack complete · next up?";
-  }, [pack, activeDupeIdx, allFlipped, allResolved, isFinalPack, cards.length, cardsRemaining]);
+  }, [pack, allFlipped, allResolved, isFinalPack, cards.length, cardsRemaining]);
 
   if (!pack) {
     return (
@@ -231,10 +223,12 @@ export function PackRevealPanel({
               const res = resolution[i] ?? "kept_new";
               const action = perCardAction[i];
               const isDupe = result?.cardResults?.[i]?.isDupe ?? false;
-              const showingDupePanel = activeDupeIdx === i && res === "pending";
-
-              // Dupe card in active resolution → render the compact
-              // comparison panel in place of the card slot.
+              // Dupe card flipped + still pending → render the compact
+              // comparison panel in place of the card slot. Per-card
+              // resolution state (no global activeDupeIdx) means
+              // multiple dupes can resolve in parallel after Reveal
+              // All bulk-flips the row.
+              const showingDupePanel = isFlipped && isDupe && res === "pending";
               if (showingDupePanel) {
                 const pulled = result?.cardResults?.[i];
                 const existingId = pulled?.existingCardId ?? null;
@@ -271,7 +265,6 @@ export function PackRevealPanel({
                   onFlip={() => handleFlip(i)}
                   onFlipComplete={() => handleFlipComplete(i)}
                   onQuickSell={() => handlePerCardQuickSell(i)}
-                  onVault={() => handlePerCardVault(i)}
                 />
               );
             })}
@@ -282,16 +275,14 @@ export function PackRevealPanel({
       <footer className="flex justify-end">
         <Button
           size="lg"
-          disabled={!packComplete}
+          disabled={footerDisabled}
           onClick={handleFooterAction}
           className="min-w-[180px]"
         >
-          {!packComplete ? (
-            allFlipped ? (
-              "Resolve dupe to continue"
-            ) : (
-              "Reveal all cards"
-            )
+          {hasFaceDown ? (
+            "Reveal all cards"
+          ) : footerDisabled ? (
+            "Resolve dupe to continue"
           ) : isFinalPack ? (
             <>
               <Check className="mr-1 size-4" aria-hidden="true" />
@@ -391,7 +382,6 @@ function RevealCardSlot({
   onFlip,
   onFlipComplete,
   onQuickSell,
-  onVault,
 }: {
   card: RevealedCard;
   isFlipped: boolean;
@@ -403,7 +393,6 @@ function RevealCardSlot({
   onFlip: () => void;
   onFlipComplete: () => void;
   onQuickSell: () => void;
-  onVault: () => void;
 }) {
   return (
     <div
@@ -422,14 +411,6 @@ function RevealCardSlot({
             size="lineup"
           />
         </StarPullBurst>
-        {action === "vaulted" && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[8px] bg-[var(--bg)]/75">
-            <span className="flex items-center gap-1 rounded-full border border-[var(--tier-gold)] bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--tier-gold)] uppercase tracking-wider">
-              <Archive className="size-2.5" aria-hidden="true" />
-              Vaulted
-            </span>
-          </div>
-        )}
         {action === "quickSold" && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[8px] bg-[var(--bg)]/75">
             <span className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--text-2)] uppercase tracking-wider">
@@ -439,10 +420,12 @@ function RevealCardSlot({
           </div>
         )}
       </div>
-      {/* §158: buttons only render once the pack-complete gate unlocks
-          (all cards flipped + dupes resolved). Keeps mid-flip slots
-          visually clean and avoids the row jumping when each card's
-          buttons would pop in independently. */}
+      {/* User feedback on P44 live: dropped the Vault button from the
+          reveal. Vaulting a fresh pull gives plays_used=0 → vault
+          multiplier=0 → score=0 per the §133 curve, so it was a trap
+          action. Only Sell remains.
+          §158: button only renders once the pack-complete gate unlocks
+          (all cards flipped + dupes resolved). */}
       {isFlipped && actionsEnabled && (
         <div className="flex w-full flex-col items-stretch gap-1">
           <Button
@@ -453,18 +436,6 @@ function RevealCardSlot({
             className="h-6 px-1 text-[10px]"
           >
             Sell ({card.quickSellValue.toLocaleString()})
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onVault}
-            disabled={
-              pending || action !== null || dimmed || card.isExpired || card.hasAppliedToken
-            }
-            className="h-6 px-1 text-[10px]"
-          >
-            <Archive className="mr-0.5 size-2.5" aria-hidden="true" />
-            Vault
           </Button>
         </div>
       )}
