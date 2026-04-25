@@ -9,6 +9,7 @@ import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { useGamesActive } from "@/components/lineup/useGamesActive";
 import { PacksTab } from "@/components/pack/PacksTab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { CardTier, PackType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
@@ -386,38 +387,87 @@ function StickyPinButton({
   playerName: string;
   onToggle: (next: boolean) => void;
 }) {
-  const tooltip = disabled
+  const ariaLabel = disabled
     ? "Slot is locked — pin can't be changed once the game has started."
     : sticky
       ? `Sticky — ${playerName} carries to tomorrow's lineup. Click for one-shot.`
       : `One-shot — ${playerName} drops after today's game. Click to make sticky.`;
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (disabled) return;
-        onToggle(!sticky);
-      }}
-      disabled={disabled}
-      aria-pressed={sticky}
-      aria-label={tooltip}
-      title={tooltip}
-      className={cn(
-        "flex size-4 items-center justify-center rounded transition-colors",
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--text-2)]",
-        disabled && "opacity-30",
-        !disabled && sticky && "text-[var(--tier-gold)] hover:text-[var(--tier-gold)]/80",
-        !disabled && !sticky && "text-[var(--text-3)] hover:text-[var(--text-2)]",
-      )}
-    >
-      {sticky ? (
-        <Pin className="size-3" aria-hidden="true" />
-      ) : (
-        <PinOff className="size-3" aria-hidden="true" />
-      )}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (disabled) return;
+            onToggle(!sticky);
+          }}
+          disabled={disabled}
+          aria-pressed={sticky}
+          aria-label={ariaLabel}
+          className={cn(
+            "flex size-4 items-center justify-center rounded transition-colors",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--text-2)]",
+            disabled && "opacity-30",
+            !disabled && sticky && "text-[var(--tier-gold)] hover:text-[var(--tier-gold)]/80",
+            !disabled && !sticky && "text-[var(--text-3)] hover:text-[var(--text-2)]",
+          )}
+        >
+          {sticky ? (
+            <Pin className="size-3" aria-hidden="true" />
+          ) : (
+            <PinOff className="size-3" aria-hidden="true" />
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="left" className="max-w-[220px] px-3 py-2">
+        <StickyPinTooltip sticky={sticky} disabled={disabled} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * Polish spec §175 (Phase 46). Tooltip body for the sticky pin —
+ * explicit "this is what the icon means" copy because pin / pin-off
+ * alone is hard to read at a glance.
+ */
+function StickyPinTooltip({ sticky, disabled }: { sticky: boolean; disabled: boolean }) {
+  if (disabled) {
+    return (
+      <div className="flex flex-col gap-1 text-left">
+        <span className="font-bold text-xs">Slot locked</span>
+        <span className="text-[11px] text-[var(--text-3)] leading-snug">
+          The starter's game has started — pin can't be changed.
+        </span>
+      </div>
+    );
+  }
+  if (sticky) {
+    return (
+      <div className="flex flex-col gap-1 text-left">
+        <div className="flex items-center gap-1.5">
+          <Pin className="size-3 text-[var(--tier-gold)]" aria-hidden="true" />
+          <span className="font-bold text-xs">Sticky · carries to tomorrow</span>
+        </div>
+        <span className="text-[11px] text-[var(--text-3)] leading-snug">
+          This player will be in your lineup again tomorrow if their team plays. Click to make it a
+          one-shot.
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1 text-left">
+      <div className="flex items-center gap-1.5">
+        <PinOff className="size-3 text-[var(--text-3)]" aria-hidden="true" />
+        <span className="font-bold text-xs">One-shot · today only</span>
+      </div>
+      <span className="text-[11px] text-[var(--text-3)] leading-snug">
+        This slot empties after today's game. Click to make it sticky.
+      </span>
+    </div>
   );
 }
 
