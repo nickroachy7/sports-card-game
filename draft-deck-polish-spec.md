@@ -9106,3 +9106,125 @@ unresolved leftover.
 9. Modal closes when queue empties; `router.refresh()` brings
    the new tray + balance into view.
 
+
+---
+
+## 202. Live FP time-gate (Phase 50)
+
+### Problem
+
+User: "Their game statuses are not changing and they are not
+recording FP."
+
+Diagnosis showed two compounding issues:
+
+1. **BDL fires `mlb.batter.*` events for upcoming games hours
+   before scheduled_start.** Observed in prod: events for
+   tonight's HOU @ NYY (scheduled 23:10 UTC) firing at 00:15
+   UTC the same day — 23 hours pre-game. The
+   `_apply_game_event_to_lineups` trigger runs on every event
+   insert, so those pre-sim events were polluting `live_fp`.
+
+2. **Events fire for games before the user's contest entry
+   exists.** User sets a lineup at 1:23 PM ET; events from
+   8 PM yesterday don't credit because the slot didn't exist
+   at trigger time. There's no automatic recovery path.
+
+### Fix — time-gate the score reducer
+
+```sql
+SELECT scheduled_start INTO v_scheduled_start
+FROM public.game WHERE id = p_event.game_id;
+IF v_scheduled_start IS NULL OR v_scheduled_start > now() THEN
+  RETURN;  -- pre-sim event; skip FP application
+END IF;
+```
+
+Added to the top of `_apply_game_event_to_lineups`. The event
+still gets recorded in `game_event` (audit trail intact); only
+the FP application is skipped. Real game events fire after
+their `scheduled_start` and pass through normally.
+
+This is the live counterpart to the §190 trust predicate — same
+pattern (gate on `scheduled_start vs now()`), different event
+phase.
+
+---
+
+## 203. Backfill SQL fn
+
+### Decision
+
+`public._backfill_entry_live_fp(p_entry_id)` recomputes `live_fp`
++ `live_score` from scratch over today's events for an entry.
+Idempotent. Wired into `create_contest_entry` so every page load
+picks up any FP credited between page reloads.
+
+### Why "from scratch" (not incremental)
+
+The trigger applies events incrementally; backfill replaces.
+Both write the same field. To avoid double-count:
+
+- Backfill takes a `FOR UPDATE` lock on the entry's slots before
+  recomputing.
+- The lock blocks the trigger's UPDATE until backfill commits.
+- New events that fire during backfill are queued, then add on
+  top of the freshly-computed value.
+
+### Time-gate must use `event.created_at`, not `now()`
+
+Initial 0065 used `g.scheduled_start <= now()`. That's correct
+at trigger insert time (where `NEW.created_at == now()`) but
+broken at backfill time: `now()` is always later than the
+recompute moment, so a game whose `scheduled_start` has passed
+admits its pre-sim events.
+
+Corrected (0066): `ge.created_at >= g.scheduled_start`. The
+event's own timestamp determines admission, regardless of when
+the recompute runs.
+
+### Today's-slate scoping (0067)
+
+Backfill must scope to `g.date = current_slate_date()`. Without
+it, the recompute sums the player's events from prior games this
+season — observed in prod where Aaron Judge's April 22/23
+BOS@NYY events were getting credited to today's slate.
+
+---
+
+## 204. Hooked into `create_contest_entry`
+
+Every call to `public.create_contest_entry(p_user_id,
+p_contest_id)` now ends with:
+
+```sql
+PERFORM public._backfill_entry_live_fp(v_entry_id);
+```
+
+`/lineup` calls `create_contest_entry` on every page load (it's
+how the daily contest gets created/refreshed). So:
+
+- Fresh user entry: backfill on creation captures any events
+  that fired pre-creation.
+- Returning user: backfill on every load corrects drift from
+  the trigger (e.g. if a pre-sim event slipped through before
+  the gate landed, next load self-heals).
+
+Cost: ~10 slots × ~400 events scan, single query. Trivial.
+
+---
+
+## 205. Migrations 0065–0067
+
+| Migration | Purpose |
+|-----------|---------|
+| 0065      | Time-gate the trigger; new `_backfill_entry_live_fp`; hook into `create_contest_entry`. |
+| 0066      | Hotfix: backfill gate uses `ge.created_at >= g.scheduled_start` (not `now()`). |
+| 0067      | Hotfix: backfill scopes to `g.date = current_slate_date()`. |
+
+All three applied to dev + prod via MCP. Verified on prod: user
+test account's bogus 37 FP (from BDL pre-sim noise) correctly
+zeroed out post-backfill. 13 pre-sim events filtered;
+0 qualifying events for the user's specific players today
+(BDL's sandbox didn't sim them as starters).
+
