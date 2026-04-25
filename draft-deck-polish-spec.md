@@ -7853,3 +7853,274 @@ records.
 - IL-aware filtering (players on IL still have `status=
   'active'` via BDL; the 26-man roster from MLB Stats
   excludes them naturally).
+
+---
+
+# Phase 46 — Sticky lineups (v1.31)
+
+The DFS-style fresh-slate-every-day model fights the rest of
+the design. Cards are persistent (career FP, tier progression,
+vault); the lineup that uses them is ephemeral. Result: users
+have to redraft daily and risk locking themselves out of
+already-started games if they sleep in.
+
+User direction:
+> "It's not really drafting every day, it's setting your
+> lineup every day. Auto setting or manual setting, but also
+> giving control over individual players. Some users might
+> want to keep a couple guys in there automatically but they
+> might also be trying to do one game cards and we shouldn't
+> penalize those players for forgetting to check their lineup
+> that day."
+
+Phase 46 introduces **sticky lineup slots**: by default each
+slot carries forward to the next slate's entry with the same
+starter. A per-slot toggle lets users mark a slot as "one-shot"
+(today only, then drops). Smart-auto fills empty slots from
+the bench when a sticky player isn't playing.
+
+**Estimated effort:** ~0.6 day.
+
+---
+
+## 171. Per-slot sticky flag
+
+### Goal
+
+`contest_lineup_slot.is_sticky` boolean, per-slot, per-entry.
+Defaults to `true` on every slot. Toggle persists for the
+life of that slot; carries forward to the next day's slot
+when the entry rolls over.
+
+### Scope
+
+- Migration adds `is_sticky boolean NOT NULL DEFAULT true`.
+- All existing slots get `is_sticky=true` retroactively
+  (DEFAULT applies to new rows, but for explicit clarity
+  the migration also `UPDATE`s existing rows once).
+- No RLS change — slot rows are owned via `contest_entry_id`
+  → `contest_entry.user_id`, same chain as before.
+
+### Out of scope
+
+- A separate "preferred starter" column distinct from
+  `starter_card_id`. The simple model: today's starter IS
+  the preferred starter; whatever's there at slate-rollover
+  is what carries forward (assuming sticky=true).
+- Per-card sticky default. The decision is per-slot, not
+  per-player — matches the user's "this slot for this
+  purpose" mental model.
+
+---
+
+## 172. Default = sticky
+
+### Goal
+
+Every new card placement defaults to `is_sticky = true`.
+User has to explicitly opt-out for one-shot semantics.
+
+### Rationale
+
+User's "no penalty for forgetting" philosophy. The path of
+least resistance (do nothing) preserves the user's lineup;
+explicit action is required for the temporary case.
+
+---
+
+## 173. Slate rollover carry-over
+
+### Goal
+
+When a user's new contest entry is created (via
+`create_contest_entry()`, called on `/lineup` page load by
+`create_daily_contest()` flow), automatically pre-fill its
+slots from the user's most recent prior entry, but only
+where `is_sticky=true` and the card is still playable today.
+
+### Carry-over rules
+
+For each slot in the prior entry:
+1. Skip if `is_sticky = false`.
+2. Skip if `starter_card_id IS NULL` (no card to carry).
+3. Skip if the card was vaulted, sold, or expired in the
+   meantime (validate against current `card` state).
+4. If the card's player has a game in today's slate
+   (`contest.included_game_ids`) — fill the new slot's
+   `starter_card_id` + `is_sticky=true`.
+5. If the card's player has NO game today — leave the new
+   slot empty (`starter_card_id=NULL`) but set
+   `is_sticky=true` so smart-auto can fill from bench.
+
+### "Most recent prior entry"
+
+Defined as: user's contest entry with the latest
+`contest.starts_at < today's slate's starts_at`. Skips
+entries with no filled slots (e.g. user never engaged that
+day). Capped at 7-day lookback so a 30-day-inactive user
+doesn't accidentally carry forward a stale lineup.
+
+### Out of scope
+
+- Notifying the user of carry-over results ("Brett Baty
+  carried over, but Caleb Kilian had no game today —
+  smart-auto subbed in Tyler Rogers"). UI feedback lives
+  in the lineup page itself; no toast / email / push.
+- Reconciling tokens. Tokens were consumed when yesterday's
+  contest finalized; tomorrow's slots start fresh-token,
+  user re-applies if desired.
+
+---
+
+## 174. Smart-auto fallback
+
+### Goal
+
+When carry-over leaves a slot empty (sticky player not
+playing today) AND the user's `auto_sub_mode = 'smart_auto'`,
+the smart-auto pass picks a replacement from the bench.
+
+### Algorithm
+
+For each empty sticky slot:
+1. Find unowned-by-other-slot bench cards eligible for the
+   slot's position.
+2. Filter to those whose player has a game today.
+3. Rank by player's recent FP (last 14 days) — best
+   available wins.
+4. Slot the top pick, leave `is_sticky=true`.
+
+If no eligible card found: slot stays empty. User sees a
+"C slot needs a replacement" warning in the sidebar.
+
+### Manual mode
+
+When `auto_sub_mode = 'manual_priority'`, no smart-auto
+sub fires. Empty sticky slots stay empty; user fills
+manually.
+
+### Out of scope
+
+- Exposing a manual "set sub priority order" per slot.
+  `auto_sub_mode = 'manual_priority'` already implies a
+  manual flow; no priority sequence needed.
+
+---
+
+## 175. Per-slot sticky toggle UI
+
+### Goal
+
+Small toggle on each filled slot in the lineup diamond.
+Indicates the current sticky state and lets the user flip
+it. Defaults visible-as-set (sticky pin icon for sticky,
+muted for one-shot).
+
+### Shape
+
+- Pin icon (📌) in the slot's top-right corner — small,
+  ~12px. Filled gold when sticky, outlined / muted when
+  one-shot.
+- Click toggles the state. Server action:
+  `toggleSlotSticky(slotId, nextState)`.
+- Disabled when slot is locked (game started). Tooltip
+  explains.
+
+### Out of scope
+
+- A bulk "make all my slots one-shot" button. Per-slot
+  click is fine for v1; if every user wants this, we
+  revisit.
+- Animation on toggle. Static icon swap.
+
+---
+
+## 176. Empty-slot sticky preservation
+
+### Goal
+
+When a slot is emptied (user removes the card, or carry-over
+skipped due to ineligibility), the `is_sticky` flag is
+PRESERVED on the empty slot. So smart-auto knows whether to
+fill it; tomorrow's carry-over knows whether the user wanted
+this slot to keep auto-filling.
+
+### Out of scope
+
+- Treating empty slots differently based on prior sticky
+  history. Just preserve the flag; UI shows it on empty
+  slot cards too.
+
+---
+
+## 177. `toggleSlotSticky` Server Action
+
+### Goal
+
+Single-purpose action: flip `contest_lineup_slot.is_sticky`
+for a (user, slot) pair. RLS-guarded via the user's
+contest_entry → slot ownership chain.
+
+### Shape
+
+```ts
+// src/app/actions/lineup.ts
+export const toggleSlotSticky = wrapAction(
+  toggleSlotStickyImpl,
+  { name: "toggleSlotSticky" }
+);
+
+// Input: { slotId: string, sticky: boolean }
+// Output: { ok: true, data: { slotId, sticky } } | error
+```
+
+Calls a SQL helper `update_slot_sticky(user_id, slot_id, sticky)`
+that asserts ownership + per-slot lock state before mutating.
+
+---
+
+## 178. Files touched
+
+- `supabase/migrations/0057_slot_is_sticky.sql` — column +
+  retroactive update.
+- `supabase/migrations/0058_create_entry_carry_over.sql` —
+  rewrite of `create_contest_entry` with carry-over logic
+  + `update_slot_sticky` helper.
+- `src/app/actions/lineup.ts` — `toggleSlotSticky` action.
+- `src/components/lineup/LineupSlot.tsx` (or wherever the
+  slot renders) — pin icon + click handler.
+- `src/lib/lineup/types.ts` — add `isSticky: boolean` to
+  `LineupSlotVM`.
+- `src/app/(app)/lineup/page.tsx` — include `is_sticky` in
+  the slot select.
+
+---
+
+## 179. Migration of existing entries
+
+### Goal
+
+The day Phase 46 ships, all existing `contest_lineup_slot`
+rows get `is_sticky = true` (column default + explicit
+backfill). Tomorrow's entries will carry forward today's
+lineups for the first time.
+
+If a user wanted yesterday's lineup to NOT carry forward
+(because they were experimenting), they'll see it pre-filled
+tomorrow and can adjust. One-time migration friction.
+
+---
+
+## 180. Not in scope for v1.31
+
+- Lookback further than 7 days for inactive users. Stale
+  rollover risks (player got traded, etc.) outweigh the
+  convenience.
+- Carry-over of applied tokens. Tokens consume at finalize
+  per Phase 41; users re-apply daily.
+- Notification / email when carry-over partial-fills due
+  to ineligible cards.
+- Per-card sticky default (the decision is per-slot only).
+- Slot-level "always smart-auto" mode separate from sticky.
+  The two concepts compose: sticky = carry over; manual
+  vs smart auto handles the empty-slot fallback.
