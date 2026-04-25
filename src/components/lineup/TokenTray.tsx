@@ -21,9 +21,27 @@ type Props = {
   onOpenDetail: (tokenId: string) => void;
   /** When set, the active tray pip renders an outline ring. */
   activeTokenId: string | null;
+  /**
+   * Polish spec §201 (Phase 49 Wave 1.1). Multi-select mode.
+   * When `selectMode=true`, click toggles selection (instead of
+   * opening detail). Selection state is owned by lineup-view so
+   * the SelectionPanel sidebar can read both cards + tokens.
+   */
+  selectMode: boolean;
+  selectedTokenIds: Set<string>;
+  onToggleSelect: (tokenId: string) => void;
 };
 
-export function TokenTray({ tokens, locked, tokenCap, onOpenDetail, activeTokenId }: Props) {
+export function TokenTray({
+  tokens,
+  locked,
+  tokenCap,
+  onOpenDetail,
+  activeTokenId,
+  selectMode,
+  selectedTokenIds,
+  onToggleSelect,
+}: Props) {
   // Polish spec §35 (Phase 15): tokens applied to a lineup card drop
   // out of the tray entirely. The tray is for "unused" tokens;
   // applied ones render on their slot cards via <AppliedTokenBadge>.
@@ -84,7 +102,14 @@ export function TokenTray({ tokens, locked, tokenCap, onOpenDetail, activeTokenI
               token={token}
               disabled={locked}
               isActive={token.id === activeTokenId}
-              onClick={() => onOpenDetail(token.id)}
+              selectMode={selectMode}
+              isSelected={selectedTokenIds.has(token.id)}
+              onClick={() => {
+                // §201 — in select mode, click toggles selection;
+                // outside select mode, click opens the detail panel.
+                if (selectMode) onToggleSelect(token.id);
+                else onOpenDetail(token.id);
+              }}
             />
           ))}
         </div>

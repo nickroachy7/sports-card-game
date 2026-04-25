@@ -227,3 +227,79 @@ async function quickSellTokenImpl(
 }
 
 export const quickSellToken = wrapAction(quickSellTokenImpl, { name: "quickSellToken" });
+
+/**
+ * Polish spec §201 (Phase 49 Wave 1.1). Bulk quick-sell wrapper for
+ * tokens. Mirrors `quickSellCards`: iterates the per-token SQL fn
+ * server-side; each token is independent, so partial failures are
+ * reported rather than rolled back.
+ */
+export type BulkQuickSellTokensResult = {
+  soldCount: number;
+  totalCoinsEarned: number;
+  balanceAfter: number;
+  failures: { tokenId: string; code: string; message: string }[];
+};
+
+async function quickSellTokensImpl(input: {
+  tokenIds: string[];
+}): Promise<ActionResult<BulkQuickSellTokensResult>> {
+  if (!Array.isArray(input.tokenIds) || input.tokenIds.length === 0) {
+    return { ok: false, error: { code: "VALIDATION", message: "No tokens selected." } };
+  }
+  if (input.tokenIds.length > 100) {
+    return { ok: false, error: { code: "VALIDATION", message: "Max 100 tokens per batch." } };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  const db = getDb();
+  const failures: BulkQuickSellTokensResult["failures"] = [];
+  let totalCoinsEarned = 0;
+  let balanceAfter = 0;
+  let soldCount = 0;
+
+  for (const tokenId of input.tokenIds) {
+    try {
+      const res = await db.execute<{
+        quicksell_token: {
+          coins_earned: number;
+          balance_after: number | string;
+          token_type: string;
+        };
+      }>(sql`
+        SELECT public.quicksell_token(${user.id}::uuid, ${tokenId}::uuid) AS quicksell_token
+      `);
+      const raw = res.rows[0]?.quicksell_token;
+      if (!raw) {
+        failures.push({ tokenId, code: "INTERNAL", message: "Empty result." });
+        continue;
+      }
+      soldCount += 1;
+      totalCoinsEarned += Number(raw.coins_earned);
+      balanceAfter = Number(raw.balance_after);
+      await captureServerEvent(user.id, "token_quick_sold", {
+        token_id: tokenId,
+        token_type: raw.token_type,
+        coins_earned: Number(raw.coins_earned),
+        balance_after: Number(raw.balance_after),
+        batch: true,
+      });
+    } catch (err) {
+      const mapped = mapDbError(err);
+      failures.push({ tokenId, code: mapped.code, message: mapped.message });
+    }
+  }
+
+  revalidatePath("/lineup", "layout");
+  revalidatePath("/collection");
+  return {
+    ok: true,
+    data: { soldCount, totalCoinsEarned, balanceAfter, failures },
+  };
+}
+
+export const quickSellTokens = wrapAction(quickSellTokensImpl, { name: "quickSellTokens" });

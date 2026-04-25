@@ -15,7 +15,7 @@ import {
 } from "@/app/actions/lineup";
 import type { OpenPackResult, OpenPacksBatchResult } from "@/app/actions/packs";
 import { fetchRevealedCards, type RevealedCard } from "@/app/actions/packs-reveal";
-import { applyToken, removeToken } from "@/app/actions/tokens";
+import { applyToken, quickSellTokens, removeToken } from "@/app/actions/tokens";
 import { vaultCardsMidseason } from "@/app/actions/vault";
 import { CardDetailPanel } from "@/components/card/CardDetailPanel";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
@@ -382,8 +382,12 @@ export function LineupView(props: LineupViewProps) {
   // LineupView so CardsPanel + sidebar swap both read the same
   // selection. Selection is intentionally non-persistent — exits
   // on navigation, reload, or Escape.
+  // §201 (Phase 49 Wave 1.1) — selectedTokenIds shares the same
+  // selectMode toggle. Cards + tokens get aggregated by SelectionPanel
+  // for a single bulk Quick-sell button.
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [selectedTokenIds, setSelectedTokenIds] = useState<Set<string>>(() => new Set());
   const [bulkSubmitting, startBulk] = useTransition();
 
   // Polish spec §147–§151 (Phase 43). Pack reveal state — in-place
@@ -637,13 +641,25 @@ export function LineupView(props: LineupViewProps) {
   const handleToggleSelectMode = useCallback(() => {
     setSelectMode((prev) => {
       const next = !prev;
-      if (!next) setSelectedIds(new Set());
+      if (!next) {
+        setSelectedIds(new Set());
+        setSelectedTokenIds(new Set());
+      }
       return next;
     });
-    // On entry, kick any open card detail to the curb.
+    // On entry, kick any open card / token detail to the curb so
+    // the sidebar lands on SelectionPanel unambiguously.
     const next = new URLSearchParams(searchParams.toString());
+    let dirty = false;
     if (next.has("card")) {
       next.delete("card");
+      dirty = true;
+    }
+    if (next.has("token")) {
+      next.delete("token");
+      dirty = true;
+    }
+    if (dirty) {
       const q = next.toString();
       router.replace(q ? `/lineup?${q}` : "/lineup", { scroll: false });
     }
@@ -658,8 +674,19 @@ export function LineupView(props: LineupViewProps) {
     });
   }, []);
 
+  // §201 — token selection counterpart. Same toggle semantics.
+  const handleToggleSelectToken = useCallback((tokenId: string) => {
+    setSelectedTokenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(tokenId)) next.delete(tokenId);
+      else next.add(tokenId);
+      return next;
+    });
+  }, []);
+
   const handleClearSelection = useCallback(() => {
     setSelectedIds(new Set());
+    setSelectedTokenIds(new Set());
     setSelectMode(false);
   }, []);
 
@@ -695,31 +722,82 @@ export function LineupView(props: LineupViewProps) {
     return total;
   }, [selectedCards]);
 
+  // §201 — tokens flavor of the same memo trio.
+  const selectedTokens = useMemo<LineupTokenVM[]>(() => {
+    const out: LineupTokenVM[] = [];
+    for (const id of selectedTokenIds) {
+      const t = tokensById.get(id);
+      if (t) out.push(t);
+    }
+    return out;
+  }, [selectedTokenIds, tokensById]);
+
+  const selectionTokenQuickSellTotal = useMemo(() => {
+    let total = 0;
+    for (const t of selectedTokens) {
+      total += props.tokenSellValueByType[t.tokenType] ?? 0;
+    }
+    return total;
+  }, [selectedTokens, props.tokenSellValueByType]);
+
   const handleBulkQuickSell = useCallback(() => {
-    if (selectedIds.size === 0) return;
-    const ids = Array.from(selectedIds);
+    const cardIds = Array.from(selectedIds);
+    const tokenIds = Array.from(selectedTokenIds);
+    if (cardIds.length === 0 && tokenIds.length === 0) return;
     startBulk(async () => {
-      const result = await quickSellCards({ cardIds: ids });
-      if (!result.ok) {
-        toast.error(result.error.message);
-        return;
+      // §201 — fire both bulk actions in parallel; each returns its
+      // own partial-failure shape. Combine for a single toast.
+      const [cardRes, tokenRes] = await Promise.all([
+        cardIds.length > 0
+          ? quickSellCards({ cardIds })
+          : Promise.resolve({ ok: true as const, data: null }),
+        tokenIds.length > 0
+          ? quickSellTokens({ tokenIds })
+          : Promise.resolve({ ok: true as const, data: null }),
+      ]);
+
+      let soldCards = 0;
+      let soldTokens = 0;
+      let totalCoins = 0;
+      let failureMsg: string | null = null;
+
+      if (cardRes.ok && cardRes.data) {
+        soldCards = cardRes.data.soldCount;
+        totalCoins += cardRes.data.totalCoinsEarned;
+        if (cardRes.data.failures.length > 0) {
+          failureMsg = `${cardRes.data.failures.length} card${cardRes.data.failures.length === 1 ? "" : "s"} couldn't be sold (${cardRes.data.failures[0]?.message ?? "unknown"})`;
+        }
+      } else if (!cardRes.ok) {
+        toast.error(cardRes.error.message);
       }
-      const { soldCount, totalCoinsEarned, failures } = result.data;
-      if (soldCount > 0) {
+
+      if (tokenRes.ok && tokenRes.data) {
+        soldTokens = tokenRes.data.soldCount;
+        totalCoins += tokenRes.data.totalCoinsEarned;
+        if (tokenRes.data.failures.length > 0) {
+          const detail = `${tokenRes.data.failures.length} token${tokenRes.data.failures.length === 1 ? "" : "s"} couldn't be sold (${tokenRes.data.failures[0]?.message ?? "unknown"})`;
+          failureMsg = failureMsg ? `${failureMsg} · ${detail}` : detail;
+        }
+      } else if (!tokenRes.ok) {
+        toast.error(tokenRes.error.message);
+      }
+
+      if (soldCards > 0 || soldTokens > 0) {
+        const parts: string[] = [];
+        if (soldCards > 0) parts.push(`${soldCards} card${soldCards === 1 ? "" : "s"}`);
+        if (soldTokens > 0) parts.push(`${soldTokens} token${soldTokens === 1 ? "" : "s"}`);
         toast.success(
-          `Sold ${soldCount} card${soldCount === 1 ? "" : "s"} for ${totalCoinsEarned} coin${totalCoinsEarned === 1 ? "" : "s"}`,
+          `Sold ${parts.join(" + ")} for ${totalCoins} coin${totalCoins === 1 ? "" : "s"}`,
         );
       }
-      if (failures.length > 0) {
-        toast.error(
-          `${failures.length} card${failures.length === 1 ? "" : "s"} couldn't be sold (${failures[0]?.message ?? "unknown"})`,
-        );
-      }
+      if (failureMsg) toast.error(failureMsg);
+
       setSelectedIds(new Set());
+      setSelectedTokenIds(new Set());
       setSelectMode(false);
       router.refresh();
     });
-  }, [selectedIds, router]);
+  }, [selectedIds, selectedTokenIds, router]);
 
   // Polish spec §149 (Phase 43). After openPacksBatch returns, we
   // partition the openings into per-pack payloads so PackRevealPanel
@@ -913,6 +991,8 @@ export function LineupView(props: LineupViewProps) {
             onQuickSell={handleBulkQuickSell}
             onAddToVault={handleBulkVault}
             onClear={handleClearSelection}
+            selectedTokens={selectedTokens}
+            tokenQuickSellTotal={selectionTokenQuickSellTotal}
           />
         ) : detailTokenId && tokensById.get(detailTokenId) ? (
           (() => {
@@ -987,6 +1067,9 @@ export function LineupView(props: LineupViewProps) {
           tokenCap={props.tokenCap}
           onOpenDetail={handleOpenTokenDetail}
           activeTokenId={detailTokenId}
+          selectMode={selectMode}
+          selectedTokenIds={selectedTokenIds}
+          onToggleSelect={handleToggleSelectToken}
         />
       }
       cards={

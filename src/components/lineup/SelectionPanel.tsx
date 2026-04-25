@@ -16,7 +16,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatContract } from "@/lib/card/tiers";
 import type { CardTier } from "@/lib/contracts/cards";
-import type { LineupCardVM } from "@/lib/lineup/types";
+import type { LineupCardVM, LineupTokenVM } from "@/lib/lineup/types";
+import { TOKEN_LONG_LABEL, TOKEN_SHORT_LABEL } from "@/lib/token/display";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,9 +40,9 @@ type Props = {
   /** How many of the selected cards are currently slotted in the
    *  lineup. Drives the warning copy in the quick-sell dialog. */
   lineupCount: number;
-  /** True when the cards can currently be quick-sold / vaulted
-   *  (building state or mid-season). False disables the action
-   *  buttons with an explainer line. */
+  /** True when the cards/tokens can currently be quick-sold /
+   *  vaulted (building state or mid-season). False disables the
+   *  action buttons with an explainer line. */
   canAct: boolean;
   onQuickSell: () => void | Promise<void>;
   onAddToVault: () => void | Promise<void>;
@@ -49,46 +50,82 @@ type Props = {
   /** Toggled during a bulk action; disables the action buttons so
    *  users don't double-click. */
   submitting: boolean;
+  /**
+   * Polish spec §201 (Phase 49 Wave 1.1). Tokens selected in the
+   * same select-mode session. Cards + tokens share a single Quick-
+   * sell button; vault stays cards-only.
+   */
+  selectedTokens: LineupTokenVM[];
+  /** Sum of quick-sell value across selected tokens (coins). */
+  tokenQuickSellTotal: number;
 };
 
 export function SelectionPanel(props: Props) {
-  const { selectedCards, quickSellTotal, lineupCount, canAct, submitting } = props;
+  const {
+    selectedCards,
+    quickSellTotal,
+    lineupCount,
+    canAct,
+    submitting,
+    selectedTokens,
+    tokenQuickSellTotal,
+  } = props;
   const [dialog, setDialog] = useState<"quickSell" | "vault" | null>(null);
 
-  const actionDisabled = selectedCards.length === 0 || submitting || !canAct;
+  // §201 — total selection includes both cards and tokens. Quick-sell
+  // acts on both; vault stays cards-only.
+  const totalSelected = selectedCards.length + selectedTokens.length;
+  const combinedSellTotal = quickSellTotal + tokenQuickSellTotal;
+  const actionDisabled = totalSelected === 0 || submitting || !canAct;
+  const vaultDisabled = selectedCards.length === 0 || submitting || !canAct;
 
   return (
     <aside className="flex min-h-0 flex-1 flex-col gap-3">
       <header className="flex flex-col gap-1 border-b border-[var(--border)] pb-3">
         <span className="text-xs uppercase tracking-wider text-[var(--text-3)]">Selection</span>
         <div className="font-mono text-2xl font-bold tabular-nums text-[var(--text)]">
-          {selectedCards.length} selected
+          {totalSelected} selected
         </div>
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px] text-[var(--text-2)]">
           <span>
-            <span className="font-mono text-[var(--text)]">{quickSellTotal}</span>{" "}
+            <span className="font-mono text-[var(--text)]">{combinedSellTotal}</span>{" "}
             <span className="text-[var(--text-3)]">coins quick-sell</span>
           </span>
           {lineupCount > 0 && <span className="text-[#D4A647]">{lineupCount} in lineup</span>}
+          {selectedCards.length > 0 && selectedTokens.length > 0 && (
+            <span className="text-[var(--text-3)]">
+              · {selectedCards.length} card{selectedCards.length === 1 ? "" : "s"} +{" "}
+              {selectedTokens.length} token{selectedTokens.length === 1 ? "" : "s"}
+            </span>
+          )}
         </div>
       </header>
 
-      <SidebarSection title="Cards" className="min-h-0 flex-1">
-        {selectedCards.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-xs text-[var(--text-3)]">
-            Click cards in the grid to add them.
-          </div>
-        ) : (
-          <ol
-            data-scroll="selection-list"
-            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto"
-          >
-            {selectedCards.map((card) => (
-              <SelectionRow key={card.id} card={card} />
-            ))}
-          </ol>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+        {selectedCards.length > 0 && (
+          <SidebarSection title={`Cards (${selectedCards.length})`}>
+            <ol className="flex flex-col gap-0.5">
+              {selectedCards.map((card) => (
+                <SelectionRow key={card.id} card={card} />
+              ))}
+            </ol>
+          </SidebarSection>
         )}
-      </SidebarSection>
+        {selectedTokens.length > 0 && (
+          <SidebarSection title={`Tokens (${selectedTokens.length})`}>
+            <ol className="flex flex-col gap-0.5">
+              {selectedTokens.map((tk) => (
+                <TokenSelectionRow key={tk.id} token={tk} />
+              ))}
+            </ol>
+          </SidebarSection>
+        )}
+        {totalSelected === 0 && (
+          <div className="flex h-full items-center justify-center text-center text-xs text-[var(--text-3)]">
+            Click cards in the grid or token chips in the tray to add them.
+          </div>
+        )}
+      </div>
 
       <div className="flex flex-col gap-2 border-t border-[var(--border)] pt-3">
         <Button
@@ -97,12 +134,12 @@ export function SelectionPanel(props: Props) {
           disabled={actionDisabled}
           className="w-full"
         >
-          Quick-sell ({quickSellTotal} coins)
+          Quick-sell ({combinedSellTotal} coins)
         </Button>
         <Button
           variant="outline"
           onClick={() => setDialog("vault")}
-          disabled={actionDisabled}
+          disabled={vaultDisabled}
           className="w-full"
         >
           Add to vault ({selectedCards.length})
@@ -126,17 +163,32 @@ export function SelectionPanel(props: Props) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Quick-sell {selectedCards.length} card{selectedCards.length === 1 ? "" : "s"}?
+              Quick-sell {totalSelected} item{totalSelected === 1 ? "" : "s"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              You&apos;ll earn{" "}
-              <span className="font-mono text-[var(--text)]">{quickSellTotal}</span> coins.
-              Quick-sell is permanent — sold cards can&apos;t be recovered.
+              {selectedCards.length > 0 && selectedTokens.length > 0 ? (
+                <>
+                  {selectedCards.length} card{selectedCards.length === 1 ? "" : "s"} +{" "}
+                  {selectedTokens.length} token{selectedTokens.length === 1 ? "" : "s"} for{" "}
+                  <span className="font-mono text-[var(--text)]">{combinedSellTotal}</span> coins.
+                </>
+              ) : selectedTokens.length > 0 ? (
+                <>
+                  You&apos;ll earn{" "}
+                  <span className="font-mono text-[var(--text)]">{tokenQuickSellTotal}</span> coins.
+                </>
+              ) : (
+                <>
+                  You&apos;ll earn{" "}
+                  <span className="font-mono text-[var(--text)]">{quickSellTotal}</span> coins.
+                </>
+              )}{" "}
+              Quick-sell is permanent — sold items can&apos;t be recovered.
               {lineupCount > 0 && (
                 <>
                   {" "}
                   <span className="text-[#D4A647]">
-                    {lineupCount} of these {lineupCount === 1 ? "is" : "are"} in your lineup and
+                    {lineupCount} of the cards {lineupCount === 1 ? "is" : "are"} in your lineup and
                     will be removed.
                   </span>
                 </>
@@ -211,5 +263,22 @@ function TierChip({ tier }: { tier: CardTier }) {
     >
       {tier.charAt(0).toUpperCase()}
     </span>
+  );
+}
+
+/** Polish spec §201 — selected-token row in the SelectionPanel. */
+function TokenSelectionRow({ token }: { token: LineupTokenVM }) {
+  return (
+    <li className="grid grid-cols-[2.25rem_1fr_auto] items-baseline gap-1 text-[11px]">
+      <span className="font-mono text-[9px] uppercase tracking-wider text-[var(--tier-gold)]">
+        {TOKEN_SHORT_LABEL[token.tokenType]}
+      </span>
+      <span className="min-w-0 truncate text-[var(--text-2)]">
+        {TOKEN_LONG_LABEL[token.tokenType]}
+      </span>
+      <span className="text-right font-mono tabular-nums text-[var(--text-3)]">
+        +{token.bonusFp} FP
+      </span>
+    </li>
   );
 }

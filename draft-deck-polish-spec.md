@@ -8848,3 +8848,71 @@ remain clickable so the user can read details + (if
 unlocked) quick-sell. An outline ring marks the active pip
 when its detail panel is open.
 
+
+---
+
+## 201. Multi-select extends to tokens (Phase 49 Wave 1.1)
+
+### Problem
+
+User feedback after Wave 1 shipped:
+> "Can we make the select option for the cards also work for
+> tokens so we can quickly sell these?"
+
+Wave 1 gave a single-token quick-sell via the sidebar detail
+panel. With 60+ tokens to grind down, clicking each one
+individually was too slow.
+
+### Decision
+
+Extend the existing select-mode toggle on the cards filter
+row to also accept tokens. One Quick-sell button does both;
+vault stays cards-only (tokens can't be vaulted).
+
+### Wiring
+
+- `selectedTokenIds: Set<string>` lives next to `selectedIds`
+  on `LineupView`. Same select-mode toggle clears both on
+  exit.
+- `TokenTray` + `TrayTokenPip` accept `selectMode`,
+  `selectedTokenIds`, `onToggleSelect` props. In select mode:
+  - Drag is suppressed (`canDrag = !dragSuppressed`) so a
+    single click toggles selection cleanly.
+  - Click → toggle selection (instead of opening detail).
+  - Selected pips render a tier-gold outline ring.
+- `SelectionPanel` accepts `selectedTokens` + `tokenQuickSellTotal`
+  alongside the cards props. Header reads `N selected`
+  (combined). When both card + token sections are non-empty,
+  a sub-line appears: `· 12 cards + 5 tokens`. Body renders
+  separate `Cards (n)` and `Tokens (n)` SidebarSections.
+- The Quick-sell confirm dialog adapts its description copy
+  to "X cards + Y tokens for Z coins" / "Y tokens..." /
+  "X cards..." based on what's selected.
+
+### Bulk action
+
+`handleBulkQuickSell` now fires `quickSellCards` +
+`quickSellTokens` in `Promise.all`. Each returns its own
+partial-failure shape. The handler combines results into a
+single success toast (`Sold 3 cards + 8 tokens for 245
+coins`) and a single failure toast if either reports
+failures. Both selection sets clear; select mode exits.
+
+### New server action
+
+`quickSellTokens({tokenIds})` in `src/app/actions/tokens.ts`.
+Mirror of `quickSellCards`: max 100 per batch, iterates
+`public.quicksell_token` server-side (no new SQL fn — reuses
+the per-token fn from §197), captures PostHog
+`token_quick_sold` with `batch: true`. Revalidates `/lineup`
++ `/collection`.
+
+### Why same select-mode (not a separate token select)
+
+Single mode + one Quick-sell button is the smallest
+mental model: `Select → click anything → Quick-sell`. Two
+disjoint select modes would force the user to think about
+which inventory they're selecting from. Vault stays
+cards-only because it doesn't apply to tokens; the dialog
+gates it behind `vaultDisabled = selectedCards.length === 0`.
+

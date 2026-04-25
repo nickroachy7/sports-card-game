@@ -26,6 +26,14 @@ type Props = {
   /** When true, the pip renders an outline ring to indicate the
    *  detail panel is currently open for this token. */
   isActive?: boolean;
+  /**
+   * Polish spec §201 (Phase 49 Wave 1.1). Multi-select mode flag.
+   * When true, drag is disabled (so click toggles selection
+   * cleanly), and the pip renders a checkbox-style ring + check
+   * mark on selected tokens. Mirrors the cards-grid pattern.
+   */
+  selectMode?: boolean;
+  isSelected?: boolean;
 };
 
 /**
@@ -36,9 +44,20 @@ type Props = {
  *
  * Already-applied tokens render dim and are non-draggable.
  */
-export function TrayTokenPip({ token, disabled, onClick, isActive }: Props) {
+export function TrayTokenPip({
+  token,
+  disabled,
+  onClick,
+  isActive,
+  selectMode,
+  isSelected,
+}: Props) {
   const applied = token.appliedToCardId !== null;
   const unusable = disabled || applied;
+  // §201 — drag is suppressed in select mode so a single click
+  // toggles selection cleanly, mirroring how BenchCard behaves on
+  // the cards grid.
+  const dragSuppressed = unusable || selectMode === true;
 
   const [{ isDragging }, dragRef, preview] = useDrag<TokenDragItem, void, { isDragging: boolean }>(
     () => ({
@@ -47,13 +66,13 @@ export function TrayTokenPip({ token, disabled, onClick, isActive }: Props) {
         dragResult.lastDropAccepted = false;
         return { tokenId: token.id, isPitcherToken: token.isPitcherToken };
       },
-      canDrag: !unusable,
+      canDrag: !dragSuppressed,
       end: (_item, monitor) => {
         dragResult.lastDropAccepted = monitor.didDrop();
       },
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
-    [token.id, token.isPitcherToken, unusable],
+    [token.id, token.isPitcherToken, dragSuppressed],
   );
 
   useEffect(() => {
@@ -71,16 +90,25 @@ export function TrayTokenPip({ token, disabled, onClick, isActive }: Props) {
           // §195 (Phase 49). Click handler opens the sidebar detail
           // panel. Even disabled (locked / applied) tokens are
           // clickable so the user can read details + quick-sell.
+          // §201 — in select mode, click toggles selection.
           onClick={onClick}
           aria-label={`${TOKEN_LONG_LABEL[token.tokenType]} token, ${applied ? "applied" : "available"}`}
-          aria-pressed={isActive}
+          aria-pressed={selectMode ? isSelected : isActive}
           className={cn(
-            "appearance-none rounded-full border-0 bg-transparent p-0 transition-opacity",
-            !unusable && "cursor-grab active:cursor-grabbing",
-            unusable && "cursor-pointer",
+            "relative appearance-none rounded-full border-0 bg-transparent p-0 transition-opacity",
+            !dragSuppressed && "cursor-grab active:cursor-grabbing",
+            dragSuppressed && "cursor-pointer",
             // §195 — outline ring when this token's detail panel is
             // currently open in the sidebar.
-            isActive && "outline outline-2 outline-offset-2 outline-[var(--tier-gold)]",
+            isActive &&
+              !selectMode &&
+              "outline outline-2 outline-offset-2 outline-[var(--tier-gold)]",
+            // §201 — checkbox-style ring on selected tokens in
+            // select mode. Tier-gold matches the SELECT button +
+            // BenchCard's selected ring.
+            selectMode &&
+              isSelected &&
+              "outline outline-2 outline-offset-2 outline-[var(--tier-gold)]",
             // Polish spec §117 (Phase 38). Source token pip hides
             // fully while dragging; the TokenDragLayer renders the
             // in-flight ghost. Only opacity-0 (no
