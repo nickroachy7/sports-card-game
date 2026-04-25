@@ -23,31 +23,35 @@ type Props = {
   info: SlotGameInfo | null;
   /**
    * - `footer` (default): full-copy footer rendered under lineup
-   *   slots. Returns null when `info` is null.
-   * - `chip`: compact PRE/LIVE/FINAL word for the Box Score row.
-   *   Returns null when info is null.
-   * - `bench`: same full copy as `footer`, but shows a muted
-   *   `OFF` when `info` is null so bench users know a card has
-   *   no game in today's contest (polish spec §58).
+   *   slots. Renders a muted `OFF` pill when `info` is null
+   *   (polish spec §188).
+   * - `chip`: compact PRE/LIVE/FINAL/OFF word for the Box Score
+   *   row + sidebar roster row.
+   * - `bench`: same full copy as `footer`, with a muted `OFF`
+   *   pill when `info` is null (polish spec §58).
    */
   variant?: "footer" | "chip" | "bench";
   className?: string;
 };
 
 export function SlotGameState({ info, variant = "footer", className }: Props) {
-  // Polish spec §62 — tone-washed pill wrapping for footer + bench
-  // variants. Each card's state reads as a discrete visual unit
-  // instead of a horizontal text stream on the bench. Pill shape
-  // also applies to lineup slot footer for uniform design.
+  // Polish spec §62 + §188 — tone-washed pill wrapping for
+  // footer + bench variants. Off-day cards get the same OFF pill
+  // everywhere a game-state would otherwise appear, so users
+  // always know whether a slot's player has a game today.
   if (!info) {
-    if (variant === "bench") {
+    if (variant === "chip") {
       return (
-        <span className={cn("inline-flex", className)}>
-          <span className={cn(PILL_BASE, pillTone(null))}>OFF</span>
+        <span className={cn("inline-flex items-center gap-0.5", className)}>
+          <span className={toneClass(null)}>OFF</span>
         </span>
       );
     }
-    return null;
+    return (
+      <span className={cn("inline-flex", className)}>
+        <span className={cn(PILL_BASE, pillTone(null))}>OFF</span>
+      </span>
+    );
   }
 
   if (variant === "chip") {
@@ -105,13 +109,14 @@ function stateWord(status: SlotGameInfo["status"]): string {
   }
 }
 
-function toneClass(status: SlotGameInfo["status"]): string {
+function toneClass(status: SlotGameInfo["status"] | null): string {
   switch (status) {
     case "live":
       return "text-emerald-400";
     case "final":
       return "text-[var(--text-2)]";
     default:
+      // scheduled | postponed | suspended | canceled | null (off-day)
       return "text-[var(--text-3)]";
   }
 }

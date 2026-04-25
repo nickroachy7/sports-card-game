@@ -8309,3 +8309,48 @@ No schema changes — purely behavioral.
   don't care which BDL mode emitted it.
 - Audit alert on future-final attempts. If it happens
   frequently enough to warrant an alert, revisit.
+
+---
+
+## 188. OFF-day pill universality (Phase 47 v3)
+
+### Problem
+
+User feedback after the 2-hour grace fix:
+> "What about players who are on off days? Shouldn't it
+> say Off?"
+
+A card whose team has no MLB game in the contest's slate
+("off day") was rendering with **no game-state pill** under
+the lineup slot and **no chip** in the right-sidebar roster
+row. The bench (`/collection` and bench drawer) already
+showed a muted `OFF` pill (§58 / §62), but the lineup page
+itself was silent — leaving users staring at a card with
+no indicator of why no game was attached.
+
+### Fix
+
+`src/components/lineup/SlotGameState.tsx` — extend the
+existing OFF-pill rendering from the `bench` variant to
+both `footer` (lineup slot) and `chip` (sidebar roster +
+box score) variants. When `info` is null:
+- `footer` / `bench` → muted `OFF` pill (matches §62 tone).
+- `chip` → muted `OFF` word in the same tone class.
+
+The `toneClass` helper now accepts `null` and returns the
+muted text-3 color for off-day, matching the visual tone
+of `scheduled` (the closest non-actionable state).
+
+### Why this is right
+
+The OFF pill already lived in the design vocabulary (§58)
+— bench cards have shown it since Phase 18. The fix is
+just propagating the same visual to the two surfaces that
+were dropping it. No new states, no new colors; consistent
+across every place a slot's day-state is surfaced.
+
+Off-day handling stays "info is null" upstream — see §183
++ `fetch-slot-games.ts`: the SQL only returns rows for
+cards whose team has a game in the contest, so off-day
+cards naturally fall through to the null branch. No DB
+change needed.
