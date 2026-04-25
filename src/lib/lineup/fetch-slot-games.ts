@@ -58,6 +58,17 @@ export async function fetchSlotGameByCardId(
   //      the hour and clear this naturally.
   // Two-hour grace covers all realistic game lengths; only catches
   // BDL sandbox / test data marking finals seconds after first pitch.
+  //
+  // Polish spec §189 (Phase 47 v3). TBD-game OFF filter. Games whose
+  // status is scheduled/final but scheduled_start IS NULL are excluded
+  // from the result entirely — the card's team-id lookup misses, and
+  // SlotGameState renders an OFF pill (§188) instead of "VS WSH · TBD".
+  // Rationale: BDL puts the game on today's date but MLB Stats hasn't
+  // published a start time → either BDL is stale/wrong, or the game
+  // is unannounced. Users can't act on a TBD game; OFF matches their
+  // mental model. Postponed / suspended / canceled with NULL start
+  // are NOT excluded — those are informational ("PPD", "SUSP", "CXL"
+  // pills) and worth surfacing.
   const db = getDb();
   const gamesRes = await db.execute<GameRow>(sql`
     WITH candidates AS (
@@ -97,6 +108,12 @@ export async function fetchSlotGameByCardId(
         contestGameIds.map((id) => sql`${id}::uuid`),
         sql`, `,
       )}]::uuid[]`})
+        -- §189 — exclude TBD/null-start games from scheduled+final
+        -- statuses; render as OFF via missing team→game match.
+        AND NOT (
+          g.status IN ('scheduled', 'final')
+          AND g.scheduled_start IS NULL
+        )
     )
     SELECT DISTINCT ON (c.home_team_id, c.away_team_id)
       c.id,

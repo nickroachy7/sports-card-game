@@ -8354,3 +8354,82 @@ Off-day handling stays "info is null" upstream — see §183
 cards whose team has a game in the contest, so off-day
 cards naturally fall through to the null branch. No DB
 change needed.
+
+---
+
+## 189. TBD-game OFF filter (Phase 47 v3)
+
+### Problem
+
+Same-session user follow-up:
+> "Correct me if I'm wrong but everything that says TBD
+> means they don't have a game today. Those slots are
+> still show matchup and TBD instead of off. Shouldn't
+> they say off?"
+
+A game in today's slate with `status='scheduled'` and
+`scheduled_start IS NULL` was rendering as `VS WSH · TBD`
+on the lineup slot — the SlotGameState footer's PRE branch
+substitutes `"TBD"` when the start time is null:
+
+```ts
+const time = info.scheduledStart ? formatTime(...) : "TBD";
+return `${vs} ${info.opponentAbbr} · ${time}${dhMarker}`;
+```
+
+Prod check on 2026-04-25 showed exactly 1 such row in
+the slate: `CHW vs WSH` (`bdl_game_id 5058168`) — BDL
+had it on today's date but MLB Stats API had no published
+start time. Two BDL teams' worth of cards (CHW + WSH
+players) all rendered "VS WSH · TBD" / "@ CHW · TBD" on
+the lineup, even though the user couldn't confirm a real
+game existed.
+
+### Decision
+
+Treat `status IN ('scheduled', 'final') AND scheduled_start
+IS NULL` as **off-day**. Same UX as cards whose team has
+no entry in `included_game_ids` at all — render the
+muted OFF pill from §188.
+
+Postponed / suspended / canceled with NULL start are
+**not** filtered — they still render the informational
+PPD / SUSP / CXL pill (the user wants to know their
+player's game was postponed; that's not the same as no
+game at all).
+
+### Fix
+
+`fetchSlotGameByCardId` CTE adds an upstream WHERE filter:
+
+```sql
+AND NOT (
+  g.status IN ('scheduled', 'final')
+  AND g.scheduled_start IS NULL
+)
+```
+
+The card's team-id lookup misses the filtered rows, so
+both home + away teams' cards fall through to the OFF
+branch shipped in §188.
+
+### Why filter at the display CTE, not the slate
+
+`create_daily_contest` keeps the game in
+`included_game_ids` so that:
+- Live event subscriptions stay primed if MLB Stats later
+  publishes a start time (the slate refreshes on every
+  `/lineup` load).
+- Reconcile + scoring logic can still attribute fantasy
+  points if a real `game_event` ever lands.
+
+The display layer is the right cut — users see OFF, the
+data pipeline stays open to recovery.
+
+### Coverage
+
+This subsumes the previously-shipped "final + NULL start
+→ scheduled" demote case in §183: those rows are now
+filtered out at the candidates source, so the demote CASE
+in the SELECT is dead-code defensive. Left in place as
+belt-and-suspenders for unreachable edge cases.
