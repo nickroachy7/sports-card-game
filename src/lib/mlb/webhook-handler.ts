@@ -149,6 +149,12 @@ async function handleGameEnded(
     };
   }
   const db = getDb();
+  // Polish spec §184 (Phase 47). Reject `mlb.game.ended` events for
+  // games whose `scheduled_start` is still in the future (with 5-min
+  // grace for clock skew). BDL has been observed delivering pre-
+  // populated finals from sandbox / test data; without this guard
+  // the slot pill reads "FINAL L 4-12" on a player whose game hasn't
+  // started yet.
   const res = await db.execute<{ id: string }>(sql`
     UPDATE public.game
     SET status = 'final'::game_status,
@@ -160,15 +166,28 @@ async function handleGameEnded(
         current_outs = NULL,
         updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
+      AND scheduled_start <= now() + INTERVAL '5 minutes'
     RETURNING id
   `);
   if (res.rows.length === 0) {
+    // §184: distinguish "game not in DB" from "future-final rejected"
+    // so the audit trail shows which case fired.
+    const exists = await db.execute<{ id: string; future: boolean }>(sql`
+      SELECT id, scheduled_start > now() AS future
+      FROM public.game WHERE bdl_game_id = ${bdlGameId}
+    `);
+    const note =
+      exists.rows.length === 0
+        ? `game ${bdlGameId} not in our db`
+        : exists.rows[0]?.future
+          ? `future_final_rejected: game ${bdlGameId} ended before scheduled_start`
+          : `game ${bdlGameId} update affected 0 rows`;
     return {
       dispatched: false,
       unhandled: true,
       eventType: "mlb.game.ended",
       providerEventId: null,
-      note: `game ${bdlGameId} not in our db`,
+      note,
     };
   }
   // Pull authoritative box score and overwrite final_fp on every

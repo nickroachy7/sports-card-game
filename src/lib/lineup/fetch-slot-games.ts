@@ -45,13 +45,35 @@ export async function fetchSlotGameByCardId(
     has_double_header: boolean;
   };
 
+  // Polish spec §183 (Phase 47). Display guard against
+  // future-final games — if BDL ingestion ever delivers a "final"
+  // status for a game whose scheduled_start is still in the future
+  // (sandbox / pre-populated test data), demote to 'scheduled' for
+  // display purposes and zero the scores. The ingestion guards in
+  // §184 prevent new occurrences; this is belt-and-suspenders so
+  // any DB drift never reaches the user-visible pill.
   const db = getDb();
   const gamesRes = await db.execute<GameRow>(sql`
     WITH candidates AS (
       SELECT
         g.id,
         g.home_team_id, g.away_team_id,
-        g.scheduled_start, g.status, g.home_runs, g.away_runs,
+        g.scheduled_start,
+        CASE
+          WHEN g.status = 'final' AND g.scheduled_start > now()
+          THEN 'scheduled'::game_status
+          ELSE g.status
+        END AS status,
+        CASE
+          WHEN g.status = 'final' AND g.scheduled_start > now()
+          THEN NULL
+          ELSE g.home_runs
+        END AS home_runs,
+        CASE
+          WHEN g.status = 'final' AND g.scheduled_start > now()
+          THEN NULL
+          ELSE g.away_runs
+        END AS away_runs,
         g.current_inning, g.current_inning_half, g.current_outs,
         g.game_number, g.created_at,
         (COUNT(*) OVER (PARTITION BY g.date, g.home_team_id, g.away_team_id)) > 1

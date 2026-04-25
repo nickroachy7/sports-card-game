@@ -53,6 +53,7 @@ export async function GET(req: Request): Promise<Response> {
       scheduled_starts_updated: summary.scheduled_starts_updated,
       days: summary.days,
       errors: summary.errors,
+      future_finals_overridden: summary.future_finals_overridden ?? 0,
       contest_id: contestId,
       took_ms: Date.now() - startedAt,
     });

@@ -8124,3 +8124,188 @@ tomorrow and can adjust. One-time migration friction.
 - Slot-level "always smart-auto" mode separate from sticky.
   The two concepts compose: sticky = carry over; manual
   vs smart auto handles the empty-slot fallback.
+
+---
+
+# Phase 47 — Future-final game state hygiene (v1.32)
+
+User feedback on Apr 25: "Altuve and Lee are showing games
+from yesterday." The pills say `FINAL L 4-12` and `FINAL L 4-9`
+on cards whose teams play **tonight at 7:10 PM ET** and **tonight
+at 4:05 PM ET**, respectively. At 2:28 PM ET the games can't
+have ended yet — but they're flagged `final` in the DB with
+fake-looking scores.
+
+Diagnosed: the BDL ingestion path (webhook or prefetch cron)
+delivered "ended" events for games before their scheduled_start.
+Sandbox / pre-populated test data leaking through. Affects 4
+games today; could happen any day. The app correctly displays
+whatever the DB says, but the DB is wrong.
+
+**Estimated effort:** ~0.3 day.
+
+---
+
+## 181. Definition of "future-final"
+
+A game row is in an invalid state when:
+
+- `status = 'final'`
+- `scheduled_start > now()`
+
+Real MLB games never enter this state — finals only arrive
+after the actual game ends, well past `scheduled_start`. Any
+row matching the predicate is corrupt and should be treated
+as `scheduled` until reality catches up (or BDL re-syncs the
+game with a real `final` post-`scheduled_start`).
+
+---
+
+## 182. Defense-in-depth strategy
+
+Three layers, ordered from outermost (hides symptom) to
+innermost (prevents recurrence):
+
+1. **Display-side guard** (§183) — render `status='scheduled'`
+   when the predicate is hit, regardless of DB state.
+2. **Ingestion-side guard** (§184) — webhook handler +
+   prefetch cron refuse to set `status='final'` if
+   `scheduled_start > now() - 5 minutes`. (5-min grace for
+   clock skew between BDL + our DB.)
+3. **One-time backfill** (§185) — reset all currently-bad
+   rows so the user sees correct data immediately rather
+   than waiting for natural data refresh.
+
+Display-side is the most important — it works even when
+upstream data is lying. Ingestion + backfill are belt-and-
+suspenders.
+
+---
+
+## 183. Display-side guard
+
+### Goal
+
+`fetchSlotGameByCardId` (the source of truth for the lineup
+slot footer pill) downgrades any `final` game with
+`scheduled_start > now()` to `scheduled` when assembling the
+SlotGameInfo it returns. Scores zero out in that case so we
+don't accidentally show stale numbers.
+
+### Scope
+
+- Update the SQL inside `fetchSlotGameByCardId` so the
+  outer SELECT projects:
+  ```
+  CASE
+    WHEN c.status = 'final' AND c.scheduled_start > now()
+    THEN 'scheduled'::game_status
+    ELSE c.status
+  END AS effective_status
+  ```
+  Plus zero-out home_runs / away_runs in the same case.
+- The DISTINCT ON priority (live > scheduled > final) reads
+  from `effective_status`, so future-finals demote properly
+  in tie-breaking.
+
+### Out of scope
+
+- Modifying the underlying `game.status` value at read time.
+  Display-only correction; the row stays as the ingestion
+  layer left it.
+
+---
+
+## 184. Ingestion-side guard
+
+### Goal
+
+Game rows can't enter the future-final state going forward.
+Both ingestion paths refuse to write `status='final'` when
+`scheduled_start > now() - 5 minutes`.
+
+### Scope
+
+- **Webhook handler** (`/api/webhooks/balldontlie/mlb`):
+  - Before persisting a `mlb.game.ended` event, check the
+    target game's `scheduled_start`. If still in the future
+    (> 5 min grace), log a warning + write to `webhook_failed`
+    with reason `'future_final_rejected'`. Don't mutate
+    `game.status`.
+- **Games prefetch cron** (`/api/cron/bdl-games-prefetch`):
+  - When BDL returns a game with `status='final'` and a
+    future `scheduled_start`, override to `status='scheduled'`
+    + log the override count in the cron response.
+
+### Out of scope
+
+- A separate test/sandbox flag in the BDL provider. We
+  always run against real BDL; if their data is wrong, the
+  guard catches it.
+
+---
+
+## 185. One-time backfill
+
+### Goal
+
+Existing future-final rows reset to `status='scheduled'`
+with cleared scores. Single migration; idempotent (a future
+re-run is a no-op once everyone's clean).
+
+### Scope
+
+```sql
+UPDATE public.game
+SET status = 'scheduled',
+    home_runs = NULL,
+    away_runs = NULL,
+    current_inning = NULL,
+    current_inning_half = NULL,
+    current_outs = NULL,
+    updated_at = now()
+WHERE status = 'final'
+  AND scheduled_start > now();
+```
+
+Applied to dev + prod via MCP. The 4 games surfacing today
+get fixed immediately; user reload of `/lineup` shows
+"VS NYY · 7:10P" instead of "FINAL L 4-12".
+
+### Out of scope
+
+- Cleaning up downstream effects (e.g. if these "final"
+  games triggered `_apply_game_event_to_lineups` runs that
+  awarded fake FP). Audit trace deferred — the games never
+  had real `game_event` rows since BDL doesn't emit per-event
+  data for sandbox-final games. Spot-checked: no orphan
+  game_event rows referencing these game_ids.
+
+---
+
+## 186. Files touched
+
+- `src/lib/lineup/fetch-slot-games.ts` — display guard
+  (§183)
+- `src/app/api/webhooks/balldontlie/mlb/route.ts` —
+  ingestion guard for game.ended events (§184)
+- `src/app/api/cron/bdl-games-prefetch/route.ts` —
+  override on prefetch (§184)
+- `supabase/migrations/0059_backfill_future_finals.sql` —
+  one-time data reset (§185)
+
+No schema changes — purely behavioral.
+
+---
+
+## 187. Not in scope for v1.32
+
+- Database CHECK constraint preventing future-finals.
+  Postgres CHECKs can't reference `now()` (non-IMMUTABLE).
+  A trigger would work but adds plumbing for what's already
+  defended at the ingestion + display layers.
+- Webhook source attribution / sandbox-mode detection. The
+  behavior is "BDL said something wrong, ignore it" — we
+  don't care which BDL mode emitted it.
+- Audit alert on future-final attempts. If it happens
+  frequently enough to warrant an alert, revisit.

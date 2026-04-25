@@ -49,6 +49,13 @@ export type SyncSummary = {
   days: string[];
   /** Human-readable notes for observability. Bounded at 20 entries. */
   errors: string[];
+  /**
+   * Polish spec §184 (Phase 47). Count of BDL rows that arrived as
+   * `final` for a today-or-future date and were overridden to
+   * `scheduled` at ingest. Telemetry — non-zero values indicate BDL
+   * is feeding sandbox finals or there's clock skew worth checking.
+   */
+  future_finals_overridden?: number;
 };
 
 const MAX_ERROR_LOG = 20;
@@ -121,7 +128,23 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
 
     for (const g of games) {
       try {
-        const status = mapBdlStatus(g.status);
+        let status = mapBdlStatus(g.status);
+        // Polish spec §184 (Phase 47). If BDL hands us a `final`
+        // status for a game whose date is today or future (no
+        // `scheduled_start` available at this stage — second pass
+        // populates it), trust the calendar: today's games shouldn't
+        // already be final at the time of the daily prefetch run.
+        // This catches the sandbox-final case at ingest. Live
+        // games that genuinely finished post-prefetch get marked
+        // final via the webhook (which has the per-row
+        // scheduled_start guard in webhook-handler.ts).
+        if (status === "final") {
+          const todayIso = new Date().toISOString().slice(0, 10);
+          if (g.date && g.date.slice(0, 10) >= todayIso) {
+            status = "scheduled";
+            summary.future_finals_overridden = (summary.future_finals_overridden ?? 0) + 1;
+          }
+        }
         await db.execute(sql`
           INSERT INTO public.game (
             bdl_game_id, season_id, home_team_id, away_team_id,
