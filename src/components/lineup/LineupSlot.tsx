@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock, X } from "lucide-react";
+import { Lock, Pin, PinOff, X } from "lucide-react";
 import { motion, useAnimate, useReducedMotion } from "motion/react";
 import { useEffect, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
@@ -57,6 +57,15 @@ type Props = {
    * unlocked slot. Routes through the same path as a null-drop.
    */
   onRemoveStarter?: () => void;
+  /**
+   * Polish spec §175 (Phase 46). Per-slot sticky flag — when true,
+   * this slot's content carries forward to the next slate's entry.
+   * Toggle via `onToggleSticky`.
+   */
+  isSticky?: boolean;
+  /** Fires when the user clicks the pin icon. Receives the next
+   *  desired sticky state. */
+  onToggleSticky?: (next: boolean) => void;
 };
 
 export function LineupSlot(props: Props) {
@@ -78,6 +87,8 @@ function LineupSlotInner({
   onRemoveToken,
   onOpenDetail,
   onRemoveStarter,
+  isSticky = true,
+  onToggleSticky,
   depleteEvent,
 }: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
   const isPitcher = isPitcherSlot(position);
@@ -288,6 +299,41 @@ function LineupSlotInner({
           <div className="absolute top-1 right-1 z-10 rounded-full bg-black/60 p-0.5 text-[var(--text-2)]">
             <Lock className="size-2.5" aria-hidden="true" />
           </div>
+        )}
+        {/* Polish spec §175 (Phase 46). Sticky pin toggle. Only renders
+            when slot is filled, unlocked, and a callback is provided.
+            Filled gold = carries to tomorrow; outlined muted = one-shot.
+            Click toggles. Hidden when locked (lock glyph owns the
+            top-right corner above). */}
+        {!locked && card && onToggleSticky && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleSticky(!isSticky);
+            }}
+            aria-pressed={isSticky}
+            aria-label={
+              isSticky
+                ? `Sticky: ${card.playerName} carries to tomorrow's lineup. Click to make one-shot.`
+                : `One-shot: ${card.playerName} drops after today's game. Click to make sticky.`
+            }
+            title={isSticky ? "Sticky — carries to tomorrow" : "One-shot — drops after today"}
+            className={cn(
+              "absolute top-1 right-1 z-10 flex size-5 items-center justify-center rounded-full border transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-2)]",
+              isSticky
+                ? "border-[var(--tier-gold)] bg-[var(--tier-gold)] text-[var(--bg)] hover:opacity-90"
+                : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-3)] hover:border-[var(--text-2)] hover:text-[var(--text-2)]",
+            )}
+          >
+            {isSticky ? (
+              <Pin className="size-3" aria-hidden="true" />
+            ) : (
+              <PinOff className="size-3" aria-hidden="true" />
+            )}
+          </button>
         )}
       </div>
       {/* Polish spec §45 game-state footer, restored in Phase 27 after

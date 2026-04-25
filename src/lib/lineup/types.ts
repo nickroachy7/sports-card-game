@@ -77,6 +77,9 @@ export type LineupTokenVM = {
 };
 
 export type LineupSlotVM = {
+  /** UUID of the contest_lineup_slot row — needed by Phase 46
+   *  toggleSlotSticky action to identify the target slot. */
+  slotId: string;
   position: LineupPosition;
   starterCardId: string | null;
   tokenApplicationId: string | null;
@@ -85,6 +88,10 @@ export type LineupSlotVM = {
   /** Authoritative FP after reconcile. Zero until the starter's game
    *  finalizes + reconcileGame runs. */
   finalFp: number;
+  /** Polish spec §171 (Phase 46). When true, this slot's content
+   *  carries forward to the next slate's contest entry. Defaults
+   *  true; user toggles via the slot's pin icon. */
+  isSticky: boolean;
 };
 
 export type LineupViewProps = {

@@ -94,14 +94,16 @@ export default async function LineupPage() {
   }
 
   type SlotRow = {
+    id: string;
     position: LineupPosition;
     starter_card_id: string | null;
     token_application_id: string | null;
     live_fp: string | number;
     final_fp: string | number;
+    is_sticky: boolean;
   };
   const slotsRes = await db.execute<SlotRow>(sql`
-    SELECT position, starter_card_id, token_application_id, live_fp, final_fp
+    SELECT id, position, starter_card_id, token_application_id, live_fp, final_fp, is_sticky
     FROM public.contest_lineup_slot
     WHERE contest_entry_id = ${entry.id}::uuid
   `);
@@ -168,11 +170,13 @@ export default async function LineupPage() {
   const slots: LineupSlotVM[] = LINEUP_POSITIONS.map((pos) => {
     const row = slotsRes.rows.find((r) => r.position === pos);
     return {
+      slotId: row?.id ?? "",
       position: pos,
       starterCardId: row?.starter_card_id ?? null,
       tokenApplicationId: row?.token_application_id ?? null,
       liveFp: Number(row?.live_fp ?? 0),
       finalFp: Number(row?.final_fp ?? 0),
+      isSticky: row?.is_sticky ?? true,
     };
   });
 

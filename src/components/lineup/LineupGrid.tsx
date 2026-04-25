@@ -19,6 +19,8 @@ type SlotFill = {
   locked: boolean;
   /** Polish spec §45 — game info for this slot (if any). */
   gameInfo: SlotGameInfo | null;
+  /** Polish spec §171 (Phase 46). Per-slot sticky flag for carry-over. */
+  isSticky: boolean;
 };
 
 type Props = {
@@ -37,6 +39,11 @@ type Props = {
    * `handleCardDropped(pos, null, null)` removal path.
    */
   onRemoveStarter: (position: LineupPosition) => void;
+  /**
+   * Polish spec §175 (Phase 46). Per-slot sticky pin toggle. Routes
+   * to LineupView's handler which calls the toggleSlotSticky action.
+   */
+  onToggleSticky: (position: LineupPosition, next: boolean) => void;
 };
 
 /**
@@ -101,6 +108,7 @@ export function LineupGrid({
   onRemoveToken,
   onOpenDetail,
   onRemoveStarter,
+  onToggleSticky,
 }: Props) {
   const [rowMode, setRowMode] = useState<"three" | "two">("three");
 
@@ -131,6 +139,7 @@ export function LineupGrid({
           onRemoveToken={onRemoveToken}
           onOpenDetail={onOpenDetail}
           onRemoveStarter={onRemoveStarter}
+          onToggleSticky={onToggleSticky}
         />
       ))}
     </div>
@@ -147,6 +156,7 @@ function RoleRow({
   onRemoveToken,
   onOpenDetail,
   onRemoveStarter,
+  onToggleSticky,
 }: {
   label: string;
   positions: readonly LineupPosition[];
@@ -157,6 +167,7 @@ function RoleRow({
   onRemoveToken: Props["onRemoveToken"];
   onOpenDetail: Props["onOpenDetail"];
   onRemoveStarter: Props["onRemoveStarter"];
+  onToggleSticky: Props["onToggleSticky"];
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -174,6 +185,7 @@ function RoleRow({
               appliedToken={fill.appliedToken}
               locked={fill.locked}
               gameInfo={fill.gameInfo}
+              isSticky={fill.isSticky}
               onCardDropped={(cardId, fromPosition) =>
                 onCardDropped(position, cardId, fromPosition)
               }
@@ -181,6 +193,7 @@ function RoleRow({
               onRemoveToken={onRemoveToken}
               onOpenDetail={onOpenDetail}
               onRemoveStarter={() => onRemoveStarter(position)}
+              onToggleSticky={(next) => onToggleSticky(position, next)}
             />
           );
         })}

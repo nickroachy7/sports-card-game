@@ -145,6 +145,46 @@ export const updateLineupSlot = wrapAction(updateLineupSlotImpl, {
   name: "updateLineupSlot",
 });
 
+/**
+ * Polish spec §177 (Phase 46). Per-slot sticky toggle. Wraps
+ * `public.update_slot_sticky` which guards against locked slots +
+ * cross-user mutation.
+ */
+async function toggleSlotStickyImpl(input: {
+  slotId: string;
+  sticky: boolean;
+}): Promise<ActionResult<{ slotId: string; sticky: boolean }>> {
+  if (typeof input?.slotId !== "string" || !input.slotId) {
+    return { ok: false, error: { code: "VALIDATION", message: "Missing slotId." } };
+  }
+  if (typeof input?.sticky !== "boolean") {
+    return { ok: false, error: { code: "VALIDATION", message: "Missing sticky flag." } };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    await getDb().execute(sql`
+      SELECT public.update_slot_sticky(
+        ${user.id}::uuid,
+        ${input.slotId}::uuid,
+        ${input.sticky}::boolean
+      )
+    `);
+    revalidatePath("/lineup", "layout");
+    return { ok: true, data: { slotId: input.slotId, sticky: input.sticky } };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const toggleSlotSticky = wrapAction(toggleSlotStickyImpl, {
+  name: "toggleSlotSticky",
+});
+
 /** Set auto-sub mode for an entry. */
 async function setAutoSubModeImpl(input: SetAutoSubModeInput): Promise<ActionResult<undefined>> {
   const parsed = setAutoSubModeInputSchema.safeParse(input);

@@ -7,7 +7,12 @@ import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
 import { quickSellCards } from "@/app/actions/cards";
-import { setAutoSubMode, swapLineupSlots, updateLineupSlot } from "@/app/actions/lineup";
+import {
+  setAutoSubMode,
+  swapLineupSlots,
+  toggleSlotSticky,
+  updateLineupSlot,
+} from "@/app/actions/lineup";
 import type { OpenPackResult, OpenPacksBatchResult } from "@/app/actions/packs";
 import { fetchRevealedCards, type RevealedCard } from "@/app/actions/packs-reveal";
 import { applyToken, removeToken } from "@/app/actions/tokens";
@@ -57,6 +62,8 @@ export type AppliedTokenInfo = {
 };
 
 type SlotFill = {
+  /** UUID of the slot row — needed for toggleSlotSticky. */
+  slotId: string;
   card: LineupCardVM | null;
   appliedToken: {
     type: string;
@@ -75,6 +82,8 @@ type SlotFill = {
   locked: boolean;
   /** Polish spec §45 — today's game for this slot's starter, if any. */
   gameInfo: SlotGameInfo | null;
+  /** Polish spec §171 (Phase 46). Per-slot sticky flag for carry-over. */
+  isSticky: boolean;
 };
 
 export function LineupView(props: LineupViewProps) {
@@ -226,9 +235,17 @@ export function LineupView(props: LineupViewProps) {
   // These don't flow through the optimistic overlay — they only update
   // when a server refresh delivers new slot data.
   const slotFpByPosition = useMemo(() => {
-    const map = new Map<LineupPosition, { liveFp: number; finalFp: number }>();
+    const map = new Map<
+      LineupPosition,
+      { liveFp: number; finalFp: number; slotId: string; isSticky: boolean }
+    >();
     for (const s of props.slots) {
-      map.set(s.position, { liveFp: s.liveFp, finalFp: s.finalFp });
+      map.set(s.position, {
+        liveFp: s.liveFp,
+        finalFp: s.finalFp,
+        slotId: s.slotId,
+        isSticky: s.isSticky,
+      });
     }
     return map;
   }, [props.slots]);
@@ -288,12 +305,14 @@ export function LineupView(props: LineupViewProps) {
         card && !isBuilding ? { ...card, contestFp, contestFpLabel } : card;
 
       fills[pos] = {
+        slotId: fp?.slotId ?? "",
         card: enhancedCard,
         appliedToken,
         liveFp,
         finalFp,
         locked: slotLocked,
         gameInfo,
+        isSticky: fp?.isSticky ?? true,
       };
     }
     return fills;
@@ -850,6 +869,18 @@ export function LineupView(props: LineupViewProps) {
           onRemoveToken={handleRemoveToken}
           onOpenDetail={handleOpenDetail}
           onRemoveStarter={(position) => handleCardDropped(position, null, null)}
+          onToggleSticky={(position, next) => {
+            // Polish spec §175 (Phase 46). Per-slot sticky pin toggle.
+            // Fire-and-forget (no optimistic state — server refresh
+            // brings the new isSticky in via slot prop). Toast on
+            // failure so the user knows the click missed.
+            const slotId = slotFills[position].slotId;
+            if (!slotId) return;
+            startTransition(async () => {
+              const res = await toggleSlotSticky({ slotId, sticky: next });
+              if (!res.ok) toast.error(res.error.message);
+            });
+          }}
         />
       }
       sidebar={
