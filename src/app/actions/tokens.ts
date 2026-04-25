@@ -303,3 +303,165 @@ async function quickSellTokensImpl(input: {
 }
 
 export const quickSellTokens = wrapAction(quickSellTokensImpl, { name: "quickSellTokens" });
+
+/**
+ * Polish spec §199 (Phase 49 Wave 2). Fetch full info for a list of
+ * token ids so the pack reveal panel + TokenOverflowResolveModal
+ * can render type / bonus FP / pending-flag without an extra round-
+ * trip per token.
+ *
+ * Server-side filters on `user_id = current_user` for security; no
+ * `is_pending` filter so the same fetch returns both active rolls
+ * (rendered face-up in the reveal slot) and pending overflows
+ * (handed to the resolve modal).
+ */
+const revealTokensInputSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(50),
+});
+export type RevealedToken = {
+  id: string;
+  tokenType: string;
+  bonusFp: number;
+  acquiredSource: string;
+  isPending: boolean;
+};
+
+async function fetchRevealTokensImpl(
+  input: z.infer<typeof revealTokensInputSchema>,
+): Promise<ActionResult<RevealedToken[]>> {
+  const parsed = revealTokensInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const idsLiteral = parsed.data.ids;
+    const res = await getDb().execute<{
+      id: string;
+      token_type: string;
+      bonus_fp: string;
+      acquired_source: string;
+      is_pending: boolean;
+    }>(sql`
+      SELECT id, token_type, bonus_fp, acquired_source, is_pending
+      FROM public.token
+      WHERE user_id = ${user.id}::uuid
+        AND id = ANY(${sql`ARRAY[${sql.join(
+          idsLiteral.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )}]::uuid[]`})
+      ORDER BY acquired_at ASC
+    `);
+    return {
+      ok: true,
+      data: res.rows.map((r) => ({
+        id: r.id,
+        tokenType: r.token_type,
+        bonusFp: Number(r.bonus_fp),
+        acquiredSource: r.acquired_source,
+        isPending: r.is_pending,
+      })),
+    };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const fetchRevealTokens = wrapAction(fetchRevealTokensImpl, {
+  name: "fetchRevealTokens",
+});
+
+/**
+ * Polish spec §199 (Phase 49 Wave 2). Resolve a single pending
+ * token. Wraps `public.resolve_pending_token`. Two action codes:
+ *   - keep_replace: quicksell `replacedTokenId`, flip pending → active.
+ *   - quicksell_new: quicksell the pending one directly.
+ * Returns coins_earned + balance_after for the toast.
+ */
+const resolvePendingTokenInputSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("keep_replace"),
+    pendingTokenId: z.string().uuid(),
+    replacedTokenId: z.string().uuid(),
+  }),
+  z.object({
+    action: z.literal("quicksell_new"),
+    pendingTokenId: z.string().uuid(),
+  }),
+]);
+export type ResolvePendingTokenInput = z.infer<typeof resolvePendingTokenInputSchema>;
+export type ResolvePendingTokenResult = {
+  action: "keep_replace" | "quicksell_new";
+  coinsEarned: number;
+  balanceAfter: number;
+};
+
+async function resolvePendingTokenImpl(
+  input: ResolvePendingTokenInput,
+): Promise<ActionResult<ResolvePendingTokenResult>> {
+  const parsed = resolvePendingTokenInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const replacedId = parsed.data.action === "keep_replace" ? parsed.data.replacedTokenId : null;
+    const res = await getDb().execute<{
+      resolve_pending_token: {
+        action: "keep_replace" | "quicksell_new";
+        coins_earned: number;
+        balance_after: number | string;
+      };
+    }>(sql`
+      SELECT public.resolve_pending_token(
+        ${user.id}::uuid,
+        ${parsed.data.pendingTokenId}::uuid,
+        ${parsed.data.action}::text,
+        ${replacedId}::uuid
+      ) AS resolve_pending_token
+    `);
+    const raw = res.rows[0]?.resolve_pending_token;
+    if (!raw) {
+      return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
+    }
+    revalidatePath("/lineup", "layout");
+    revalidatePath("/collection");
+    const data: ResolvePendingTokenResult = {
+      action: raw.action,
+      coinsEarned: Number(raw.coins_earned),
+      balanceAfter: Number(raw.balance_after),
+    };
+    await captureServerEvent(user.id, "token_overflow_resolved", {
+      pending_token_id: parsed.data.pendingTokenId,
+      action: data.action,
+      coins_earned: data.coinsEarned,
+      balance_after: data.balanceAfter,
+      ...(parsed.data.action === "keep_replace" && {
+        replaced_token_id: parsed.data.replacedTokenId,
+      }),
+    });
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const resolvePendingToken = wrapAction(resolvePendingTokenImpl, {
+  name: "resolvePendingToken",
+});

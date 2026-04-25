@@ -146,9 +146,13 @@ export default async function LineupPage() {
     bonus_fp: string | number;
     applied_to_card_id: string | null;
     applied_to_contest_id: string | null;
+    is_pending: boolean;
   };
+  // §198 (Phase 49 Wave 2). is_pending tokens are limbo state — not
+  // shown in the tray, but surfaced so the lineup-view can re-open
+  // the resolve modal if a user closed mid-flow last session.
   const tokensRes = await db.execute<TokenRow>(sql`
-    SELECT id, token_type, bonus_fp, applied_to_card_id, applied_to_contest_id
+    SELECT id, token_type, bonus_fp, applied_to_card_id, applied_to_contest_id, is_pending
     FROM public.token
     WHERE user_id = ${user.id}::uuid AND consumed_at IS NULL
     ORDER BY created_at DESC
@@ -260,7 +264,11 @@ export default async function LineupPage() {
     isPitcherToken: PITCHER_TOKEN_TYPES.has(r.token_type),
     appliedToCardId: r.applied_to_card_id,
     appliedToContestId: r.applied_to_contest_id,
+    isPending: r.is_pending,
   }));
+  // §199 — surface unresolved pending IDs so lineup-view can auto-
+  // open the resolve modal if a previous session bailed mid-flow.
+  const initialPendingTokenIds = tokens.filter((t) => t.isPending).map((t) => t.id);
 
   const tokenApplications = appsRes.rows.map((r) => ({
     id: r.id,
@@ -313,6 +321,7 @@ export default async function LineupPage() {
       standardPackCost={standardPackCost}
       tokenCap={tokenCap}
       tokenSellValueByType={tokenSellValueByType}
+      initialPendingTokenIds={initialPendingTokenIds}
     />
   );
 }

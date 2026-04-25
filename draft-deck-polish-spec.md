@@ -8916,3 +8916,193 @@ which inventory they're selecting from. Vault stays
 cards-only because it doesn't apply to tokens; the dialog
 gates it behind `vaultDisabled = selectedCards.length === 0`.
 
+
+---
+
+## 198. Pack reveal token slots (Phase 49 Wave 2)
+
+### Problem
+
+Wave 1 silently suppressed token rolls when the user was at cap.
+That made packs feel emptier and gave the user no control. The
+original Phase 49 interview already specified the player-choice
+overflow path — Wave 2 implements it.
+
+Two visible features in Wave 2:
+- **Token reveal slot** at the end of the pack reveal flip
+  sequence. If a pack rolled a token, the user sees it flip
+  alongside the cards.
+- **Overflow resolve modal** (§199) appears after the reveal
+  completes when any of the rolled tokens were `is_pending=true`.
+
+### Schema change
+
+Migration `0063_token_overflow_resolve.sql` adds:
+
+```sql
+ALTER TABLE public.token
+  ADD COLUMN is_pending boolean NOT NULL DEFAULT false;
+CREATE INDEX token_pending_by_user_idx
+  ON public.token (user_id)
+  WHERE is_pending = true AND consumed_at IS NULL;
+```
+
+Pending semantics:
+- `is_pending=true, consumed_at IS NULL` → limbo. Doesn't count
+  toward cap. Can't be applied. Doesn't show in tray.
+- `is_pending=false, consumed_at IS NULL` → active inventory.
+- `is_pending=*, consumed_at IS NOT NULL` → sold/used (audit row).
+
+### `open_pack` overflow path
+
+Replaces Wave 1's silent skip. Token-roll loop now:
+
+```sql
+SELECT count(*) INTO v_token_count
+FROM public.token
+WHERE user_id = p_user_id
+  AND season_id = v_season_id
+  AND consumed_at IS NULL
+  AND is_pending = false;       -- <-- Wave 2: pending rows
+                                --     don't gate further rolls
+v_chosen_type := pick();
+IF v_token_count >= v_token_cap THEN
+  INSERT INTO public.token (..., is_pending) VALUES (..., true);
+  v_pending_token_ids := append(v_pending_token_ids, id);
+ELSE
+  INSERT INTO public.token (...) VALUES (...);
+  v_token_ids := append(v_token_ids, id);
+END IF;
+```
+
+Result jsonb gains `pending_token_ids`; the legacy
+`tokens_skipped_at_cap` field is retired.
+
+### PackTokenFlip component
+
+Sibling of `PackCardFlip`. Same 3D-Y-rotation spring at chip
+dimensions (88×88 round). Face-down: dark "?" disc.
+Face-up: `<TokenBadge>` centered. Below the badge, a small
+pill: "BONUS TOKEN" (active) or "WILL RESOLVE" (pending).
+
+### PackRevealPanel changes
+
+`PerPackPayload.tokens: RevealedToken[]` (active + pending,
+order-preserved). Panel renders a separate "Bonus tokens · N"
+sub-row beneath the cards row when the pack rolled any tokens.
+Tokens use a parallel `tokenFlipped: boolean[]` state. The
+"Reveal all" button bulk-flips both cards and tokens. The
+pack-complete gate (footer Next/Done) requires
+`allCardsFlipped && allTokensFlipped && allDupesResolved`.
+
+---
+
+## 199. Overflow resolve modal
+
+### Decision points (interview-confirmed Phase 49 Wave 2)
+
+1. **Replace picker** — show all active tokens sorted by
+   ascending `bonus_fp` (cheapest-to-replace at top). User
+   picks any to swap out.
+2. **Modal timing** — appears after **all packs** in the batch
+   finish revealing, not after each one. One modal per batch
+   handles the entire pending queue.
+
+### SQL function
+
+```sql
+CREATE FUNCTION public.resolve_pending_token(
+  p_user_id     uuid,
+  p_pending_id  uuid,
+  p_action      text,    -- 'keep_replace' | 'quicksell_new'
+  p_replaced_id uuid DEFAULT NULL
+) RETURNS jsonb
+```
+
+Two action codes:
+- `keep_replace` (requires `p_replaced_id`):
+  - Calls `quicksell_token(p_replaced_id)` — credits coins,
+    marks consumed.
+  - Flips pending row to `is_pending=false`. Net cap delta = 0.
+- `quicksell_new`:
+  - Flips pending row's `is_pending=false` (so the existing
+    quicksell_token validation accepts it), then calls
+    `quicksell_token(p_pending_id)` to credit + consume.
+
+Bubbles errors from the underlying quicksell fn (already-applied,
+not-owned, etc.) so the action layer's mapDbError handles them
+without new branches.
+
+### Server actions
+
+- `fetchRevealTokens({ ids[] })` — generic token-detail fetch
+  scoped to current user, returns `{id, tokenType, bonusFp,
+  acquiredSource, isPending}`. Used by both the reveal panel
+  (active + pending in one call) and the resolve modal
+  (pending only, after fetch filters on `isPending=true`).
+- `resolvePendingToken({ action, pendingTokenId, replacedTokenId? })`
+  — wraps the SQL fn. Captures PostHog `token_overflow_resolved`.
+
+### Modal UX
+
+`<Dialog>` (not `<AlertDialog>` — this is a multi-item
+walk-through, not a binary confirm). Header reads
+`Token cap reached · N to resolve`. Body shows:
+- **The new (pending) token** in a tier-gold-tinted card with
+  badge + label + "+N FP per trigger" copy.
+- **Replace picker**: scrollable list of active tokens sorted
+  by ascending bonus_fp. Each row shows short label, long
+  label, +N bonus, sell value. Click selects (gold highlight).
+  Cheapest is auto-selected on each new pending; user can
+  override.
+
+Footer: two buttons.
+- `Sell new (+X)` → `quicksell_new` action.
+- `Replace · next` → `keep_replace` (or `Replace & finish`
+  on the last pending). Disabled until a replace target is
+  picked.
+
+Modal advances to the next pending after each resolution.
+Closes when the queue empties or user dismisses (X corner).
+Bailing leaves pending rows in DB; `lineup-view` re-stages
+them on next mount via `props.initialPendingTokenIds` (page
+query surfaces unresolved pending IDs server-side).
+
+### Pending tokens in `LineupTokenVM`
+
+`isPending: boolean` added to the type. Page query selects
+`is_pending` and includes pending rows in `props.tokens`.
+`effectiveTokens` (the tray + selection-panel input) filters
+`!t.isPending` so pending rows never render in the tray.
+`initialPendingTokenIds` is a separate prop — array of pending
+IDs the page found at load time. lineup-view inits
+`pendingTokenQueue` from this so the modal auto-opens for any
+unresolved leftover.
+
+---
+
+## 200. End-to-end flow recap
+
+1. User opens 5 Premium packs while at cap (20/20).
+2. SQL `open_pack` rolls cards normally. For each token roll:
+   - Cap check excludes pending; user's "active" count is 20 ≥ 20.
+   - INSERT with `is_pending=true`; id appended to
+     `pending_token_ids`.
+3. Server returns `OpenPacksBatchResult` with each pack's
+   `tokenIds[]` + `pendingTokenIds[]`.
+4. lineup-view's `handleBatchOpened` fetches all token details
+   in one `fetchRevealTokens` call, partitions per pack.
+5. `PackRevealPanel` walks each pack:
+   - Card row flips (existing behavior).
+   - Token row appears below; flip slots for each rolled
+     token (active + pending). Pending shows "WILL RESOLVE".
+6. After final `Done` click, `handleRevealDone` collects
+   pending IDs across the batch into `pendingTokenQueue`.
+7. `<TokenOverflowResolveModal>` opens with the queue.
+8. User walks through each pending, picking replace target or
+   quick-sell. Each call to `resolve_pending_token` either
+   activates (replace path) or consumes (sell path) the
+   pending row.
+9. Modal closes when queue empties; `router.refresh()` brings
+   the new tray + balance into view.
+

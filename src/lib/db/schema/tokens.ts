@@ -32,6 +32,14 @@ export const token = pgTable(
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     acquiredSource: text("acquired_source").notNull(),
     acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().default(sql`now()`),
+    /**
+     * Polish spec §198 (Phase 49 Wave 2). True = granted by a pack
+     * while user was at token cap; awaits resolution via the
+     * TokenOverflowResolveModal. Pending rows don't count toward cap
+     * and can't be applied. Resolved by `resolve_pending_token` SQL fn:
+     * either flipped to false (kept) or quicksold (consumed).
+     */
+    isPending: boolean("is_pending").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
   },

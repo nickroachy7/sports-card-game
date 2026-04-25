@@ -32,6 +32,14 @@ export type OpenPackResult = {
   duplicateCount: number;
   coinsFromDupes: number;
   tokenIds: string[];
+  /**
+   * Polish spec §198 (Phase 49 Wave 2). Tokens granted while at cap.
+   * INSERTed `is_pending=true` so they don't count toward inventory
+   * yet. The reveal panel renders a token slot for these too; after
+   * reveal the TokenOverflowResolveModal opens for the user to
+   * keep+replace or quicksell each one.
+   */
+  pendingTokenIds: string[];
   coinCost: number;
   balanceAfter: number;
   packType: PackType;
@@ -113,6 +121,7 @@ async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPack
           duplicate_count: number | null;
           coins_from_dupes: number | string;
           token_ids: string[];
+          pending_token_ids?: string[] | null;
           coin_cost: number | string;
           balance_after: number | string;
         }
@@ -134,6 +143,7 @@ async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPack
       duplicateCount: raw.duplicate_count ?? 0,
       coinsFromDupes: Number(raw.coins_from_dupes),
       tokenIds: raw.token_ids ?? [],
+      pendingTokenIds: raw.pending_token_ids ?? [],
       coinCost: Number(raw.coin_cost),
       balanceAfter: Number(raw.balance_after),
       packType: parsed.data.packType,
@@ -143,6 +153,7 @@ async function openPackImpl(input: OpenPackInput): Promise<ActionResult<OpenPack
       cards_granted: data.cardIds.length,
       duplicates: data.duplicateCount,
       tokens_granted: data.tokenIds.length,
+      tokens_pending: data.pendingTokenIds.length,
       coin_cost: data.coinCost,
       coins_from_dupes: data.coinsFromDupes,
       balance_after: data.balanceAfter,
@@ -229,6 +240,7 @@ async function openPacksBatchImpl(input: {
             duplicate_count: number | null;
             coins_from_dupes: number | string;
             token_ids: string[];
+            pending_token_ids?: string[] | null;
             coin_cost: number | string;
             balance_after: number | string;
           }
@@ -248,6 +260,7 @@ async function openPacksBatchImpl(input: {
         duplicateCount: raw.duplicate_count ?? 0,
         coinsFromDupes: Number(raw.coins_from_dupes),
         tokenIds: raw.token_ids ?? [],
+        pendingTokenIds: raw.pending_token_ids ?? [],
         coinCost: Number(raw.coin_cost),
         balanceAfter: Number(raw.balance_after),
         packType,
@@ -261,6 +274,7 @@ async function openPacksBatchImpl(input: {
         cards_granted: opening.cardIds.length,
         duplicates: opening.duplicateCount,
         tokens_granted: opening.tokenIds.length,
+        tokens_pending: opening.pendingTokenIds.length,
         coin_cost: opening.coinCost,
         coins_from_dupes: opening.coinsFromDupes,
         balance_after: opening.balanceAfter,

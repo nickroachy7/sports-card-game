@@ -7,12 +7,14 @@ import { toast } from "sonner";
 import { quickSellCard } from "@/app/actions/cards";
 import type { OpenPackResult } from "@/app/actions/packs";
 import type { RevealedCard } from "@/app/actions/packs-reveal";
+import type { RevealedToken } from "@/app/actions/tokens";
 import { Button } from "@/components/ui/button";
-import type { PackType } from "@/lib/contracts/cards";
+import type { PackType, TokenType } from "@/lib/contracts/cards";
 import { cn } from "@/lib/utils";
 
 import { PackCardFlip } from "./PackCardFlip";
 import { PackDupePanel } from "./PackDupePanel";
+import { PackTokenFlip } from "./PackTokenFlip";
 import { StarPullBurst } from "./StarPullBurst";
 
 /**
@@ -39,6 +41,14 @@ export type PerPackPayload = {
   /** Dupe lookup map: existingCardId → RevealedCard. Only entries for
    *  dupes in this pack. */
   existingByCardId: Map<string, RevealedCard>;
+  /**
+   * Polish spec §198 (Phase 49 Wave 2). Tokens granted by this pack.
+   * Includes both active rolls (`isPending=false`) and overflow rolls
+   * (`isPending=true`). Each renders a flip slot at the end of the
+   * reveal row; pending ones get a "Will Resolve" tag and feed into
+   * the post-reveal TokenOverflowResolveModal.
+   */
+  tokens: RevealedToken[];
 };
 
 type DupeResolution = "pending" | "kept_new" | "kept_existing";
@@ -63,11 +73,15 @@ export function PackRevealPanel({
   const cards = pack?.cards ?? [];
   const result = pack?.result ?? null;
   const existingByCardId = pack?.existingByCardId ?? new Map<string, RevealedCard>();
+  // Polish spec §198 — tokens render a flip slot at the end of the
+  // reveal row (after card slots). Empty array if pack rolled none.
+  const tokens = pack?.tokens ?? [];
 
   const totalPacks = packs.length;
   const isFinalPack = currentPackIndex >= totalPacks - 1;
 
   const [flipped, setFlipped] = useState<boolean[]>([]);
+  const [tokenFlipped, setTokenFlipped] = useState<boolean[]>([]);
   const [resolution, setResolution] = useState<DupeResolution[]>([]);
   const [perCardAction, setPerCardAction] = useState<PerCardAction[]>([]);
   const [celebratingIdx, setCelebratingIdx] = useState<number | null>(null);
@@ -78,6 +92,7 @@ export function PackRevealPanel({
   // their pointer identity flips exactly when the active pack changes.
   useEffect(() => {
     setFlipped(Array(cards.length).fill(false));
+    setTokenFlipped(Array(tokens.length).fill(false));
     setResolution(
       cards.map((_, i) => {
         const dupe = result?.cardResults?.[i]?.isDupe;
@@ -86,14 +101,16 @@ export function PackRevealPanel({
     );
     setPerCardAction(Array(cards.length).fill(null));
     setCelebratingIdx(null);
-  }, [cards, result]);
+  }, [cards, result, tokens.length]);
 
   const flippedCount = flipped.filter(Boolean).length;
   const cardsRemaining = cards.length - flippedCount;
-  const allFlipped = flippedCount === cards.length && cards.length > 0;
+  const allCardsFlipped = flippedCount === cards.length && cards.length > 0;
+  const allTokensFlipped = tokenFlipped.every(Boolean) || tokens.length === 0;
+  const allFlipped = allCardsFlipped && allTokensFlipped;
   const allResolved = resolution.every((r) => r !== "pending");
   const packComplete = allFlipped && allResolved;
-  const hasFaceDown = cards.length > 0 && !allFlipped;
+  const hasFaceDown = (cards.length > 0 && !allCardsFlipped) || !allTokensFlipped;
 
   function handleFlip(idx: number) {
     // Any face-down card is a valid click target (§156).
@@ -101,12 +118,19 @@ export function PackRevealPanel({
     setFlipped((f) => f.map((v, i) => (i === idx ? true : v)));
   }
 
+  // §198 — token slots are independent of cards but use the same
+  // bulk-flip path on Reveal All.
+  function handleTokenFlip(idx: number) {
+    if (tokenFlipped[idx]) return;
+    setTokenFlipped((f) => f.map((v, i) => (i === idx ? true : v)));
+  }
+
   function handleRevealAll() {
-    // Bulk-flip every remaining face-down card. Each PackCardFlip
-    // sees faceUp=true on its next render and runs its own flip
-    // animation; onFlipComplete fires per-card so celebrations /
-    // dupe flags still resolve independently.
+    // Bulk-flip every remaining face-down card AND token slot. Each
+    // child sees faceUp=true on its next render and runs its own
+    // animation independently.
     setFlipped(Array(cards.length).fill(true));
+    setTokenFlipped(Array(tokens.length).fill(true));
   }
 
   function handleFlipComplete(idx: number) {
@@ -187,13 +211,27 @@ export function PackRevealPanel({
 
   const subtitle = useMemo(() => {
     if (!pack) return "";
-    if (!allFlipped) {
+    if (!allCardsFlipped) {
       return `Tap any card to reveal · ${cardsRemaining} of ${cards.length} left`;
+    }
+    if (!allTokensFlipped) {
+      const remaining = tokens.length - tokenFlipped.filter(Boolean).length;
+      return `Tap to reveal bonus token${remaining === 1 ? "" : "s"}`;
     }
     if (!allResolved) return "Resolve the dupe to continue";
     if (isFinalPack) return "All packs opened — back to lineup?";
     return "Pack complete · next up?";
-  }, [pack, allFlipped, allResolved, isFinalPack, cards.length, cardsRemaining]);
+  }, [
+    pack,
+    allCardsFlipped,
+    allTokensFlipped,
+    allResolved,
+    isFinalPack,
+    cards.length,
+    cardsRemaining,
+    tokens.length,
+    tokenFlipped,
+  ]);
 
   if (!pack) {
     return (
@@ -213,7 +251,7 @@ export function PackRevealPanel({
         subtitle={subtitle}
       />
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center">
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-6">
         {cards.length === 0 ? (
           <p className="text-sm text-[var(--text-3)]">No cards in this pack.</p>
         ) : (
@@ -268,6 +306,31 @@ export function PackRevealPanel({
                 />
               );
             })}
+          </div>
+        )}
+
+        {/* Polish spec §198 (Phase 49 Wave 2). Token slots row.
+            Renders only when this pack rolled at least one token
+            (active or pending). Same flip pattern as cards, but
+            chip-sized. Pending tokens show a "Will Resolve" tag
+            and feed into TokenOverflowResolveModal post-reveal. */}
+        {tokens.length > 0 && (
+          <div className="flex flex-col items-center gap-2 border-[var(--border)] border-t pt-4">
+            <span className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-wider">
+              Bonus tokens · {tokens.length}
+            </span>
+            <div className="flex flex-wrap items-start justify-center gap-x-4 gap-y-3">
+              {tokens.map((tk, i) => (
+                <PackTokenFlip
+                  key={tk.id}
+                  tokenType={tk.tokenType as TokenType}
+                  bonusFp={tk.bonusFp}
+                  isPending={tk.isPending}
+                  faceUp={tokenFlipped[i] ?? false}
+                  onFlip={() => handleTokenFlip(i)}
+                />
+              ))}
+            </div>
           </div>
         )}
       </div>

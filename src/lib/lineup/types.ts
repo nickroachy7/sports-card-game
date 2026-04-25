@@ -74,6 +74,13 @@ export type LineupTokenVM = {
   isPitcherToken: boolean;
   appliedToCardId: string | null;
   appliedToContestId: string | null;
+  /**
+   * Polish spec §198 (Phase 49 Wave 2). True = granted while user
+   * was at cap; awaiting resolution via TokenOverflowResolveModal.
+   * Pending rows stay out of the tray + selection panel; lineup-view
+   * stages them into the modal queue on mount.
+   */
+  isPending: boolean;
 };
 
 export type LineupSlotVM = {
@@ -165,4 +172,12 @@ export type LineupViewProps = {
    * `economy_config.token_quicksell_values` server-side.
    */
   tokenSellValueByType: Record<string, number>;
+  /**
+   * Polish spec §199 (Phase 49 Wave 2). Token IDs in the limbo
+   * `is_pending=true` state that haven't been resolved yet (e.g.
+   * user bailed out of the modal in a prior session). Surfaced
+   * separately so lineup-view can auto-open the resolve modal on
+   * mount instead of waiting for the next pack open.
+   */
+  initialPendingTokenIds: string[];
 };

@@ -15,7 +15,13 @@ import {
 } from "@/app/actions/lineup";
 import type { OpenPackResult, OpenPacksBatchResult } from "@/app/actions/packs";
 import { fetchRevealedCards, type RevealedCard } from "@/app/actions/packs-reveal";
-import { applyToken, quickSellTokens, removeToken } from "@/app/actions/tokens";
+import {
+  applyToken,
+  fetchRevealTokens,
+  quickSellTokens,
+  type RevealedToken,
+  removeToken,
+} from "@/app/actions/tokens";
 import { vaultCardsMidseason } from "@/app/actions/vault";
 import { CardDetailPanel } from "@/components/card/CardDetailPanel";
 import { CardDragLayer } from "@/components/card/CardDragLayer";
@@ -32,6 +38,7 @@ import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag"
 import { PackRevealPanel, type PerPackPayload } from "@/components/pack/PackRevealPanel";
 import { TokenDetailPanel } from "@/components/token/TokenDetailPanel";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
+import { TokenOverflowResolveModal } from "@/components/token/TokenOverflowResolveModal";
 import { Button } from "@/components/ui/button";
 import type { PackType, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
@@ -207,14 +214,20 @@ export function LineupView(props: LineupViewProps) {
     const cardByTokenId = new Map<string, string>();
     for (const a of optimisticApps) cardByTokenId.set(a.tokenId, a.cardId);
     const serverAppliedInContest = new Set(props.tokenApplications.map((a) => a.tokenId));
-    return props.tokens.map((t) => {
-      const inOptimistic = cardByTokenId.has(t.id);
-      const inServerContest = serverAppliedInContest.has(t.id);
-      if (!inOptimistic && !inServerContest) return t;
-      const effectiveCard = cardByTokenId.get(t.id) ?? null;
-      if (effectiveCard === t.appliedToCardId) return t;
-      return { ...t, appliedToCardId: effectiveCard };
-    });
+    // §198 (Phase 49 Wave 2). Pending tokens stay in props.tokens
+    // (the page query keeps them visible to lineup-view for the
+    // initial-pending modal hand-off) but are filtered out of the
+    // tray + selection panel here.
+    return props.tokens
+      .filter((t) => !t.isPending)
+      .map((t) => {
+        const inOptimistic = cardByTokenId.has(t.id);
+        const inServerContest = serverAppliedInContest.has(t.id);
+        if (!inOptimistic && !inServerContest) return t;
+        const effectiveCard = cardByTokenId.get(t.id) ?? null;
+        if (effectiveCard === t.appliedToCardId) return t;
+        return { ...t, appliedToCardId: effectiveCard };
+      });
   }, [props.tokens, optimisticApps, props.tokenApplications]);
 
   // Optimistic slot overlay. A pending bench→slot drop immediately
@@ -805,6 +818,8 @@ export function LineupView(props: LineupViewProps) {
   // between each. Single fetchRevealedCards call still pulls all IDs
   // (new + existing dupes) at once; we split the result by pack
   // afterwards so each pack carries only its own cards + dupe map.
+  // §198 (Phase 49 Wave 2). Same single-fetch pattern for tokens —
+  // pull active + pending in one call, partition per pack.
   const handleBatchOpened = useCallback(async (batch: OpenPacksBatchResult, packType: PackType) => {
     if (batch.openings.length === 0) return;
     const allNewIds = batch.openings.flatMap((op) => op.cardIds);
@@ -817,6 +832,19 @@ export function LineupView(props: LineupViewProps) {
     const byId = new Map<string, RevealedCard>();
     for (const c of all) byId.set(c.id, c);
 
+    // Token fetch (active + pending). All ids unique; one call pulls
+    // them all. Empty batch tokens → skip the fetch.
+    const allTokenIds = Array.from(
+      new Set(batch.openings.flatMap((op) => [...op.tokenIds, ...op.pendingTokenIds])),
+    );
+    const tokenById = new Map<string, RevealedToken>();
+    if (allTokenIds.length > 0) {
+      const tokenRes = await fetchRevealTokens({ ids: allTokenIds });
+      if (tokenRes.ok) {
+        for (const t of tokenRes.data) tokenById.set(t.id, t);
+      }
+    }
+
     const packs: PerPackPayload[] = batch.openings.map((op) => {
       const packCards = op.cardIds.map((id) => byId.get(id)).filter((c): c is RevealedCard => !!c);
       const packExisting = new Map<string, RevealedCard>();
@@ -826,11 +854,15 @@ export function LineupView(props: LineupViewProps) {
           if (existing) packExisting.set(cr.existingCardId, existing);
         }
       }
+      const packTokens = [...op.tokenIds, ...op.pendingTokenIds]
+        .map((id) => tokenById.get(id))
+        .filter((t): t is RevealedToken => !!t);
       const perPackResult: OpenPackResult = {
         openingId: op.openingId,
         cardIds: op.cardIds,
         cardResults: op.cardResults,
         tokenIds: op.tokenIds,
+        pendingTokenIds: op.pendingTokenIds,
         duplicateCount: op.duplicateCount,
         coinsFromDupes: op.coinsFromDupes,
         coinCost: op.coinCost,
@@ -841,6 +873,7 @@ export function LineupView(props: LineupViewProps) {
         result: perPackResult,
         cards: packCards,
         existingByCardId: packExisting,
+        tokens: packTokens,
       };
     });
 
@@ -855,8 +888,37 @@ export function LineupView(props: LineupViewProps) {
     );
   }, []);
 
+  // §199 (Phase 49 Wave 2). After the reveal sequence finishes, if
+  // the batch produced any pending tokens, stage them for the
+  // overflow resolve modal. Modal state is a separate piece of UI
+  // state from revealState — modal opens after revealState clears.
+  // Initialized from `props.initialPendingTokenIds` so a user who
+  // bailed out of the modal in a prior session sees it on next load.
+  const [pendingTokenQueue, setPendingTokenQueue] = useState<string[]>(
+    props.initialPendingTokenIds,
+  );
+
   const handleRevealDone = useCallback(() => {
+    const allPending = revealState
+      ? revealState.packs.flatMap((p) => p.result.pendingTokenIds)
+      : [];
     setRevealState(null);
+    if (allPending.length > 0) {
+      setPendingTokenQueue(allPending);
+    } else {
+      router.refresh();
+    }
+  }, [revealState, router]);
+
+  const handleOverflowResolved = useCallback(() => {
+    // Per-resolve refresh keeps the lineup-view tokens prop fresh
+    // so the modal's replace picker reflects current inventory
+    // after each resolution.
+    router.refresh();
+  }, [router]);
+
+  const handleOverflowClose = useCallback(() => {
+    setPendingTokenQueue([]);
     router.refresh();
   }, [router]);
 
@@ -1106,6 +1168,17 @@ export function LineupView(props: LineupViewProps) {
       </LiveEventsProvider>
       {/* Phase 43: PackOpenerModal deleted. Reveal happens in-place
           in the shell's main content area; see mainOverride above. */}
+      {/* §199 (Phase 49 Wave 2). Overflow resolve modal. Mounts when
+          a batch reveal completes with pending tokens still
+          unresolved. Closing without resolving keeps them in DB —
+          modal re-opens on next pack open. */}
+      <TokenOverflowResolveModal
+        pendingIds={pendingTokenQueue}
+        activeTokens={props.tokens}
+        sellValueByType={props.tokenSellValueByType}
+        onResolved={handleOverflowResolved}
+        onClose={handleOverflowClose}
+      />
     </DndProvider>
   );
 }
