@@ -869,18 +869,6 @@ export function LineupView(props: LineupViewProps) {
           onRemoveToken={handleRemoveToken}
           onOpenDetail={handleOpenDetail}
           onRemoveStarter={(position) => handleCardDropped(position, null, null)}
-          onToggleSticky={(position, next) => {
-            // Polish spec §175 (Phase 46). Per-slot sticky pin toggle.
-            // Fire-and-forget (no optimistic state — server refresh
-            // brings the new isSticky in via slot prop). Toast on
-            // failure so the user knows the click missed.
-            const slotId = slotFills[position].slotId;
-            if (!slotId) return;
-            startTransition(async () => {
-              const res = await toggleSlotSticky({ slotId, sticky: next });
-              if (!res.ok) toast.error(res.error.message);
-            });
-          }}
         />
       }
       sidebar={
@@ -917,6 +905,18 @@ export function LineupView(props: LineupViewProps) {
             contestGameIds={props.contestGameIds}
             autoSubMode={mode}
             onAutoSubModeChange={handleModeChange}
+            onToggleSticky={(position, next) => {
+              // Polish spec §175 (Phase 46) v2. Per-slot sticky pin
+              // toggle lives in the sidebar's RosterRow. Fire-and-
+              // forget; server refresh brings the new isSticky in via
+              // slot prop. Toast on failure.
+              const slotId = slotFills[position].slotId;
+              if (!slotId) return;
+              startTransition(async () => {
+                const res = await toggleSlotSticky({ slotId, sticky: next });
+                if (!res.ok) toast.error(res.error.message);
+              });
+            }}
             coinBalance={props.coinBalance}
             dailyPackReady={props.dailyPackReady}
             dailyPackSecondsUntilReady={props.dailyPackSecondsUntilReady}

@@ -1,5 +1,7 @@
 "use client";
 
+import { Pin, PinOff } from "lucide-react";
+
 import type { OpenPacksBatchResult } from "@/app/actions/packs";
 import { EventFeed } from "@/components/lineup/EventFeed";
 import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
@@ -27,6 +29,8 @@ type SlotFill = {
   finalFp: number;
   locked?: boolean;
   gameInfo?: SlotGameInfo | null;
+  /** Polish spec §171 (Phase 46). Drives the per-row sticky pin. */
+  isSticky: boolean;
 };
 
 /**
@@ -64,6 +68,9 @@ type Props = {
   slotFills: Record<LineupPosition, SlotFill>;
   autoSubMode: AutoSubMode;
   onAutoSubModeChange: (mode: AutoSubMode) => void;
+  /** Polish spec §175 (Phase 46) — per-slot sticky toggle moved to
+   *  the sidebar's roster rows. Fires `toggleSlotSticky` action. */
+  onToggleSticky: (position: LineupPosition, next: boolean) => void;
   // Packs tab inputs (§143). Moved up from the deleted FAB + modal.
   coinBalance: number;
   dailyPackReady: boolean;
@@ -77,7 +84,7 @@ export function AppSidebar(props: Props) {
   return (
     <div className="flex h-full flex-col gap-3">
       <SlateLine slateDate={props.slateDate} gamesInSlate={gamesInSlate} />
-      <RosterSection slotFills={props.slotFills} />
+      <RosterSection slotFills={props.slotFills} onToggleSticky={props.onToggleSticky} />
       <SidebarHeadline
         slotFills={props.slotFills}
         entryStatus={props.entryStatus}
@@ -277,7 +284,13 @@ function Headline({
  * height. Structurally unchanged: 10 rows, per-row FP cell, warning
  * pill, token glyph, slot-game chip.
  */
-function RosterSection({ slotFills }: { slotFills: Record<LineupPosition, SlotFill> }) {
+function RosterSection({
+  slotFills,
+  onToggleSticky,
+}: {
+  slotFills: Record<LineupPosition, SlotFill>;
+  onToggleSticky: (position: LineupPosition, next: boolean) => void;
+}) {
   return (
     <section className="flex flex-col">
       <ol
@@ -285,16 +298,32 @@ function RosterSection({ slotFills }: { slotFills: Record<LineupPosition, SlotFi
         className="flex min-h-0 flex-col divide-y divide-[var(--border)]/50 overflow-y-auto"
       >
         {LINEUP_POSITIONS.map((pos) => (
-          <RosterRow key={pos} position={pos} fill={slotFills[pos]} />
+          <RosterRow
+            key={pos}
+            position={pos}
+            fill={slotFills[pos]}
+            onToggleSticky={(next) => onToggleSticky(pos, next)}
+          />
         ))}
       </ol>
     </section>
   );
 }
 
-function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFill }) {
+function RosterRow({
+  position,
+  fill,
+  onToggleSticky,
+}: {
+  position: LineupPosition;
+  fill: SlotFill;
+  onToggleSticky: (next: boolean) => void;
+}) {
   const card = fill.card;
   if (!card) {
+    // Empty slot — pin doesn't apply (nothing to carry forward). Keep
+    // the row simple so the column doesn't shift between filled and
+    // empty rows visually.
     return (
       <li className="grid grid-cols-[2rem_1fr] items-baseline gap-1 py-0.5 text-[11px]">
         <span className="font-mono text-[var(--text-3)]">{position}</span>
@@ -307,7 +336,7 @@ function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFil
   const warning = playerWarning(card);
   const fpCell = pickFpCell(fill);
   return (
-    <li className="grid grid-cols-[2rem_1fr_auto_3rem] items-baseline gap-1 py-0.5 text-[11px]">
+    <li className="grid grid-cols-[2rem_1fr_auto_3rem_1.25rem] items-center gap-1 py-0.5 text-[11px]">
       <span className="font-mono text-[var(--text-3)]">{position}</span>
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate text-[var(--text-2)]">{shortName(card.playerName)}</span>
@@ -332,7 +361,63 @@ function RosterRow({ position, fill }: { position: LineupPosition; fill: SlotFil
         {fpCell.text}
         <TriggeredGlyph triggered={fill.appliedToken?.triggered} />
       </span>
+      {/* §175 Phase 46 (sidebar relocation). Per-row sticky pin. Tiny
+          gold pin = sticky (carries to tomorrow). Muted pin-off =
+          one-shot (drops after today). Disabled when slot is locked
+          (game started). */}
+      <StickyPinButton
+        sticky={fill.isSticky}
+        disabled={fill.locked === true}
+        playerName={card.playerName}
+        onToggle={onToggleSticky}
+      />
     </li>
+  );
+}
+
+function StickyPinButton({
+  sticky,
+  disabled,
+  playerName,
+  onToggle,
+}: {
+  sticky: boolean;
+  disabled: boolean;
+  playerName: string;
+  onToggle: (next: boolean) => void;
+}) {
+  const tooltip = disabled
+    ? "Slot is locked — pin can't be changed once the game has started."
+    : sticky
+      ? `Sticky — ${playerName} carries to tomorrow's lineup. Click for one-shot.`
+      : `One-shot — ${playerName} drops after today's game. Click to make sticky.`;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (disabled) return;
+        onToggle(!sticky);
+      }}
+      disabled={disabled}
+      aria-pressed={sticky}
+      aria-label={tooltip}
+      title={tooltip}
+      className={cn(
+        "flex size-4 items-center justify-center rounded transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--text-2)]",
+        disabled && "opacity-30",
+        !disabled && sticky && "text-[var(--tier-gold)] hover:text-[var(--tier-gold)]/80",
+        !disabled && !sticky && "text-[var(--text-3)] hover:text-[var(--text-2)]",
+      )}
+    >
+      {sticky ? (
+        <Pin className="size-3" aria-hidden="true" />
+      ) : (
+        <PinOff className="size-3" aria-hidden="true" />
+      )}
+    </button>
   );
 }
 
