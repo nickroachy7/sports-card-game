@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { jsonb, numeric, pgTable, timestamp, uuid } from "drizzle-orm/pg-core";
+import { integer, jsonb, numeric, pgTable, timestamp, uuid } from "drizzle-orm/pg-core";
 
 /**
  * DB schema spec §12.1 — tunable economy values.
@@ -28,6 +28,14 @@ export const economyConfig = pgTable("economy_config", {
   packValueWeights: jsonb("pack_value_weights").notNull(),
   tokenBonusFp: jsonb("token_bonus_fp").notNull(),
   tokenDropRates: jsonb("token_drop_rates").notNull(),
+  // Polish spec §195 (Phase 49). Hard ceiling on unconsumed tokens
+  // per (user, season). open_pack silently skips token rolls when
+  // user is at or above this cap.
+  tokenCap: integer("token_cap").notNull().default(20),
+  // Polish spec §197 (Phase 49). Quick-sell coin payout per
+  // token_type. quicksell_token() reads from this map keyed by
+  // the token's type string.
+  tokenQuicksellValues: jsonb("token_quicksell_values").notNull(),
   loginStreakRewards: jsonb("login_streak_rewards").notNull(),
   milestoneTiers: jsonb("milestone_tiers").notNull(),
   milestoneRewards: jsonb("milestone_rewards").notNull(),

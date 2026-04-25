@@ -2,6 +2,7 @@
 
 import { sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 
 import {
   type ApplyTokenInput,
@@ -16,6 +17,17 @@ import { captureServerEvent, wrapAction } from "@/lib/observability/action";
 type ActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
+
+/** Polish spec §197 (Phase 49). Quick-sell a single token from inventory. */
+const quickSellTokenInputSchema = z.object({
+  tokenId: z.string().uuid(),
+});
+export type QuickSellTokenInput = z.infer<typeof quickSellTokenInputSchema>;
+export type QuickSellTokenResult = {
+  coinsEarned: number;
+  balanceAfter: number;
+  tokenType: string;
+};
 
 /**
  * Drizzle's execute wraps the underlying `pg.DatabaseError` — the PG
@@ -40,6 +52,15 @@ function mapDbError(err: unknown): { code: string; message: string } {
 
   if (code === "P0002" || combined.includes("application not found")) {
     return { code: "NOT_FOUND", message: "Token already removed." };
+  }
+  if (combined.includes("token already consumed")) {
+    return { code: "TOKEN_ALREADY_RESOLVED", message: "Token has already been used." };
+  }
+  if (combined.includes("currently applied to a card")) {
+    return {
+      code: "TOKEN_APPLIED",
+      message: "Remove the token from its card before quick-selling.",
+    };
   }
   if (combined.includes("SLOT_LOCKED")) {
     return {
@@ -153,3 +174,56 @@ async function removeTokenImpl(input: RemoveTokenInput): Promise<ActionResult<un
 }
 
 export const removeToken = wrapAction(removeTokenImpl, { name: "removeToken" });
+
+/**
+ * Polish spec §197 (Phase 49). Wraps `public.quicksell_token(uuid,uuid)`.
+ * Mirrors `quickSellCard` shape — refund coins + revalidate the
+ * surfaces that show inventory + balance.
+ */
+async function quickSellTokenImpl(
+  input: QuickSellTokenInput,
+): Promise<ActionResult<QuickSellTokenResult>> {
+  const parsed = quickSellTokenInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+    };
+  }
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: { code: "UNAUTHENTICATED", message: "Sign in first." } };
+
+  try {
+    const res = await getDb().execute<{
+      quicksell_token: { coins_earned: number; balance_after: number | string; token_type: string };
+    }>(sql`
+      SELECT public.quicksell_token(${user.id}::uuid, ${parsed.data.tokenId}::uuid)
+        AS quicksell_token
+    `);
+    const raw = res.rows[0]?.quicksell_token;
+    if (!raw) {
+      return { ok: false, error: { code: "INTERNAL", message: "Empty result." } };
+    }
+    revalidatePath("/lineup", "layout");
+    revalidatePath("/collection");
+    const data: QuickSellTokenResult = {
+      coinsEarned: Number(raw.coins_earned),
+      balanceAfter: Number(raw.balance_after),
+      tokenType: raw.token_type,
+    };
+    await captureServerEvent(user.id, "token_quick_sold", {
+      token_id: parsed.data.tokenId,
+      token_type: data.tokenType,
+      coins_earned: data.coinsEarned,
+      balance_after: data.balanceAfter,
+    });
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, error: mapDbError(err) };
+  }
+}
+
+export const quickSellToken = wrapAction(quickSellTokenImpl, { name: "quickSellToken" });

@@ -243,8 +243,15 @@ export default async function LineupPage() {
       : 0;
   const econCfg = (econCfgRes.data ?? null) as {
     pack_prices_coins?: Record<PackType, number>;
+    // Polish spec §195/§197 (Phase 49). Token cap + per-type
+    // quicksell values surfaced to the tray + detail panel so they
+    // don't need their own round-trip.
+    token_cap?: number;
+    token_quicksell_values?: Record<string, number>;
   } | null;
   const standardPackCost = Number(econCfg?.pack_prices_coins?.standard ?? 0);
+  const tokenCap = Number(econCfg?.token_cap ?? 20);
+  const tokenSellValueByType: Record<string, number> = econCfg?.token_quicksell_values ?? {};
 
   const tokens: LineupTokenVM[] = tokensRes.rows.map((r) => ({
     id: r.id,
@@ -304,6 +311,8 @@ export default async function LineupPage() {
       dailyPackReady={dailyPackReady}
       dailyPackSecondsUntilReady={dailyPackSecondsUntilReady}
       standardPackCost={standardPackCost}
+      tokenCap={tokenCap}
+      tokenSellValueByType={tokenSellValueByType}
     />
   );
 }

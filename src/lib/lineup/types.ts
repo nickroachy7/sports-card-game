@@ -152,4 +152,17 @@ export type LineupViewProps = {
   dailyPackSecondsUntilReady: number;
   /** Coin cost of one standard pack. From economy_config. */
   standardPackCost: number;
+  /**
+   * Polish spec §195 (Phase 49). Hard ceiling on unconsumed tokens.
+   * Surfaced to the tray so it can render `X / cap available`. Pulled
+   * from `economy_config.token_cap` server-side.
+   */
+  tokenCap: number;
+  /**
+   * Polish spec §197 (Phase 49). Quick-sell coin payout per token type.
+   * Surfaced to the token detail panel so the button can render the
+   * exact payout without an extra round-trip. Pulled from
+   * `economy_config.token_quicksell_values` server-side.
+   */
+  tokenSellValueByType: Record<string, number>;
 };

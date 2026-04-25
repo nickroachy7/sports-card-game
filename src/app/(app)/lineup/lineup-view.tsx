@@ -30,6 +30,7 @@ import { SelectionPanel } from "@/components/lineup/SelectionPanel";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
 import { PackRevealPanel, type PerPackPayload } from "@/components/pack/PackRevealPanel";
+import { TokenDetailPanel } from "@/components/token/TokenDetailPanel";
 import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import { Button } from "@/components/ui/button";
 import type { PackType, TokenType } from "@/lib/contracts/cards";
@@ -107,6 +108,10 @@ export function LineupView(props: LineupViewProps) {
   // between the default <AppSidebar> and <CardDetailPanel> based on
   // it. Back/forward + shareable links survive either way.
   const detailCardId = searchParams.get("card");
+  // Polish spec §195 (Phase 49). Same swap pattern for tokens —
+  // `?token={id}` opens TokenDetailPanel with quick-sell + bonus info.
+  // Mutually exclusive with `?card`; clicking one swaps to the other.
+  const detailTokenId = searchParams.get("token");
 
   // Polish spec §44 — per-slot lock semantics. Bench + tokens remain
   // draggable in submitted/live states (so the user can edit un-started
@@ -598,10 +603,31 @@ export function LineupView(props: LineupViewProps) {
     (cardId: string) => {
       const next = new URLSearchParams(searchParams.toString());
       next.set("card", cardId);
+      // §195 — token + card detail are mutually exclusive.
+      next.delete("token");
       router.push(`/lineup?${next.toString()}`, { scroll: false });
     },
     [router, searchParams],
   );
+
+  // Polish spec §195 (Phase 49). Token click → push ?token=id.
+  // Mirrors handleOpenDetail; the sidebar swaps to <TokenDetailPanel>.
+  const handleOpenTokenDetail = useCallback(
+    (tokenId: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("token", tokenId);
+      next.delete("card");
+      router.push(`/lineup?${next.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const handleCloseTokenDetail = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("token");
+    const q = next.toString();
+    router.replace(q ? `/lineup?${q}` : "/lineup", { scroll: false });
+  }, [router, searchParams]);
 
   // Polish spec §104 (Phase 35). Multi-select handlers. Entering
   // select mode clears the card detail param so the sidebar swap
@@ -874,8 +900,9 @@ export function LineupView(props: LineupViewProps) {
       sidebar={
         // Polish spec §104 (Phase 35). Sidebar swap priority:
         //   1. selectMode → <SelectionPanel>
-        //   2. ?card=id   → <DetailSidebar>
-        //   3. default    → <AppSidebar>
+        //   2. ?token=id  → <TokenDetailPanel>  (§195 Phase 49)
+        //   3. ?card=id   → <DetailSidebar>
+        //   4. default    → <AppSidebar>
         selectMode ? (
           <SelectionPanel
             selectedCards={selectedCards}
@@ -887,6 +914,29 @@ export function LineupView(props: LineupViewProps) {
             onAddToVault={handleBulkVault}
             onClear={handleClearSelection}
           />
+        ) : detailTokenId && tokensById.get(detailTokenId) ? (
+          (() => {
+            const tk = tokensById.get(detailTokenId);
+            if (!tk) return null;
+            const sellValue = props.tokenSellValueByType[tk.tokenType] ?? 0;
+            const isApplied = tk.appliedToCardId !== null;
+            const disableQuickSell = locked || isApplied;
+            const disableReason = isApplied
+              ? "Remove this token from its card before quick-selling."
+              : locked
+                ? "Contest is locked — quick-sell unavailable."
+                : null;
+            return (
+              <TokenDetailPanel
+                token={tk}
+                sellValue={sellValue}
+                disableQuickSell={disableQuickSell}
+                disableReason={disableReason}
+                onSold={() => router.refresh()}
+                onClose={handleCloseTokenDetail}
+              />
+            );
+          })()
         ) : detailCardId ? (
           <DetailSidebar
             cardId={detailCardId}
@@ -930,7 +980,15 @@ export function LineupView(props: LineupViewProps) {
           />
         )
       }
-      tokens={<TokenTray tokens={effectiveTokens} locked={locked} />}
+      tokens={
+        <TokenTray
+          tokens={effectiveTokens}
+          locked={locked}
+          tokenCap={props.tokenCap}
+          onOpenDetail={handleOpenTokenDetail}
+          activeTokenId={detailTokenId}
+        />
+      }
       cards={
         <CardsPanel
           cards={props.cards}

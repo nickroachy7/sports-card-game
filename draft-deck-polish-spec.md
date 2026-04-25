@@ -8692,3 +8692,159 @@ the column).
 - **PostHog events for trust violations.** `webhook_failed`
   is sufficient for now; product analytics can pull from
   there if needed.
+
+---
+
+## 195. Token inventory cap (Phase 49 Wave 1)
+
+### Problem
+
+User feedback after a week of play:
+> "The user is getting way too many tokens and I think we need
+> to limit the amount they can [have]."
+
+The screenshot showed "TOKENS · 60 available" with a long
+horizontal-scroll row. The token economy had no inventory
+ceiling — every Premium pack rolled at a 60% per-card chance,
+so a session of 5–8 Premium packs grew the tray to dozens.
+
+User wants:
+- A cap so the tray fits cleanly on one row.
+- Click-a-token → sidebar detail (mirroring the card detail
+  pattern).
+- Quick-sell from the detail panel for coin recovery.
+- Pack-reveal slot for tokens (Wave 2 — separate spec).
+- Player choice when a pack would push you over cap (Wave 2).
+
+### Decision (Wave 1 scope)
+
+Hard ceiling at **20 unconsumed tokens** per `(user, season)`.
+Surfaced as `economy_config.token_cap` so we can tune
+without a new migration. When the user is at-or-above cap,
+`open_pack` silently skips token rolls (the per-card
+`random() < drop_rate` test still fires for metric
+consistency, but the INSERT is suppressed and counted in
+`tokens_skipped_at_cap` on the result payload).
+
+Wave 2 will replace the silent skip with a player-choice
+overflow flow + a token slot in the pack reveal animation
+(see §198–§200 once shipped).
+
+### Schema additions
+
+```sql
+ALTER TABLE public.economy_config
+  ADD COLUMN token_cap integer NOT NULL DEFAULT 20,
+  ADD COLUMN token_quicksell_values jsonb NOT NULL DEFAULT '{
+    "hr_bonus":            25,
+    "multi_hit_bonus":     15,
+    "sb_bonus":            20,
+    "strikeout_bonus":     25,
+    "quality_start_bonus": 30
+  }'::jsonb;
+```
+
+### Tray cap indicator
+
+`TokenTray` header reads `X / 20 available` (tone-shifts at
+≥90% — text-2 → text → tier-gold for at-cap). A second clause
+`· at cap, packs won't add more` appears at exactly the cap.
+Single-row constraint is naturally satisfied at width × 20
+chips on the design width; users at cap see no horizontal
+scroll.
+
+---
+
+## 196. Cap enforcement in `open_pack`
+
+The token-roll loop now recounts inside the loop in case
+earlier iterations of the same pack granted tokens that
+push the user to cap mid-pack:
+
+```sql
+FOR i IN 1..v_pack_size LOOP
+  IF random() < v_token_rate THEN
+    SELECT count(*) INTO v_token_count
+    FROM public.token
+    WHERE user_id = p_user_id
+      AND season_id = v_season_id
+      AND consumed_at IS NULL;
+    IF v_token_count >= v_token_cap THEN
+      v_tokens_skipped := v_tokens_skipped + 1;
+    ELSE
+      -- (insert as before)
+    END IF;
+  END IF;
+END LOOP;
+```
+
+`v_tokens_skipped` lands in the result JSON as
+`tokens_skipped_at_cap`. The pack-open UI uses this to toast
+"X token rolls suppressed: tokens at cap" so users
+understand why their Premium pack didn't grant a token.
+
+The base body for `open_pack` is 0052 (tier-weighted draws)
++ 0055 (mlbam dedupe). Only the token-roll block changes;
+everything else stays byte-identical.
+
+---
+
+## 197. Token quick-sell + sidebar detail
+
+### SQL function
+
+`public.quicksell_token(p_user_id, p_token_id) → jsonb`.
+Mirrors `quick_sell_card` semantics. Validates ownership,
+`consumed_at IS NULL`, `applied_to_card_id IS NULL`. Refunds
+coins via `credit_coins`, marks `consumed_at = now()`,
+appends `:quicksold` to `acquired_source` for telemetry.
+
+Returns `{coins_earned, balance_after, token_type}`.
+
+### Server action
+
+`quickSellToken({tokenId})` in `src/app/actions/tokens.ts`.
+Wraps the SQL fn, revalidates `/lineup` (layout) and
+`/collection`, fires PostHog `token_quick_sold`. Maps PG
+errors to typed action codes:
+- `token already consumed` → `TOKEN_ALREADY_RESOLVED`
+- `currently applied to a card` → `TOKEN_APPLIED`
+- `not found / not owned` → `NOT_FOUND`
+
+### Sidebar swap
+
+`?token={id}` URL param mirrors `?card={id}` — the sidebar
+swap priority is now:
+
+1. `selectMode` → `<SelectionPanel>`
+2. `?token=id`  → `<TokenDetailPanel>` *(new)*
+3. `?card=id`   → `<DetailSidebar>`
+4. default      → `<AppSidebar>`
+
+The two detail params are mutually exclusive (clicking one
+strips the other). Back/forward + shareable links survive.
+
+### TokenDetailPanel layout
+
+Mirrors `CardDetailPanel`:
+- ArrowLeft "Back" header (closes detail).
+- Identity block: TokenBadge + long label + bonus chip +
+  rule copy.
+- Actions block: a single `Quick-sell · +N coins` button.
+  Disabled (with reason copy) when contest is locked or
+  the token is currently applied to a card.
+
+Reads from `LineupTokenVM` already on the page (no fetch).
+Sell value comes from new prop `tokenSellValueByType` on
+`LineupViewProps`, populated server-side from
+`economy_config.token_quicksell_values`.
+
+### TrayTokenPip click
+
+The drag-source pip's button now also fires `onClick` to
+push `?token=id`. Drag still works (gates on `canDrag` from
+react-dnd, not button `disabled`). Locked + applied tokens
+remain clickable so the user can read details + (if
+unlocked) quick-sell. An outline ring marks the active pip
+when its detail panel is open.
+
