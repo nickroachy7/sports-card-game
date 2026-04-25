@@ -53,7 +53,10 @@ export async function GET(req: Request): Promise<Response> {
       scheduled_starts_updated: summary.scheduled_starts_updated,
       days: summary.days,
       errors: summary.errors,
-      future_finals_overridden: summary.future_finals_overridden ?? 0,
+      // Polish spec §194 (Phase 48). Renamed from
+      // `future_finals_overridden` — same telemetry shape, broader
+      // predicate. Counts every BDL `final` overridden at ingest.
+      untrustworthy_finals_overridden: summary.untrustworthy_finals_overridden ?? 0,
       contest_id: contestId,
       took_ms: Date.now() - startedAt,
     });

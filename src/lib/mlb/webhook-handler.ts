@@ -149,17 +149,12 @@ async function handleGameEnded(
     };
   }
   const db = getDb();
-  // Polish spec §184 (Phase 47, tightened). Reject `mlb.game.ended`
-  // for any game whose scheduled_start is still recent enough that
-  // a real game couldn't have finished yet (< 2 hours after start).
-  // Real MLB games average 2h 50min; even rain-shortened games run
-  // > 90 minutes. A "final" event arriving < 2h after first pitch is
-  // BDL sandbox / test data and gets parked. Live game-end events
-  // for genuinely complete games arrive 2.5+ hours after start and
-  // pass this check.
-  //
-  // Also requires a non-NULL scheduled_start — without it we can't
-  // verify the game has actually been played.
+  // Polish spec §192 (Phase 48). Use the unified time-only trust
+  // gate `public.final_passes_time_check()`. Score-sanity portion
+  // of the full predicate isn't applicable here — at the moment of
+  // the status flip, scores haven't been reconciled yet (reconcile
+  // runs after on success). The display CTE (§190) catches any
+  // post-flip score corruption with the full predicate.
   const res = await db.execute<{ id: string }>(sql`
     UPDATE public.game
     SET status = 'final'::game_status,
@@ -171,40 +166,47 @@ async function handleGameEnded(
         current_outs = NULL,
         updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
-      AND scheduled_start IS NOT NULL
-      AND scheduled_start <= now() - INTERVAL '2 hours'
+      AND public.final_passes_time_check(scheduled_start)
     RETURNING id
   `);
   if (res.rows.length === 0) {
-    // §184 (tightened): distinguish "game not in DB" from "no
-    // scheduled_start" from "premature final" (< 2 hours after start).
+    // §193 — surface the violation reason via
+    // `public.final_trust_violation_reason()` so the rejection note
+    // grep-matches the same machine codes used in display + backfill.
+    // The note lands in webhook_failed (we return unhandled=false so
+    // the processor parks it for audit + retry).
     const exists = await db.execute<{
       id: string;
-      missing_start: boolean;
-      premature: boolean;
+      reason: string | null;
     }>(sql`
       SELECT
         id,
-        (scheduled_start IS NULL) AS missing_start,
-        (scheduled_start IS NOT NULL
-         AND scheduled_start > now() - INTERVAL '2 hours') AS premature
+        public.final_trust_violation_reason(
+          'final'::game_status,
+          scheduled_start,
+          home_runs,
+          away_runs
+        ) AS reason
       FROM public.game WHERE bdl_game_id = ${bdlGameId}
     `);
-    const row = exists.rows[0];
-    const note =
-      exists.rows.length === 0
-        ? `game ${bdlGameId} not in our db`
-        : row?.missing_start
-          ? `final_rejected: game ${bdlGameId} has no scheduled_start`
-          : row?.premature
-            ? `premature_final_rejected: game ${bdlGameId} ended < 2h after start`
-            : `game ${bdlGameId} update affected 0 rows`;
+    if (exists.rows.length === 0) {
+      // Game not in our DB — BDL fires events for every MLB game,
+      // we only model games in active contests. No retry helps.
+      return {
+        dispatched: false,
+        unhandled: true,
+        eventType: "mlb.game.ended",
+        providerEventId: null,
+        note: `game ${bdlGameId} not in our db`,
+      };
+    }
+    const reason = exists.rows[0]?.reason ?? "unknown_violation";
     return {
       dispatched: false,
-      unhandled: true,
+      unhandled: false,
       eventType: "mlb.game.ended",
       providerEventId: null,
-      note,
+      note: `final_trust_violation:${reason} (game ${bdlGameId})`,
     };
   }
   // Pull authoritative box score and overwrite final_fp on every

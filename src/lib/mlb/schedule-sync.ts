@@ -50,12 +50,14 @@ export type SyncSummary = {
   /** Human-readable notes for observability. Bounded at 20 entries. */
   errors: string[];
   /**
-   * Polish spec §184 (Phase 47). Count of BDL rows that arrived as
-   * `final` for a today-or-future date and were overridden to
-   * `scheduled` at ingest. Telemetry — non-zero values indicate BDL
-   * is feeding sandbox finals or there's clock skew worth checking.
+   * Polish spec §194 (Phase 48). Count of BDL `final` rows that
+   * failed the trust gates we can apply at ingest time (see §192)
+   * and got overridden to `scheduled`. Telemetry — non-zero values
+   * indicate BDL data quality issues worth checking. Subsumes the
+   * P47 `future_finals_overridden` counter; the new name reflects
+   * the broader predicate.
    */
-  future_finals_overridden?: number;
+  untrustworthy_finals_overridden?: number;
 };
 
 const MAX_ERROR_LOG = 20;
@@ -129,20 +131,32 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
     for (const g of games) {
       try {
         let status = mapBdlStatus(g.status);
-        // Polish spec §184 (Phase 47). If BDL hands us a `final`
-        // status for a game whose date is today or future (no
-        // `scheduled_start` available at this stage — second pass
-        // populates it), trust the calendar: today's games shouldn't
-        // already be final at the time of the daily prefetch run.
-        // This catches the sandbox-final case at ingest. Live
-        // games that genuinely finished post-prefetch get marked
-        // final via the webhook (which has the per-row
-        // scheduled_start guard in webhook-handler.ts).
+        // Polish spec §192 (Phase 48). Apply the trust gates we can
+        // evaluate at ingest time. `scheduled_start` isn't populated
+        // at this stage (second pass below), so we substitute the
+        // BDL `g.date` calendar check for the time-only gate; we
+        // also check the score sanity portion of the predicate
+        // directly here using BDL's payload.
+        //
+        // Catches:
+        //   - Future-dated finals (BDL sandbox / pre-published)
+        //   - 0-0 finals (impossible in 2026 MLB; ghost-runner rule)
+        //   - Final + null scores (unsupportable)
+        //
+        // Live games that genuinely finish post-prefetch get marked
+        // final via the webhook (which uses
+        // `public.final_passes_time_check()` directly — §192).
         if (status === "final") {
           const todayIso = new Date().toISOString().slice(0, 10);
-          if (g.date && g.date.slice(0, 10) >= todayIso) {
+          const homeRuns = g.home_team_data?.runs ?? null;
+          const awayRuns = g.away_team_data?.runs ?? null;
+          const isFutureDated = !!(g.date && g.date.slice(0, 10) >= todayIso);
+          const isZeroZero = homeRuns === 0 && awayRuns === 0;
+          const hasNullScores = homeRuns === null || awayRuns === null;
+          if (isFutureDated || isZeroZero || hasNullScores) {
             status = "scheduled";
-            summary.future_finals_overridden = (summary.future_finals_overridden ?? 0) + 1;
+            summary.untrustworthy_finals_overridden =
+              (summary.untrustworthy_finals_overridden ?? 0) + 1;
           }
         }
         await db.execute(sql`

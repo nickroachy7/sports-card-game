@@ -45,30 +45,28 @@ export async function fetchSlotGameByCardId(
     has_double_header: boolean;
   };
 
-  // Polish spec §183 (Phase 47, tightened). Display guard against
-  // BDL's premature-final problem. Three failure cases handled:
-  //   1. status='final' + scheduled_start > now() → game hasn't even
-  //      started → demote to 'scheduled', zero the scores.
-  //   2. status='final' + scheduled_start IS NULL → start time
-  //      unknown, so 'final' is unsupportable → demote to 'scheduled'.
-  //   3. status='final' + scheduled_start in last 2 hours → too short
-  //      to physically be a real MLB game (avg 2h 50min, even rain-
-  //      shortened games run > 90min) → demote to 'live', zero the
-  //      scores. The actual webhook for game-end will arrive within
-  //      the hour and clear this naturally.
-  // Two-hour grace covers all realistic game lengths; only catches
-  // BDL sandbox / test data marking finals seconds after first pitch.
+  // Polish spec §190 (Phase 48). Display guard against BDL's
+  // unreliable final-state data, unified through the
+  // `public.is_trustworthy_final()` SQL predicate (§190). When a row
+  // has status='final' but the predicate rejects it (covers all 5
+  // known failure modes — missing_start, not_started, too_recent,
+  // null_score, zero_zero_tie — see §191) we demote the row's status
+  // and null the scores in the projected effective state:
   //
-  // Polish spec §189 (Phase 47 v3). TBD-game OFF filter. Games whose
-  // status is scheduled/final but scheduled_start IS NULL are excluded
-  // from the result entirely — the card's team-id lookup misses, and
-  // SlotGameState renders an OFF pill (§188) instead of "VS WSH · TBD".
-  // Rationale: BDL puts the game on today's date but MLB Stats hasn't
-  // published a start time → either BDL is stale/wrong, or the game
-  // is unannounced. Users can't act on a TBD game; OFF matches their
-  // mental model. Postponed / suspended / canceled with NULL start
-  // are NOT excluded — those are informational ("PPD", "SUSP", "CXL"
-  // pills) and worth surfacing.
+  //   - scheduled_start IS NULL OR > now() → 'scheduled'
+  //     (game hasn't started; render PRE pill)
+  //   - otherwise                          → 'live'
+  //     (start is past; render LIVE pill until real data arrives)
+  //
+  // Score columns null in either demote case so the footer doesn't
+  // reach the W/L renderer with bogus values.
+  //
+  // Polish spec §189 (Phase 47 v3, kept). TBD-game OFF filter. Games
+  // with scheduled/final status but scheduled_start IS NULL are
+  // excluded from the result entirely — the card's team-id lookup
+  // misses, and SlotGameState renders an OFF pill (§188) instead of
+  // "VS WSH · TBD". Postponed / suspended / canceled with NULL start
+  // are NOT excluded; those stay informational (PPD/SUSP/CXL pills).
   const db = getDb();
   const gamesRes = await db.execute<GameRow>(sql`
     WITH candidates AS (
@@ -78,24 +76,27 @@ export async function fetchSlotGameByCardId(
         g.scheduled_start,
         CASE
           WHEN g.status = 'final'
-            AND (g.scheduled_start IS NULL OR g.scheduled_start > now())
-          THEN 'scheduled'::game_status
-          WHEN g.status = 'final'
-            AND g.scheduled_start > now() - INTERVAL '2 hours'
-          THEN 'live'::game_status
+           AND NOT public.is_trustworthy_final(
+                 g.status, g.scheduled_start, g.home_runs, g.away_runs)
+          THEN
+            CASE
+              WHEN g.scheduled_start IS NULL OR g.scheduled_start > now()
+                THEN 'scheduled'::game_status
+              ELSE 'live'::game_status
+            END
           ELSE g.status
         END AS status,
         CASE
           WHEN g.status = 'final'
-            AND (g.scheduled_start IS NULL
-                 OR g.scheduled_start > now() - INTERVAL '2 hours')
+           AND NOT public.is_trustworthy_final(
+                 g.status, g.scheduled_start, g.home_runs, g.away_runs)
           THEN NULL
           ELSE g.home_runs
         END AS home_runs,
         CASE
           WHEN g.status = 'final'
-            AND (g.scheduled_start IS NULL
-                 OR g.scheduled_start > now() - INTERVAL '2 hours')
+           AND NOT public.is_trustworthy_final(
+                 g.status, g.scheduled_start, g.home_runs, g.away_runs)
           THEN NULL
           ELSE g.away_runs
         END AS away_runs,

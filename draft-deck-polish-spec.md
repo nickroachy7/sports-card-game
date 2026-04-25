@@ -8433,3 +8433,262 @@ This subsumes the previously-shipped "final + NULL start
 filtered out at the candidates source, so the demote CASE
 in the SELECT is dead-code defensive. Left in place as
 belt-and-suspenders for unreachable edge cases.
+
+---
+
+## 190. Game-state trust predicate (Phase 48)
+
+### Problem
+
+Same-thread user feedback after seeing 0-0 FINAL pills:
+> "What about these Ties? There are no ties in baseball. We
+> really need to make sure that the card game statuses are
+> correct for all cards. Do we need to do a deeper spec on
+> this or should we just continue patching by error?"
+
+By this point we'd shipped 5 separate patches across two
+phases (P47 + the v2 + v3 follow-ups), each addressing a
+different way BDL emits a "final" we shouldn't trust:
+
+  1. `final` + `scheduled_start > now()`     — §183
+  2. `final` + `scheduled_start IS NULL`     — §183
+  3. `final` + `now() − scheduled_start < 2h` — P47 v2
+  4. `scheduled`/`final` + NULL start (TBD)   — §189
+  5. `final` + `home_runs = 0 AND away_runs = 0` — NEW
+
+The same demote logic lived in three places (display CTE,
+webhook handler, schedule prefetch) and grew with each
+discovery. The next BDL anomaly would mean a 6-place edit.
+
+### Decision
+
+Unify the demote logic behind a single SQL predicate,
+`public.is_trustworthy_final(status, scheduled_start,
+home_runs, away_runs)`. All three callsites consult it.
+The next failure mode is a 1-line predicate change.
+
+### Predicate definition
+
+A `final` row is *trustworthy* iff:
+
+```sql
+status = 'final'
+AND scheduled_start IS NOT NULL
+AND scheduled_start <= now() - INTERVAL '2 hours'
+AND home_runs IS NOT NULL
+AND away_runs IS NOT NULL
+AND NOT (home_runs = 0 AND away_runs = 0)
+```
+
+**Why 2 hours.** Real MLB games average 2h 50min; even
+rain-shortened games run > 90 min. 2h is the conservative
+floor that catches BDL sandbox finals (often delivered
+seconds after first pitch) without risking false-positives
+on legitimate fast games.
+
+**Why no 0-0 finals.** 2026 MLB enforces the ghost-runner
+rule starting in extra innings — every game guarantees a
+winner. A 0-0 final is now strictly impossible. A 0-0
+result + status `final` is a data error.
+
+### Companion functions
+
+- `public.final_passes_time_check(scheduled_start)` —
+  time-only sub-gate. The webhook handler can't run the
+  full predicate at the moment of the status flip because
+  `reconcileGame()` hasn't populated scores yet; it uses
+  this narrower gate. Display CTE + backfill use the full
+  predicate.
+
+- `public.final_trust_violation_reason(...)` — returns
+  NULL if trustworthy, else a short machine code:
+  `missing_start | not_started | too_recent | null_score
+  | zero_zero_tie`. Used in webhook rejection notes
+  (§193) and audit logs.
+
+All three functions are STABLE (depend on `now()`),
+search_path locked.
+
+---
+
+## 191. Five known failure modes
+
+The predicate's reason codes cover every BDL anomaly
+discovered to date:
+
+| Reason          | Triggers when                                        |
+|-----------------|------------------------------------------------------|
+| `missing_start` | `scheduled_start IS NULL`                            |
+| `not_started`   | `scheduled_start > now()`                            |
+| `too_recent`    | `scheduled_start > now() - INTERVAL '2 hours'`       |
+| `null_score`    | `home_runs IS NULL OR away_runs IS NULL`             |
+| `zero_zero_tie` | `home_runs = 0 AND away_runs = 0`                    |
+
+Order of evaluation matters — the function returns the
+first failing reason. `not_started` wins over `null_score`
+even when both fail, etc. This keeps audit logs
+predictable for grep / dashboard work.
+
+The next discovered failure mode adds one CASE branch to
+both `is_trustworthy_final` and
+`final_trust_violation_reason`.
+
+---
+
+## 192. Display + webhook + prefetch refactor
+
+### Display (`fetch-slot-games.ts`)
+
+CTE replaces the previous 3-case CASE expression with a
+single predicate call:
+
+```sql
+CASE
+  WHEN g.status = 'final'
+   AND NOT public.is_trustworthy_final(...)
+  THEN
+    CASE
+      WHEN g.scheduled_start IS NULL OR g.scheduled_start > now()
+        THEN 'scheduled'::game_status
+      ELSE 'live'::game_status
+    END
+  ELSE g.status
+END AS status
+```
+
+The score columns are nulled in the demote case so the
+W/L renderer in `SlotGameState` never sees bogus values.
+The §189 OFF filter (TBD games) stays in place as a
+separate concern.
+
+### Webhook (`webhook-handler.ts`)
+
+`mlb.game.ended` UPDATE clause:
+
+```sql
+WHERE bdl_game_id = $1
+  AND public.final_passes_time_check(scheduled_start)
+```
+
+On rejection, the handler now returns
+`unhandled: false` so the processor parks the delivery
+in `webhook_failed` (§193), with a note keyed on
+`final_trust_violation_reason()`. The retry cron's
+exponential backoff (5/10/20/40/80m) handles the case
+where BDL eventually sends a corrected delivery — the
+predicate re-evaluates against current game state on
+each retry.
+
+### Prefetch (`schedule-sync.ts`)
+
+The prefetch override now applies the score-sanity portion
+of the predicate using BDL's payload directly (since
+`scheduled_start` isn't populated until the second pass).
+Catches:
+- Future-dated finals (existing behavior)
+- 0-0 finals (new)
+- Final + null scores (new)
+
+Counter renamed `future_finals_overridden` →
+`untrustworthy_finals_overridden` in the cron response
+to reflect the broader predicate.
+
+---
+
+## 193. Audit trail in `webhook_failed`
+
+Previous behavior: webhook handler returned
+`unhandled: true` on premature-final rejection, which
+the processor treated as a successful no-op. Rejections
+were lost.
+
+New behavior: `unhandled: false` lands the delivery in
+`webhook_failed` with `error_message` set to:
+
+```
+final_trust_violation:<reason> (game <bdl_game_id>)
+```
+
+Two consequences:
+
+1. **Auditable.** A query like `SELECT count(*) FROM
+   webhook_failed WHERE error_message LIKE
+   'final_trust_violation:%' GROUP BY reason` shows BDL
+   data quality over time per reason code.
+
+2. **Self-healing.** The retry cron picks up these rows
+   on its 5-minute schedule. Each retry re-evaluates the
+   predicate against the current game row — so a
+   delivery that was rejected because the game's score
+   was 0-0 at the time can succeed once a real reconcile
+   populates correct scores. Retries cap at 5 attempts
+   with exponential backoff (5/10/20/40/80 min); after
+   that the row sits unresolved for manual triage.
+
+"Game not in our DB" rejections still return
+`unhandled: true` (BDL fires for every MLB game; we
+only model contest games — no retry helps).
+
+---
+
+## 194. Migration 0061 + backfill
+
+Migration `0061_game_trust_predicate.sql` creates the
+three SQL functions and runs a one-shot backfill:
+
+```sql
+UPDATE public.game
+SET status     = 'scheduled',
+    home_runs  = NULL,
+    away_runs  = NULL,
+    ended_at   = NULL,
+    updated_at = now()
+WHERE status = 'final'
+  AND NOT public.is_trustworthy_final(
+        status, scheduled_start, home_runs, away_runs);
+```
+
+Idempotent (no-op once everyone's clean). Applied to dev
++ prod via MCP. Prod verified: BAL@BOS (the surfacing
+0-0 case) demoted, 14 of 15 slate games trustworthy
+post-backfill (the 15th is CHW@WSH which has
+`scheduled_start IS NULL` — not a final, doesn't trigger
+the backfill, falls through to §189 OFF filter).
+
+A residual cleanup also nulled `ended_at` on any rows
+still in `status='scheduled'` with a stale `ended_at`
+(leftover from earlier P47 backfills that didn't clear
+the column).
+
+### Files touched
+
+- `supabase/migrations/0061_game_trust_predicate.sql` —
+  new SQL functions + backfill (§190, §194)
+- `src/lib/lineup/fetch-slot-games.ts` — display CTE
+  refactor (§192)
+- `src/lib/mlb/webhook-handler.ts` — webhook handler
+  refactor (§192) + rejection audit (§193)
+- `src/lib/mlb/schedule-sync.ts` — prefetch override +
+  counter rename (§192)
+- `src/app/api/cron/bdl-games-prefetch/route.ts` —
+  surfaces renamed counter
+- `tests/integration/game-trust-predicate.test.ts` —
+  unit tests for the predicate (covers all 5 reason
+  codes + happy path + reason ordering)
+- `docs/adr/ADR-0048_phase-48-trust-predicate.md` —
+  retro
+
+### Not in scope
+
+- **`live` and `scheduled` state validation.** All user
+  pain points have been final-state. If/when BDL surfaces
+  issues with those states, extend the framework with a
+  parallel `is_trustworthy_live` / `is_trustworthy_scheduled`.
+- **DB-level CHECK or trigger preventing untrusted writes.**
+  The predicate is STABLE (uses `now()`), can't be used in
+  a CHECK constraint. A trigger could enforce, but the
+  ingest-side gate in webhook handler + prefetch already
+  defends well.
+- **PostHog events for trust violations.** `webhook_failed`
+  is sufficient for now; product analytics can pull from
+  there if needed.
