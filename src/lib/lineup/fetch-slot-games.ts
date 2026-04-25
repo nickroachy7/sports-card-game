@@ -45,13 +45,19 @@ export async function fetchSlotGameByCardId(
     has_double_header: boolean;
   };
 
-  // Polish spec §183 (Phase 47). Display guard against
-  // future-final games — if BDL ingestion ever delivers a "final"
-  // status for a game whose scheduled_start is still in the future
-  // (sandbox / pre-populated test data), demote to 'scheduled' for
-  // display purposes and zero the scores. The ingestion guards in
-  // §184 prevent new occurrences; this is belt-and-suspenders so
-  // any DB drift never reaches the user-visible pill.
+  // Polish spec §183 (Phase 47, tightened). Display guard against
+  // BDL's premature-final problem. Three failure cases handled:
+  //   1. status='final' + scheduled_start > now() → game hasn't even
+  //      started → demote to 'scheduled', zero the scores.
+  //   2. status='final' + scheduled_start IS NULL → start time
+  //      unknown, so 'final' is unsupportable → demote to 'scheduled'.
+  //   3. status='final' + scheduled_start in last 2 hours → too short
+  //      to physically be a real MLB game (avg 2h 50min, even rain-
+  //      shortened games run > 90min) → demote to 'live', zero the
+  //      scores. The actual webhook for game-end will arrive within
+  //      the hour and clear this naturally.
+  // Two-hour grace covers all realistic game lengths; only catches
+  // BDL sandbox / test data marking finals seconds after first pitch.
   const db = getDb();
   const gamesRes = await db.execute<GameRow>(sql`
     WITH candidates AS (
@@ -60,17 +66,25 @@ export async function fetchSlotGameByCardId(
         g.home_team_id, g.away_team_id,
         g.scheduled_start,
         CASE
-          WHEN g.status = 'final' AND g.scheduled_start > now()
+          WHEN g.status = 'final'
+            AND (g.scheduled_start IS NULL OR g.scheduled_start > now())
           THEN 'scheduled'::game_status
+          WHEN g.status = 'final'
+            AND g.scheduled_start > now() - INTERVAL '2 hours'
+          THEN 'live'::game_status
           ELSE g.status
         END AS status,
         CASE
-          WHEN g.status = 'final' AND g.scheduled_start > now()
+          WHEN g.status = 'final'
+            AND (g.scheduled_start IS NULL
+                 OR g.scheduled_start > now() - INTERVAL '2 hours')
           THEN NULL
           ELSE g.home_runs
         END AS home_runs,
         CASE
-          WHEN g.status = 'final' AND g.scheduled_start > now()
+          WHEN g.status = 'final'
+            AND (g.scheduled_start IS NULL
+                 OR g.scheduled_start > now() - INTERVAL '2 hours')
           THEN NULL
           ELSE g.away_runs
         END AS away_runs,

@@ -149,12 +149,17 @@ async function handleGameEnded(
     };
   }
   const db = getDb();
-  // Polish spec §184 (Phase 47). Reject `mlb.game.ended` events for
-  // games whose `scheduled_start` is still in the future (with 5-min
-  // grace for clock skew). BDL has been observed delivering pre-
-  // populated finals from sandbox / test data; without this guard
-  // the slot pill reads "FINAL L 4-12" on a player whose game hasn't
-  // started yet.
+  // Polish spec §184 (Phase 47, tightened). Reject `mlb.game.ended`
+  // for any game whose scheduled_start is still recent enough that
+  // a real game couldn't have finished yet (< 2 hours after start).
+  // Real MLB games average 2h 50min; even rain-shortened games run
+  // > 90 minutes. A "final" event arriving < 2h after first pitch is
+  // BDL sandbox / test data and gets parked. Live game-end events
+  // for genuinely complete games arrive 2.5+ hours after start and
+  // pass this check.
+  //
+  // Also requires a non-NULL scheduled_start — without it we can't
+  // verify the game has actually been played.
   const res = await db.execute<{ id: string }>(sql`
     UPDATE public.game
     SET status = 'final'::game_status,
@@ -166,22 +171,34 @@ async function handleGameEnded(
         current_outs = NULL,
         updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
-      AND scheduled_start <= now() + INTERVAL '5 minutes'
+      AND scheduled_start IS NOT NULL
+      AND scheduled_start <= now() - INTERVAL '2 hours'
     RETURNING id
   `);
   if (res.rows.length === 0) {
-    // §184: distinguish "game not in DB" from "future-final rejected"
-    // so the audit trail shows which case fired.
-    const exists = await db.execute<{ id: string; future: boolean }>(sql`
-      SELECT id, scheduled_start > now() AS future
+    // §184 (tightened): distinguish "game not in DB" from "no
+    // scheduled_start" from "premature final" (< 2 hours after start).
+    const exists = await db.execute<{
+      id: string;
+      missing_start: boolean;
+      premature: boolean;
+    }>(sql`
+      SELECT
+        id,
+        (scheduled_start IS NULL) AS missing_start,
+        (scheduled_start IS NOT NULL
+         AND scheduled_start > now() - INTERVAL '2 hours') AS premature
       FROM public.game WHERE bdl_game_id = ${bdlGameId}
     `);
+    const row = exists.rows[0];
     const note =
       exists.rows.length === 0
         ? `game ${bdlGameId} not in our db`
-        : exists.rows[0]?.future
-          ? `future_final_rejected: game ${bdlGameId} ended before scheduled_start`
-          : `game ${bdlGameId} update affected 0 rows`;
+        : row?.missing_start
+          ? `final_rejected: game ${bdlGameId} has no scheduled_start`
+          : row?.premature
+            ? `premature_final_rejected: game ${bdlGameId} ended < 2h after start`
+            : `game ${bdlGameId} update affected 0 rows`;
     return {
       dispatched: false,
       unhandled: true,
