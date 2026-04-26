@@ -7,6 +7,9 @@ import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
 import { LineupSlot } from "./LineupSlot";
 
 type SlotFill = {
+  /** Polish spec §207 (Phase 51). Slot id surfaced so LineupSlot can
+   *  call `useLiveSlotFp(slotId)` for realtime FP overrides. */
+  slotId: string;
   card: LineupCardVM | null;
   appliedToken: {
     type: string;
@@ -172,6 +175,7 @@ function RoleRow({
             <LineupSlot
               key={position}
               position={position}
+              slotId={fill.slotId || null}
               card={fill.card}
               appliedToken={fill.appliedToken}
               locked={fill.locked}

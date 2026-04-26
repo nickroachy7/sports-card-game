@@ -2,6 +2,23 @@ import type { CardTier, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
 
 /**
+ * Polish spec §208 (Phase 51). Per-game live snapshot — seeds
+ * `LiveEventsProvider.gameState` and powers `useLiveGameState`.
+ * Mirrored 1:1 to `LiveGameState` exported from the provider; the
+ * shape lives here so server-side props consumers don't need to
+ * import a `"use client"` module.
+ */
+export type LiveGameStateSnapshot = {
+  status: "scheduled" | "live" | "final" | "postponed" | "suspended" | "canceled";
+  scheduledStart: string | null;
+  currentInning: number | null;
+  currentInningHalf: "top" | "bottom" | null;
+  currentOuts: number | null;
+  homeRuns: number | null;
+  awayRuns: number | null;
+};
+
+/**
  * A card view model enriched with fields needed on the lineup page.
  * Superset of CardViewModel — `hasAppliedToken` is derived from
  * `appliedTokenId`, so the Card component can render either shape.
@@ -147,6 +164,14 @@ export type LineupViewProps = {
    * surfaced to the slot footer.
    */
   gameMatchupById: Record<string, string>;
+  /**
+   * Polish spec §208 (Phase 51). Per-game live snapshot
+   * (status / inning / outs / score / scheduled_start) keyed by
+   * `game.id`. Seeds `LiveEventsProvider`'s `gameState` map for
+   * `useLiveGameState` and the event-feed time-gate. Updated in
+   * real-time via the existing `game` UPDATE realtime channel.
+   */
+  gameStateById: Record<string, LiveGameStateSnapshot>;
   /**
    * Polish spec §109 (Phase 36). Coin balance for the buy-packs
    * modal + FAB. Kept on LineupViewProps so the modal doesn't need

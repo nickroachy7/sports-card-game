@@ -4,7 +4,11 @@ import { Pin, PinOff } from "lucide-react";
 
 import type { OpenPacksBatchResult } from "@/app/actions/packs";
 import { EventFeed } from "@/components/lineup/EventFeed";
-import { useLatestInning } from "@/components/lineup/LiveEventsProvider";
+import {
+  useLatestInning,
+  useLiveEntryScore,
+  useLiveSlotFp,
+} from "@/components/lineup/LiveEventsProvider";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { useGamesActive } from "@/components/lineup/useGamesActive";
 import { PacksTab } from "@/components/pack/PacksTab";
@@ -20,6 +24,10 @@ import { cn } from "@/lib/utils";
 type EntryStatus = "building" | "submitted" | "live" | "final";
 
 type SlotFill = {
+  /** Polish spec §207 (Phase 51). Slot id used to look up live FP
+   *  via `useLiveSlotFp`. Empty string when the row hasn't been
+   *  written yet (pre-submit, brand-new entry). */
+  slotId: string;
   card: LineupCardVM | null;
   appliedToken: {
     bonusFp: number;
@@ -157,6 +165,13 @@ function SidebarHeadline({
   const latestInning = useLatestInning();
   const { count: gamesActive, ready: gamesReady } = useGamesActive(contestGameIds);
 
+  // §207 (Phase 51). Override server-rendered scores with realtime
+  // values when the channel has fresh data. Falls back to props
+  // (initial server values) on first render or outside provider.
+  const liveEntryScore = useLiveEntryScore();
+  const effectiveLiveScore = liveEntryScore?.liveScore ?? liveScore;
+  const effectiveFinalScore = liveEntryScore?.finalScore ?? finalScore;
+
   const projectedFp = computeProjectedFp(slotFills);
 
   if (!anySlotLocked && entryStatus === "building") {
@@ -171,7 +186,7 @@ function SidebarHeadline({
   }
 
   if (anySlotLocked && !allFinal) {
-    const liveTotal = liveScore > 0 ? liveScore : slotSum(slotFills, "liveFp");
+    const liveTotal = effectiveLiveScore > 0 ? effectiveLiveScore : slotSum(slotFills, "liveFp");
     return (
       <Headline
         label="Live"
@@ -184,7 +199,7 @@ function SidebarHeadline({
   }
 
   // All final (or the contest is fully wrapped).
-  const finalTotal = finalScore > 0 ? finalScore : slotSum(slotFills, "finalFp");
+  const finalTotal = effectiveFinalScore > 0 ? effectiveFinalScore : slotSum(slotFills, "finalFp");
   return (
     <Headline
       label="Final"
@@ -320,6 +335,10 @@ function RosterRow({
   fill: SlotFill;
   onToggleSticky: (next: boolean) => void;
 }) {
+  // §207 (Phase 51). Hook MUST run unconditionally — call before the
+  // early-return for empty slots. Returns null gracefully when the
+  // slotId isn't tracked (empty rows, pre-submit state).
+  const liveSlot = useLiveSlotFp(fill.slotId || null);
   const card = fill.card;
   if (!card) {
     // Empty slot — pin doesn't apply (nothing to carry forward). Keep
@@ -335,7 +354,11 @@ function RosterRow({
     );
   }
   const warning = playerWarning(card);
-  const fpCell = pickFpCell(fill);
+  // §207 — fill.liveFp/finalFp overridden with live store when fresh.
+  const fillForCell: SlotFill = liveSlot
+    ? { ...fill, liveFp: liveSlot.liveFp, finalFp: liveSlot.finalFp }
+    : fill;
+  const fpCell = pickFpCell(fillForCell);
   return (
     <li className="grid grid-cols-[2rem_1fr_auto_3rem_1.25rem] items-center gap-1 py-0.5 text-[11px]">
       <span className="font-mono text-[var(--text-3)]">{position}</span>

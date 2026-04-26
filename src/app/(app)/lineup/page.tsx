@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { LineupView } from "@/app/(app)/lineup/lineup-view";
+import type { LiveGameState } from "@/components/lineup/LiveEventsProvider";
 import { TIER_PLAY_BUDGET } from "@/lib/card/tiers";
 import type { CardTier, PackType, PlayerStatus, TokenType } from "@/lib/contracts/cards";
 import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
@@ -220,19 +221,60 @@ export default async function LineupPage() {
   // balance, daily-pack readiness, standard pack cost. Fetched
   // alongside the game queries so the modal has everything it
   // needs on first render.
-  const [slotGameByCardId, gameMatchupById, packStateRes, econCfgRes] = await Promise.all([
-    fetchSlotGameByCardId(
-      contest.included_game_ids ?? [],
-      cards.map((c) => ({ id: c.id, teamId: c.teamId })),
-    ),
-    fetchGameMatchupsById(contest.included_game_ids ?? []),
-    supabase
-      .from("user_season_state")
-      .select("coins, daily_pack_claimed_at")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    supabase.rpc("get_active_economy_config").single(),
-  ]);
+  // Polish spec §208 (Phase 51). Per-game live snapshot fetched
+  // alongside the matchup lookup. Hands the LiveEventsProvider its
+  // initial state for `useLiveGameState` + the time-gate filter.
+  const fetchGameStateById = async (gameIds: string[]): Promise<Record<string, LiveGameState>> => {
+    if (gameIds.length === 0) return {};
+    type Row = {
+      id: string;
+      status: LiveGameState["status"];
+      scheduled_start: string | null;
+      current_inning: number | null;
+      current_inning_half: "top" | "bottom" | null;
+      current_outs: number | null;
+      home_runs: number | null;
+      away_runs: number | null;
+    };
+    const res = await db.execute<Row>(sql`
+      SELECT id, status, scheduled_start, current_inning, current_inning_half,
+             current_outs, home_runs, away_runs
+      FROM public.game
+      WHERE id = ANY(${sql`ARRAY[${sql.join(
+        gameIds.map((id) => sql`${id}::uuid`),
+        sql`, `,
+      )}]::uuid[]`})
+    `);
+    const out: Record<string, LiveGameState> = {};
+    for (const r of res.rows) {
+      out[r.id] = {
+        status: r.status,
+        scheduledStart: r.scheduled_start,
+        currentInning: r.current_inning,
+        currentInningHalf: r.current_inning_half,
+        currentOuts: r.current_outs,
+        homeRuns: r.home_runs,
+        awayRuns: r.away_runs,
+      };
+    }
+    return out;
+  };
+
+  const [slotGameByCardId, gameMatchupById, gameStateById, packStateRes, econCfgRes] =
+    await Promise.all([
+      fetchSlotGameByCardId(
+        contest.included_game_ids ?? [],
+        cards.map((c) => ({ id: c.id, teamId: c.teamId })),
+      ),
+      fetchGameMatchupsById(contest.included_game_ids ?? []),
+      fetchGameStateById(contest.included_game_ids ?? []),
+      supabase
+        .from("user_season_state")
+        .select("coins, daily_pack_claimed_at")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase.rpc("get_active_economy_config").single(),
+    ]);
 
   const packState = packStateRes.data ?? null;
   const coinBalance = Number(packState?.coins ?? 0);
@@ -315,6 +357,7 @@ export default async function LineupPage() {
       }))}
       slotGameByCardId={slotGameByCardId}
       gameMatchupById={gameMatchupById}
+      gameStateById={gameStateById}
       coinBalance={coinBalance}
       dailyPackReady={dailyPackReady}
       dailyPackSecondsUntilReady={dailyPackSecondsUntilReady}

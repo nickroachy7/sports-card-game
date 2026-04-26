@@ -1,3 +1,4 @@
+import { useLiveGameState } from "@/components/lineup/LiveEventsProvider";
 import type { SlotGameInfo } from "@/lib/lineup/types";
 import { cn } from "@/lib/utils";
 
@@ -35,11 +36,31 @@ type Props = {
 };
 
 export function SlotGameState({ info, variant = "footer", className }: Props) {
+  // Polish spec §208 (Phase 51). Live game state overrides the
+  // server-rendered snapshot. Team abbrs + DH marker continue
+  // to come from `info` (static); status/inning/outs/score come
+  // from realtime via `useLiveGameState`. When the realtime map
+  // hasn't seeded the gameId yet, fall back to `info` directly.
+  const live = useLiveGameState(info?.gameId);
+  const merged =
+    info && live
+      ? {
+          ...info,
+          status: live.status,
+          homeRuns: live.homeRuns,
+          awayRuns: live.awayRuns,
+          currentInning: live.currentInning,
+          currentInningHalf: live.currentInningHalf,
+          currentOuts: live.currentOuts,
+          scheduledStart: live.scheduledStart ?? info.scheduledStart,
+        }
+      : info;
+
   // Polish spec §62 + §188 — tone-washed pill wrapping for
   // footer + bench variants. Off-day cards get the same OFF pill
   // everywhere a game-state would otherwise appear, so users
   // always know whether a slot's player has a game today.
-  if (!info) {
+  if (!merged) {
     if (variant === "chip") {
       return (
         <span className={cn("inline-flex items-center gap-0.5", className)}>
@@ -57,16 +78,16 @@ export function SlotGameState({ info, variant = "footer", className }: Props) {
   if (variant === "chip") {
     return (
       <span className={cn("inline-flex items-center gap-0.5", className)}>
-        <span className={toneClass(info.status)}>{stateWord(info.status)}</span>
+        <span className={toneClass(merged.status)}>{stateWord(merged.status)}</span>
       </span>
     );
   }
 
-  const body = renderFooter(info);
+  const body = renderFooter(merged);
   if (!body) return null;
   return (
     <span className={cn("inline-flex", className)}>
-      <span className={cn(PILL_BASE, pillTone(info.status))}>{body}</span>
+      <span className={cn(PILL_BASE, pillTone(merged.status))}>{body}</span>
     </span>
   );
 }

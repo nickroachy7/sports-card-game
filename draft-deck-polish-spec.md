@@ -9228,3 +9228,141 @@ zeroed out post-backfill. 13 pre-sim events filtered;
 0 qualifying events for the user's specific players today
 (BDL's sandbox didn't sim them as starters).
 
+
+---
+
+## 206. Live data realtime — full pipeline (Phase 51)
+
+### Problem
+
+User: "the game statuses are not updating, the players FP is not
+updating … This is a fantasy sports game but its core tracking
+and information populating is not working."
+
+The audit (P51) traced the live pipeline end-to-end and surfaced
+a fundamental architectural gap:
+
+- BDL webhook → `game_event` INSERT, `game` UPDATE ✓
+- DB trigger → `contest_lineup_slot.live_fp` + `contest_entry.live_score` UPDATE ✓
+- LiveEventsProvider subscribes to `game_event` INSERT, `game` UPDATE,
+  `token_application` UPDATE → event feed narration ✓
+- **`contest_lineup_slot` + `contest_entry` were NOT in the realtime publication** — when triggers updated `live_fp` / `live_score`, no broadcast signal reached the client
+- **`SlotGameState` pill ignored the existing `game` UPDATE realtime channel** — even though inning/outs broadcast was wired, no consumer re-rendered the pill
+
+Net effect: every score/state surface stale on mount, only the event feed updated live.
+
+### Decision — three-pronged fix
+
+**§207 Realtime publication.** Migration 0068 adds
+`contest_lineup_slot` and `contest_entry` to
+`supabase_realtime`, with `REPLICA IDENTITY FULL` so UPDATE
+payloads carry the full row.
+
+**§208 LiveEventsProvider broadens scope.** Now subscribes to
+five tables in one channel:
+
+  | Table | Event | Drives |
+  |-------|-------|--------|
+  | `game_event` | INSERT | event feed narration |
+  | `game` | UPDATE | game-state pill + feed transitions |
+  | `contest_lineup_slot` | UPDATE | per-card live_fp |
+  | `contest_entry` | UPDATE | sidebar big LIVE score |
+  | `token_application` | UPDATE | token fire/miss narration |
+
+State stored in three Maps + an entry score record:
+`slotFp: Map<slotId, {liveFp, finalFp}>`,
+`gameState: Map<gameId, LiveGameState>`,
+`entryScore: {liveScore, finalScore}`. Initial values seeded
+from server-rendered props; UPDATE handlers merge fresh
+values.
+
+New hooks:
+- `useLiveSlotFp(slotId)` → live FP for one slot
+- `useLiveEntryScore()` → entry-level scores
+- `useLiveGameState(gameId)` → per-game inning/outs/score
+- `useLiveConnectionStatus()` → channel state
+
+**§209 Components consume hooks.** Wired in this phase:
+- `SlotGameState` pill — `useLiveGameState(info.gameId)` overrides
+  status/inning/outs/score
+- `LineupSlot` (lineup grid card) — `useLiveSlotFp(slotId)` overrides
+  `card.contestFp`
+- `AppSidebar` — `useLiveEntryScore` for the big LIVE number,
+  `useLiveSlotFp` per-position roster row
+
+Each hook returns `null` outside the provider; components fall back
+to the server-rendered prop. RLS scopes broadcasts to the user's
+own rows.
+
+---
+
+## 210. Event feed time-gate
+
+The §202 P50 `_apply_game_event_to_lineups` time-gate stops
+pre-sim BDL events from crediting `live_fp`. The event feed had
+no such gate — users saw "+12 FP" lines for events that never
+counted.
+
+`LiveEventsProvider` now applies the same predicate
+(`event.created_at >= game.scheduled_start`) to:
+- Initial fetch — fetches a 60-row window then post-filters to keep
+  the feed at 20 displayed entries
+- Realtime INSERT path — drops pre-sim events at the channel handler
+
+Games not present in `gameStateInitial` (or with NULL
+`scheduled_start`) are also rejected.
+
+Result: feed stays in sync with what's actually credited.
+
+---
+
+## 211. Reconnect UX
+
+`<RealtimeStatusBanner>` mounts inside the provider tree, reads
+`useLiveConnectionStatus`, and renders a fixed-position
+"Reconnecting…" / "Connecting…" banner when the channel state
+isn't `live`. Auto-clears on resubscribe (Supabase channel
+handles retries).
+
+Subtle, non-blocking. Matches user choice from interview: visible
+status during transient blips without disrupting the lineup view.
+
+---
+
+## 212. Architecture summary
+
+```
+BDL webhook
+   ↓
+[webhook-handler]
+   ├── INSERT game_event       ─┐
+   └── UPDATE game (inning/etc) ─┤
+                                 ↓
+                        DB trigger _on_game_event_insert
+                                 ↓
+            [_apply_game_event_to_lineups (time-gated §202)]
+                         ↓                ↓
+            UPDATE contest_lineup_slot   UPDATE contest_entry
+                         ↓                ↓
+                     ┌───┴────────────────┴───┐
+                     │  supabase_realtime    │
+                     │  publication (§207)   │
+                     └───────────┬───────────┘
+                                 ↓
+                  Realtime broadcast (RLS-scoped)
+                                 ↓
+            [LiveEventsProvider channel handlers (§208)]
+                                 ↓
+                  slotFp / gameState / entryScore state
+                                 ↓
+                  Hooks: useLiveSlotFp / useLiveEntryScore /
+                         useLiveGameState (§209)
+                                 ↓
+            SlotGameState / LineupSlot / AppSidebar render
+```
+
+After Phase 51, every step has a consumer. Stale-on-mount is
+gone. The event feed time-gate (§210) keeps narration honest.
+The reconnect banner (§211) tells the user when broadcasts
+pause.
+

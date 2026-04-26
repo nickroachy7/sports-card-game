@@ -9,6 +9,7 @@ import { getEmptyImage } from "react-dnd-html5-backend";
 import { Card } from "@/components/card/Card";
 import { dragResult } from "@/components/card/drag-layer-state";
 import { useCardDepleteEvent } from "@/components/lineup/CardContractEventsProvider";
+import { useLiveSlotFp } from "@/components/lineup/LiveEventsProvider";
 import { SlotContractGlow } from "@/components/lineup/SlotContractGlow";
 import { SlotFpGlow } from "@/components/lineup/SlotFpGlow";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
@@ -23,6 +24,14 @@ import { type CardDragItem, DRAG_TYPES, type TokenDragItem } from "./drag-types"
 
 type Props = {
   position: LineupPosition;
+  /**
+   * Polish spec §207 (Phase 51). Slot id used to look up live FP via
+   * `useLiveSlotFp`. When the realtime store has fresh data for this
+   * slot it overrides `card.contestFp` so the card's footer ticks
+   * live without a page refresh. Null/undefined in pre-submit
+   * states where the slot hasn't been written yet.
+   */
+  slotId: string | null;
   card: LineupCardVM | null;
   appliedToken: {
     type: string;
@@ -69,7 +78,8 @@ export function LineupSlot(props: Props) {
 
 function LineupSlotInner({
   position,
-  card,
+  slotId,
+  card: cardProp,
   appliedToken,
   locked,
   gameInfo,
@@ -80,6 +90,18 @@ function LineupSlotInner({
   onRemoveStarter,
   depleteEvent,
 }: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
+  // §207 (Phase 51). Override card.contestFp with live data when
+  // available. Static prop is the fallback (server-rendered initial
+  // value); the hook returns null pre-submit / outside provider.
+  const liveFp = useLiveSlotFp(slotId);
+  const card = cardProp
+    ? liveFp
+      ? {
+          ...cardProp,
+          contestFp: liveFp.liveFp + liveFp.finalFp,
+        }
+      : cardProp
+    : null;
   const isPitcher = isPitcherSlot(position);
   const reducedMotion = useReducedMotion();
 

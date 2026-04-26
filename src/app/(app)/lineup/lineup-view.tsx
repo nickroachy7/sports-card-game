@@ -32,6 +32,7 @@ import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupGrid } from "@/components/lineup/LineupGrid";
 import { LineupShell } from "@/components/lineup/LineupShell";
 import { type FeedPlayer, LiveEventsProvider } from "@/components/lineup/LiveEventsProvider";
+import { RealtimeStatusBanner } from "@/components/lineup/RealtimeStatusBanner";
 import { SelectionPanel } from "@/components/lineup/SelectionPanel";
 import { TokenTray } from "@/components/lineup/TokenTray";
 import { useAutoScrollOnDrag } from "@/components/lineup/use-autoscroll-on-drag";
@@ -1161,8 +1162,21 @@ export function LineupView(props: LineupViewProps) {
         lineupPlayers={lineupPlayers}
         contestGameIds={props.contestGameIds}
         gameMatchupById={props.gameMatchupById}
+        // §207-§208 (Phase 51). Realtime-driven live data.
+        slotsInitial={props.slots.map((s) => ({
+          slotId: s.slotId,
+          liveFp: s.liveFp,
+          finalFp: s.finalFp,
+        }))}
+        entryScoreInitial={{
+          liveScore: props.liveScore,
+          finalScore: props.finalScore,
+        }}
+        gameStateInitial={props.gameStateById}
+        entryId={props.entryId}
       >
         <CardContractEventsProvider rosteredCardIds={rosteredCardIds}>
+          <RealtimeStatusBanner />
           {shell}
         </CardContractEventsProvider>
       </LiveEventsProvider>
