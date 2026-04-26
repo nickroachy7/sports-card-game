@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { createBrowserClient } from "@/lib/db/supabase-browser";
+import { applyGameStateTrustGate } from "@/lib/lineup/game-trust";
 import type { LiveGameStateSnapshot } from "@/lib/lineup/types";
 import {
   eventActionLabel,
@@ -517,9 +518,11 @@ function applyGameStateUpdate(
   setter((prev) => {
     const m = new Map(prev);
     const existing = m.get(id);
-    m.set(id, {
-      // Prefer the updated row's value when present; fall back to
-      // existing for fields realtime might omit.
+    // §213 (Phase 51 hotfix). Apply the trust predicate at the
+    // realtime override too — without this, BDL's bogus 0-0 finals
+    // bypass the SQL display CTE that the server-rendered prop
+    // already demoted, and the pill regresses to "FINAL T 0-0".
+    const merged: LiveGameState = {
       status,
       scheduledStart: next.scheduled_start ?? existing?.scheduledStart ?? null,
       currentInning:
@@ -531,7 +534,8 @@ function applyGameStateUpdate(
         next.current_outs !== undefined ? next.current_outs : (existing?.currentOuts ?? null),
       homeRuns: next.home_runs !== undefined ? next.home_runs : (existing?.homeRuns ?? null),
       awayRuns: next.away_runs !== undefined ? next.away_runs : (existing?.awayRuns ?? null),
-    });
+    };
+    m.set(id, applyGameStateTrustGate(merged));
     return m;
   });
 }

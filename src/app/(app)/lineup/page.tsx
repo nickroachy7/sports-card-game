@@ -10,6 +10,7 @@ import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { getDb } from "@/lib/db/client";
 import { createServerClient } from "@/lib/db/supabase";
 import { fetchGameMatchupsById, fetchSlotGameByCardId } from "@/lib/lineup/fetch-slot-games";
+import { applyGameStateTrustGate } from "@/lib/lineup/game-trust";
 import type { LineupCardVM, LineupSlotVM, LineupTokenVM } from "@/lib/lineup/types";
 import { mlbamHeadshotUrl } from "@/lib/mlb/mlbam-headshot";
 
@@ -247,7 +248,12 @@ export default async function LineupPage() {
     `);
     const out: Record<string, LiveGameState> = {};
     for (const r of res.rows) {
-      out[r.id] = {
+      // §213 (Phase 51 hotfix). Demote untrustworthy finals here too.
+      // Mirrors the SQL CTE in fetchSlotGameByCardId; without this,
+      // the LiveEventsProvider's initial seed renders raw bogus
+      // finals before the realtime override (which also gates) kicks
+      // in.
+      out[r.id] = applyGameStateTrustGate({
         status: r.status,
         scheduledStart: r.scheduled_start,
         currentInning: r.current_inning,
@@ -255,7 +261,7 @@ export default async function LineupPage() {
         currentOuts: r.current_outs,
         homeRuns: r.home_runs,
         awayRuns: r.away_runs,
-      };
+      });
     }
     return out;
   };
