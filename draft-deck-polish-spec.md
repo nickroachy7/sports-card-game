@@ -9366,3 +9366,107 @@ gone. The event feed time-gate (§210) keeps narration honest.
 The reconnect banner (§211) tells the user when broadcasts
 pause.
 
+
+---
+
+## 213. P50 time-gate retraction (Phase 52)
+
+### What broke
+
+P50 (§202) added a time-gate to `_apply_game_event_to_lineups`
++ `_backfill_entry_live_fp` rejecting events whose
+`created_at < game.scheduled_start`. The framing was "BDL pre-sim
+noise shouldn't credit live_fp."
+
+That was a misdiagnosis. **BDL's sandbox sim IS the game.** It
+pre-simulates the entire slate ~24h in advance and fires all
+events in one burst the night before — there is no second
+"real" event stream during game time. With the gate active,
+ALL sandbox events get rejected and zero FP credits.
+
+Direct evidence: prior slates (Apr 23 / Apr 24) finalized with
+33 + 38 FP for the same user precisely because the trigger had
+no time-gate yet. Adding the gate broke the only working path.
+
+### Decision — revert
+
+Migration 0069 drops the time-gate from both the trigger and
+the backfill SQL fn. All events apply FP regardless of
+event-vs-scheduled-start ordering. The P51 `passesTimeGate`
+filter on the event feed is also removed.
+
+### What stays
+
+- §190 `is_trustworthy_final` predicate (display demote of
+  bogus "FINAL T 0-0" pills) — different concern, still correct.
+- `_backfill_entry_live_fp` itself + its `create_contest_entry`
+  hook — P50 §203 is still a valid path; just without the gate.
+
+### Lessons
+
+- The "pre-sim ghost FP" complaint that motivated P50 was a
+  symptom of a different problem (entry created mid-sim, after
+  trigger fired for events that lacked a slot to credit). The
+  backfill alone solves that — gating doesn't.
+- Sandbox semantics ≠ prod semantics. In real prod BDL events
+  presumably fire in real time during games. The time-gate
+  would be a no-op there. Designing around sandbox quirks risks
+  exactly this kind of regression.
+
+---
+
+## 214. Webhook handler updates game scores from event payload
+
+### What broke
+
+`game.home_runs` / `game.away_runs` only got populated by:
+1. Schedule prefetch cron (daily snapshot — wrong by mid-game).
+2. `reconcileGame` at game-end (BDL box-score API — bogus 0-0
+   in sandbox).
+
+The webhook event handler captured `payload.play.home_score` /
+`payload.play.away_score` on the `game_event` row but never
+propagated to the `game` table. Result: live game pills stuck
+on "0-0" for the entire game, even when 15 scoring events
+fired.
+
+### Fix
+
+`handleGameEvent` in `src/lib/mlb/webhook-handler.ts` now
+runs an idempotent UPDATE after each event INSERT:
+
+```sql
+UPDATE public.game
+SET home_runs = COALESCE(${homeScore}, home_runs),
+    away_runs = COALESCE(${awayScore}, away_runs),
+    updated_at = now()
+WHERE id = $game_id
+  AND status IN ('live', 'final')
+  AND (home_runs IS DISTINCT FROM ${homeScore}
+       OR away_runs IS DISTINCT FROM ${awayScore})
+```
+
+`IS DISTINCT FROM` keeps the broadcast signal-only (only
+fires when the score actually changes).
+
+### One-shot backfill
+
+Today's slate had ~14 games with real scores in their
+`game_event` rows that never made it to `game.home_runs`.
+Backfilled via:
+
+```sql
+WITH latest_scores AS (
+  SELECT DISTINCT ON (game_id) game_id, home_score_after, away_score_after
+  FROM game_event
+  WHERE date = current_slate_date()
+  ORDER BY game_id, created_at DESC
+)
+UPDATE game g
+SET home_runs = ls.home_score_after, away_runs = ls.away_score_after
+FROM latest_scores ls WHERE g.id = ls.game_id;
+```
+
+Score pills should now read e.g. "FINAL W 5-3" (TOR @ CLE) and
+"LIVE 4-12" (HOU @ NYY) instead of bogus 0-0.
+

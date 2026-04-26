@@ -315,5 +315,29 @@ async function handleGameEvent(
     `);
   }
 
+  // Polish spec §214 (Phase 52). Update game.home_runs / away_runs
+  // from the event payload's running scoreboard. Pre-P52 the score
+  // columns only got populated at game-end via reconcile, which left
+  // the LIVE pill stuck on 0-0 for the entire game in BDL's sandbox
+  // (and even for live prod games until the box-score reconcile
+  // landed). Use IS DISTINCT FROM to keep updates idempotent —
+  // realtime broadcasts only when the score actually changes.
+  const homeScore = payload.play?.home_score ?? null;
+  const awayScore = payload.play?.away_score ?? null;
+  if (homeScore !== null || awayScore !== null) {
+    await db.execute(sql`
+      UPDATE public.game
+      SET home_runs = COALESCE(${homeScore}::int, home_runs),
+          away_runs = COALESCE(${awayScore}::int, away_runs),
+          updated_at = now()
+      WHERE id = ${gameId}::uuid
+        AND status IN ('live', 'final')
+        AND (
+          (${homeScore}::int IS NOT NULL AND home_runs IS DISTINCT FROM ${homeScore}::int)
+          OR (${awayScore}::int IS NOT NULL AND away_runs IS DISTINCT FROM ${awayScore}::int)
+        )
+    `);
+  }
+
   return { dispatched: true, eventType, providerEventId };
 }

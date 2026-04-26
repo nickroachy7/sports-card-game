@@ -254,7 +254,11 @@ export function LiveEventsProvider({
       const rows = (data ?? []) as RawGameEvent[];
       const mapped: FeedEvent[] = [];
       for (const row of rows) {
-        if (!passesTimeGate(row, gameStateInitial)) continue;
+        // §214 (Phase 52) retraction. The P51 time-gate
+        // (created_at >= scheduled_start) was based on the wrong
+        // mental model of BDL's sandbox — see migration 0069's
+        // header. With the gate reverted in the trigger + backfill,
+        // the feed should also stop filtering. All events render.
         const fe = projectRow(row, playerLookup, gameMatchupById);
         if (fe && !seenIdsRef.current.has(fe.id)) {
           seenIdsRef.current.add(fe.id);
@@ -281,8 +285,8 @@ export function LiveEventsProvider({
         { event: "INSERT", schema: "public", table: "game_event" },
         (payload) => {
           const row = payload.new as RawGameEvent;
-          // §206 — apply the same time-gate as the live_fp trigger.
-          if (!passesTimeGate(row, gameStateRef.current)) return;
+          // §214 (Phase 52) — time-gate retracted; feed mirrors the
+          // trigger's all-events-credit behavior.
           const fe = projectRow(row, playerLookup, gameMatchupById);
           if (!fe) return;
           if (seenIdsRef.current.has(fe.id)) return;
@@ -361,15 +365,7 @@ export function LiveEventsProvider({
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [playerIds, playerLookup, contestGameIds, gameMatchupById, gameStateInitial, entryId]);
-
-  // Mirror of the `gameState` Map that lives on a ref so realtime
-  // INSERT handlers (which capture `gameStateInitial` at mount time)
-  // can read the freshest values without re-binding the channel.
-  const gameStateRef = useRef<Map<string, LiveGameState>>(gameState);
-  useEffect(() => {
-    gameStateRef.current = gameState;
-  }, [gameState]);
+  }, [playerIds, playerLookup, contestGameIds, gameMatchupById, entryId]);
 
   // Derive per-player latest + latest-inning from events. `events` is
   // already newest-first (we prepend on INSERT + initial fetch orders
@@ -474,28 +470,6 @@ export function useLiveConnectionStatus(): ConnectionStatus {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────
-
-/**
- * Polish spec §206 (Phase 51). Reject events whose row INSERT
- * preceded the game's `scheduled_start` — these are BDL pre-sim
- * noise that the live_fp trigger correctly skips. The feed
- * shouldn't display them either.
- *
- * Games not present in the gameState map (or with NULL
- * scheduled_start) are also rejected — without a known start
- * time we can't admit the event.
- */
-function passesTimeGate(
-  row: RawGameEvent,
-  gameStateInitial: Record<string, LiveGameState> | Map<string, LiveGameState>,
-): boolean {
-  const gs =
-    gameStateInitial instanceof Map
-      ? gameStateInitial.get(row.game_id)
-      : gameStateInitial[row.game_id];
-  if (!gs?.scheduledStart) return false;
-  return new Date(row.created_at).getTime() >= new Date(gs.scheduledStart).getTime();
-}
 
 /**
  * Polish spec §208 (Phase 51). Update the gameState Map in place
