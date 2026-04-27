@@ -10367,3 +10367,93 @@ Sort by `event_at DESC` (player events) or `inferred_at DESC`
 - `src/components/lineup/use-feed-entries.ts` — new hook.
 - `src/app/(app)/lineup/lineup-view.tsx` — drop auto-sub wiring.
 
+---
+
+## 227. Sidebar polish — Pack buttons + Events empty state (Phase 58)
+
+Follow-on tweaks to §226 after first user review of the new tabs.
+
+### Pack tab refinements
+
+**Coin balance row removed.** Was duplicating the value already
+shown in the page header. Frees ~36px of vertical space.
+
+**Buy buttons split.** Pre-§227 the Packs section had a x1/x5/x10
+toggle followed by a single "Buy N pack(s)" button — two
+interactions per purchase. Replaced with three full-width stacked
+buttons, each its own buy CTA:
+
+```
+┌────────────────────────────────────┐
+│ ×1   Buy 1 pack             250c   │
+├────────────────────────────────────┤
+│ ×5   Buy 5 packs          1,250c   │
+├────────────────────────────────────┤
+│ ×10  Buy 10 packs         2,500c   │
+└────────────────────────────────────┘
+```
+
+Each button shows: multiplier, action verb, total cost. When
+unaffordable: muted opacity + "need Xc" subline. Mid-flight: the
+specific button shows "Opening…" while the others stay clickable
+if affordable.
+
+A `savings` line is wired in but only renders when bulk pricing
+introduces a non-linear discount (currently linear at 250c each,
+so the line is silent today). Keeps the integration cost zero
+when the economy team adds a discount later.
+
+**Pack odds → tooltip.** Replaced the "Pack odds in economy
+config" footer text-link with a small `?` icon next to the
+"Packs" section header. Tooltip body shows the tier-rarity
+ordering with color dots (Bronze → Silver → Gold → Diamond) plus
+a one-liner about the daily-pack skew. Exact percentages are
+intentionally omitted — they live in `economy_config.pack_value_weights`
+which adjusts season-to-season; pinning specific numbers in the
+UI sets the wrong expectation.
+
+### Events tab — better empty state
+
+Replaced the bare "Waiting for first pitch…" copy with an
+upcoming-games list. During the daytime window between page load
+and the slate's first first-pitch (typically 5+ hours), users now
+see:
+
+```
+COMING UP                     8 GAMES
+┌────────────────────────────────────┐
+│ TB @ CLE                    6:10p  │
+│ STL @ PIT                   6:40p  │
+│ BOS @ TOR                   7:07p  │
+│ SEA @ MIN                   7:40p  │
+│ LAA @ CHW                   7:40p  │
+│ NYY @ TEX                   8:05p  │
+│ CHC @ SD                    9:40p  │
+│ MIA @ LAD                  10:10p  │
+└────────────────────────────────────┘
+Live events appear here once games start.
+```
+
+When all games are final or there are no scheduled games, falls
+back to a quiet idle line ("No live events. Check back when
+today's games start.").
+
+### Plumbing
+
+- `LiveEventsContextValue` exposes `gameMatchupById` for the
+  empty-state list.
+- New hook `useUpcomingGames(limit)` derives the list from
+  `gameState` (status='scheduled', `scheduledStart > now`) +
+  `gameMatchupById` (for the "AWAY@HOME" labels).
+
+### Files touched in §227
+
+- `src/components/pack/PacksTab.tsx` — coin row removed; buy
+  buttons split into `<PackBuyButton>`; pack-odds `<PackOddsTooltip>`
+  added.
+- `src/components/lineup/EventFeed.tsx` — `<EmptyState>` helper
+  added with upcoming-games list.
+- `src/components/lineup/LiveEventsProvider.tsx` —
+  `gameMatchupById` exposed on context, `useUpcomingGames` hook
+  added.
+

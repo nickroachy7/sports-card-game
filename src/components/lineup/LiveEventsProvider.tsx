@@ -154,6 +154,10 @@ type LiveEventsContextValue = {
   // exposed so the redesigned EventFeed Tier-1 cards can render the
   // player's photo + tier-colored frame without a second query.
   playerMeta: Map<string, FeedPlayer>;
+  // §227 (Phase 58). Game matchup labels — `game.id → "AWAY@HOME"`.
+  // Exposed for the EventFeed empty state so the "Coming up" list
+  // can label upcoming games without re-fetching.
+  gameMatchupById: Record<string, string>;
 };
 
 const LiveEventsContext = createContext<LiveEventsContextValue | null>(null);
@@ -445,8 +449,9 @@ export function LiveEventsProvider({
       gameState,
       cardCareerFp,
       playerMeta: playerLookup,
+      gameMatchupById,
     };
-  }, [events, status, slotFp, entryScore, gameState, cardCareerFp, playerLookup]);
+  }, [events, status, slotFp, entryScore, gameState, cardCareerFp, playerLookup, gameMatchupById]);
 
   return <LiveEventsContext.Provider value={value}>{children}</LiveEventsContext.Provider>;
 }
@@ -546,6 +551,40 @@ export function usePlayerMeta(playerId: string | null | undefined): FeedPlayer |
   const ctx = useContext(LiveEventsContext);
   if (!ctx || !playerId) return null;
   return ctx.playerMeta.get(playerId) ?? null;
+}
+
+/**
+ * Polish spec §227 (Phase 58). Upcoming-games list for the
+ * EventFeed empty state. Returns scheduled games whose
+ * `scheduledStart` is in the future, sorted ascending. Used
+ * during the daytime window before any of today's games have
+ * started.
+ *
+ * Returns `[]` outside the provider or when no games are
+ * scheduled.
+ */
+export type UpcomingGame = {
+  gameId: string;
+  matchup: string; // "AWAY@HOME"
+  scheduledStart: string; // ISO
+};
+
+export function useUpcomingGames(limit = 5): UpcomingGame[] {
+  const ctx = useContext(LiveEventsContext);
+  if (!ctx) return [];
+  const now = Date.now();
+  const out: UpcomingGame[] = [];
+  for (const [gameId, gs] of ctx.gameState.entries()) {
+    if (gs.status !== "scheduled") continue;
+    if (!gs.scheduledStart) continue;
+    const ts = new Date(gs.scheduledStart).getTime();
+    if (Number.isNaN(ts) || ts <= now) continue;
+    const matchup = ctx.gameMatchupById[gameId];
+    if (!matchup) continue;
+    out.push({ gameId, matchup, scheduledStart: gs.scheduledStart });
+  }
+  out.sort((a, b) => new Date(a.scheduledStart).getTime() - new Date(b.scheduledStart).getTime());
+  return out.slice(0, limit);
 }
 
 /**

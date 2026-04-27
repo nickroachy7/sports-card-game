@@ -5,6 +5,7 @@ import {
   type FeedEvent,
   useLiveEvents,
   usePlayerMeta,
+  useUpcomingGames,
 } from "@/components/lineup/LiveEventsProvider";
 import { TIER_FRAME } from "@/lib/card/tiers";
 import { cn } from "@/lib/utils";
@@ -46,9 +47,7 @@ export function EventFeed() {
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pr-1">
         {events.length === 0 ? (
-          <p className="py-8 text-center text-[11px] text-[var(--text-3)]">
-            Waiting for first pitch…
-          </p>
+          <EmptyState />
         ) : (
           <ol className="flex flex-col gap-1.5">
             {events.map((e) => (
@@ -171,6 +170,76 @@ function GameMarker({ event }: { event: FeedEvent }) {
       <span className="h-px flex-1 bg-[var(--border)]" />
     </li>
   );
+}
+
+// ── Empty state (§227 Phase 58) ────────────────────────────────────────
+
+/**
+ * §227. Replaces the bare "Waiting for first pitch…" copy with an
+ * upcoming-games preview. During the daytime window before any of
+ * today's games start, the user sees the slate's scheduled games
+ * with start times instead of dead air.
+ *
+ * When there are no upcoming games (final state or off-day with
+ * an empty slate), falls back to a quiet idle line.
+ */
+function EmptyState() {
+  const upcoming = useUpcomingGames(8);
+
+  if (upcoming.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-10 text-center">
+        <span className="text-[11px] text-[var(--text-3)]">No live events.</span>
+        <span className="text-[10px] text-[var(--text-3)]">
+          Check back when today's games start.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
+          Coming up
+        </span>
+        <span className="font-mono text-[9px] text-[var(--text-3)]">
+          {upcoming.length} {upcoming.length === 1 ? "game" : "games"}
+        </span>
+      </div>
+      <ol className="flex flex-col gap-1">
+        {upcoming.map((g) => (
+          <li
+            key={g.gameId}
+            className="flex items-baseline justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5"
+          >
+            <span className="font-mono text-[11px] text-[var(--text-2)] uppercase tracking-wider">
+              {g.matchup}
+            </span>
+            <span className="font-mono text-[10px] text-[var(--text-3)] tabular-nums">
+              {formatGameTime(g.scheduledStart)}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="pt-1 text-center text-[10px] text-[var(--text-3)] italic">
+        Live events appear here once games start.
+      </p>
+    </div>
+  );
+}
+
+function formatGameTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  // ET-friendly short time. The user's own browser timezone is
+  // close enough — most users live in ET; PT users will see their
+  // local time anyway. Avoid hard-coding a TZ to respect the
+  // user's locale.
+  return d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 // ── Connection dot ─────────────────────────────────────────────────────
