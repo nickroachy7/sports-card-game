@@ -10152,3 +10152,218 @@ the user understands as "we're not making a dishonest forecast yet."
   - `TIER_BASELINE_FP` renamed `_TIER_BASELINE_FP` (dead-code marker).
 - Polish spec §225.
 
+---
+
+## 226. Sidebar redesign — Lineup / Events / Packs (Phase 58)
+
+### Problem
+
+Current sidebar layout (post-§143) is:
+
+```
+┌─────────────────────────────────┐
+│ HEADLINE (score / status)        │ ← always visible
+│ ROSTER (10 rows)                 │ ← always visible, scrolls
+├─────────────────────────────────┤
+│ [Actions] [Events] [Packs]       │ ← tabs
+│ Auto-sub mode + Warnings         │ ← Actions tab
+│ ...                              │
+└─────────────────────────────────┘
+```
+
+Three issues with this:
+
+1. **Actions tab is mostly dead weight.** Auto-sub mode is going
+   away (sticky pin/unpin from §175 already covers carry-over),
+   leaving just the Warnings section. Doesn't need a whole tab.
+2. **Lineup roster is always-visible above tabs**, eating vertical
+   space that would be better spent on whichever tab the user is
+   viewing. When a user is on the Events tab they don't need to
+   see the roster too.
+3. **Events feed has no visual hierarchy.** Game state transitions
+   (first pitch, end of inning, final) render with the same weight
+   as batter events that move the user's score. The signal-to-noise
+   tilts against the events users actually care about.
+
+### Decision
+
+Three-tab sidebar, headline persistent above tabs, no scroll except
+in Events:
+
+```
+┌─────────────────────────────────┐
+│ HEADLINE (score / status)        │ ← persistent, ~80px
+│ WARNINGS (only when present)     │ ← persistent, ~30-60px
+├─────────────────────────────────┤
+│ [Lineup] [Events] [Packs]        │ ← tabs, default Lineup
+├─────────────────────────────────┤
+│                                  │
+│ Tab body (no scroll except       │
+│ Events)                          │
+│                                  │
+└─────────────────────────────────┘
+```
+
+#### Tab inventory
+
+| Tab | Body | Scroll? |
+|---|---|---|
+| **Lineup** | 10 roster rows (player, status pill, FP cell, sticky pin) | No — fits in viewport |
+| **Events** | Hierarchical event feed (see below) | Yes — events stream, user scrolls back/forward |
+| **Packs** | Daily pack timer + buy buttons + coin balance | No — fits in viewport |
+
+Default tab on load: **Lineup**.
+
+#### Headline
+
+Stays in current `<Headline>` shape (§141). All three states render
+above the tabs:
+
+- **Drafting** — `Drafting · 5/10 slots filled` + Projected 0.0 FP
+- **Live** — `Live · T5 · 1 of 4 games` + live FP
+- **Final** — `Contest final` + final FP
+
+#### Warnings
+
+Migrate from inside the Actions tab to a row directly below the
+headline, above the tabs. Render only when warnings exist (no "No
+warnings." copy). Format unchanged from the current Actions-tab
+version — position label, player short name, reason chip in
+gold.
+
+When 4+ warnings, collapse to "+N more" with click-to-expand.
+(This is the only no-scroll tradeoff — header height stays bounded.)
+
+#### Auto-sub mode → REMOVED
+
+- UI: drop entirely from the sidebar. No replacement.
+- Server action `setAutoSubMode` → kept on disk but no longer
+  invoked from the lineup page. Future cleanup phase removes it +
+  the underlying column.
+- Sticky pin/unpin (§175) is the canonical carry-over mechanism;
+  auto-sub was a competing concept that confused users.
+
+### Events tab — visual hierarchy
+
+Two tiers of feed entries:
+
+#### Tier 1: Player events (high prominence)
+
+Events that moved the user's FP. Layout:
+
+```
+┌──────────────────────────────────────┐
+│ [photo] Aaron Judge       +10.0 FP   │
+│         HR · T5 · vs TEX     7:42p   │
+└──────────────────────────────────────┘
+```
+
+- **Player photo** on the left (32px). Falls back to team logo if
+  `card.photoUrl` is null.
+- **Player name** (medium weight) + FP delta (right-aligned, mono,
+  emerald for positive, red for negative).
+- **Action line** below — the play description, inning, opponent
+  abbr, time.
+- Rendered as a card with subtle border + tier-colored left edge
+  (mirrors the player's card tier color).
+
+Token fires/misses are Tier-1 events too — same card shape with
+a 🪙 token glyph instead of the photo + bonus FP delta:
+
+```
+┌──────────────────────────────────────┐
+│ [🪙]  Token hit · Multi-Hit Bonus     │
+│       Aaron Judge        +5.0 FP     │
+└──────────────────────────────────────┘
+```
+
+#### Tier 2: Game-state events (subtle, divider-style)
+
+Game starting, inning transitions, game ending. Render as a
+horizontal divider with centered text — no card, no photo, muted
+color, smaller font:
+
+```
+─────────  First pitch · NYY @ HOU  ─────────
+─────────         T5 · 2-1            ─────────
+─────────         Final · 5-3            ─────────
+```
+
+End-of-inning entries are **generic** per the user's spec — just
+the inning marker + score, no per-player breakdown. Acts purely
+as a chapter divider in the feed so the user can scan when each
+inning happened without their FP-relevant events being lost in
+the noise.
+
+#### Event ordering + scroll
+
+Newest at top (current behavior, unchanged). Scroll surface bound
+to the tab body, not the full sidebar. Initial load fetches 50
+events; older events fade in as the user scrolls down (lazy with
+50-event chunks).
+
+### Implementation plan
+
+#### `AppSidebar.tsx`
+
+- Move the existing `<Headline>` + a new `<HeadlineWarnings>`
+  block above the `<Tabs>`.
+- Move existing `RosterRow` × 10 into a new `<LineupTab>` body.
+- Remove the entire `<LineupActions>` block (auto-sub fieldset).
+- Rename `actions` tab to `lineup`.
+- Restructure `<EventFeed>` to render Tier-1 player cards + Tier-2
+  divider markers based on event type.
+
+#### `EventFeed.tsx` (new file split out from current inline impl)
+
+- Read `events` from `useLiveEvents()` (existing hook).
+- Read `gameState` from a new helper `useLiveGameState` calls
+  (already exists per §208).
+- For each event, project into one of two render shapes:
+  - `PlayerEventCard` — Tier-1 high-prominence card.
+  - `GameMarker` — Tier-2 divider strip.
+- Synthetic markers (game start, end-of-inning, final) injected
+  client-side from `gameState` transitions; player events come
+  straight from `game_event` realtime.
+
+#### `useFeedEntries` (new hook)
+
+Merges raw events + synthetic game markers into a single
+chronologically-ordered list:
+
+```ts
+type FeedEntry =
+  | { kind: 'player'; …row data… }
+  | { kind: 'token';  …row data… }
+  | { kind: 'marker'; …game state transition… };
+```
+
+Sort by `event_at DESC` (player events) or `inferred_at DESC`
+(synthetic markers using game_state UPDATE timestamps).
+
+#### `lineup-view.tsx`
+
+- Remove `autoSubMode` + `setAutoSubMode` call site.
+- Remove `mode` state.
+- Remove auto-sub-related props passed to `<AppSidebar>`.
+
+### Out of scope
+
+- Toast notifications (the user explicitly chose feed-only).
+- Sound effects (separate UX call).
+- "Pop up" modal flows for big moments (e.g. tier-up celebrations) —
+  those have their own existing flow per §172/§118 and aren't
+  changing here.
+- Settings panel for per-event-type opt-in (could come later if
+  the feed feels noisy in practice).
+
+### Files touched
+
+- `src/components/layout/AppSidebar.tsx` — main restructure.
+- `src/components/lineup/EventFeed.tsx` — extracted from inline,
+  hierarchy added.
+- `src/components/lineup/PlayerEventCard.tsx` — new Tier-1 component.
+- `src/components/lineup/GameMarker.tsx` — new Tier-2 divider.
+- `src/components/lineup/use-feed-entries.ts` — new hook.
+- `src/app/(app)/lineup/lineup-view.tsx` — drop auto-sub wiring.
+

@@ -7,12 +7,7 @@ import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { toast } from "sonner";
 import { quickSellCards } from "@/app/actions/cards";
-import {
-  setAutoSubMode,
-  swapLineupSlots,
-  toggleSlotSticky,
-  updateLineupSlot,
-} from "@/app/actions/lineup";
+import { swapLineupSlots, toggleSlotSticky, updateLineupSlot } from "@/app/actions/lineup";
 import type { OpenPackResult, OpenPacksBatchResult } from "@/app/actions/packs";
 import { fetchRevealedCards, type RevealedCard } from "@/app/actions/packs-reveal";
 import {
@@ -43,7 +38,7 @@ import { TokenDragLayer } from "@/components/token/TokenDragLayer";
 import { TokenOverflowResolveModal } from "@/components/token/TokenOverflowResolveModal";
 import { Button } from "@/components/ui/button";
 import type { PackType, TokenType } from "@/lib/contracts/cards";
-import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
+import type { LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import type {
   LineupCardVM,
@@ -100,7 +95,10 @@ export function LineupView(props: LineupViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
-  const [mode, setMode] = useState<AutoSubMode>(props.autoSubMode);
+  // Polish spec §226 (Phase 58). Auto-sub mode UI is removed; the
+  // sticky pin/unpin (§175) handles all carry-over semantics.
+  // `setAutoSubMode` server action stays on disk for one cleanup
+  // phase but is no longer invoked from this view.
   // Polish spec §96 (Phase 32). Auto-scroll the main container when
   // a drag is in progress near the viewport edge. Without this,
   // cards buried below the fold in the CardsPanel can't be dragged
@@ -366,7 +364,17 @@ export function LineupView(props: LineupViewProps) {
     const out: FeedPlayer[] = [];
     for (const pos of LINEUP_POSITIONS) {
       const card = slotFills[pos].card;
-      if (card) out.push({ playerId: card.playerId, displayName: shortName(card.playerName) });
+      if (card) {
+        out.push({
+          playerId: card.playerId,
+          displayName: shortName(card.playerName),
+          // §226 (Phase 58). Photo / team / tier feed the EventFeed's
+          // Tier-1 PlayerEventCard renderer.
+          photoUrl: card.photoUrl,
+          teamAbbr: card.teamAbbreviation,
+          tier: card.tier,
+        });
+      }
     }
     return out;
   }, [slotFills]);
@@ -567,17 +575,6 @@ export function LineupView(props: LineupViewProps) {
         }
       }
       router.refresh();
-    });
-  }
-
-  function handleModeChange(nextMode: AutoSubMode) {
-    setMode(nextMode);
-    startTransition(async () => {
-      const result = await setAutoSubMode({ entryId: props.entryId, mode: nextMode });
-      if (!result.ok) {
-        toast.error(result.error.message);
-        setMode(props.autoSubMode);
-      }
     });
   }
 
@@ -1103,8 +1100,6 @@ export function LineupView(props: LineupViewProps) {
             liveScore={props.liveScore}
             finalScore={props.finalScore}
             contestGameIds={props.contestGameIds}
-            autoSubMode={mode}
-            onAutoSubModeChange={handleModeChange}
             onToggleSticky={(position, next) => {
               // Polish spec §175 (Phase 46) v2. Per-slot sticky pin
               // toggle lives in the sidebar's RosterRow. Fire-and-

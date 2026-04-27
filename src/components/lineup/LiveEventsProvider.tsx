@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 
+import type { CardTier } from "@/lib/contracts/cards";
 import { createBrowserClient } from "@/lib/db/supabase-browser";
 import { applyGameStateTrustGate } from "@/lib/lineup/game-trust";
 import type { LiveGameStateSnapshot } from "@/lib/lineup/types";
@@ -56,10 +57,26 @@ export type FeedPlayer = {
   playerId: string;
   /** Short form name used in the feed row (e.g., "J. Lee"). */
   displayName: string;
+  /** Polish spec §226 (Phase 58). Used by the Tier-1 PlayerEventCard
+   *  in the redesigned EventFeed to render player photo / fall-back
+   *  team logo / tier-colored left edge. */
+  photoUrl: string | null;
+  teamAbbr: string | null;
+  tier: CardTier;
 };
+
+/**
+ * Polish spec §226 (Phase 58). Tag for downstream consumers (the
+ * EventFeed) to pick a render shape — Tier 1 player card vs Tier 2
+ * subtle game-state divider. Computed at projection time so the
+ * feed component stays a pure renderer.
+ */
+export type FeedEventKind = "player" | "token" | "game-marker";
 
 export type FeedEvent = {
   id: string;
+  /** §226. Discriminator for the EventFeed renderer. */
+  kind: FeedEventKind;
   playerId: string;
   player: string;
   action: string;
@@ -133,6 +150,10 @@ type LiveEventsContextValue = {
   // mirrors event FP onto `card.career_fp_total`. Components consume
   // via `useLiveCardFp(cardId)`.
   cardCareerFp: Map<string, number>;
+  // §226 (Phase 58). Player metadata lookup — photo, team, tier —
+  // exposed so the redesigned EventFeed Tier-1 cards can render the
+  // player's photo + tier-colored frame without a second query.
+  playerMeta: Map<string, FeedPlayer>;
 };
 
 const LiveEventsContext = createContext<LiveEventsContextValue | null>(null);
@@ -312,12 +333,20 @@ export function LiveEventsProvider({
         // §208 — update gameState map first so SlotGameState pill
         // re-renders inning/outs/score.
         applyGameStateUpdate(setGameState, next);
-        // Then narrate status transitions in the feed.
+        // Then narrate status transitions in the feed (Tier 2 markers).
         const fe = projectGameTransition(prev, next, gameMatchupById);
-        if (!fe) return;
-        if (seenIdsRef.current.has(fe.id)) return;
-        seenIdsRef.current.add(fe.id);
-        setEvents((prevState) => [fe, ...prevState].slice(0, 50));
+        if (fe && !seenIdsRef.current.has(fe.id)) {
+          seenIdsRef.current.add(fe.id);
+          setEvents((prevState) => [fe, ...prevState].slice(0, 50));
+        }
+        // §226 (Phase 58). Inning-end markers — emitted when the
+        // current_inning_half flips. Stable id via (gameId, inning,
+        // half_that_just_ended) so duplicate UPDATEs don't double-add.
+        const inningMarker = projectInningMarker(prev, next, gameMatchupById);
+        if (inningMarker && !seenIdsRef.current.has(inningMarker.id)) {
+          seenIdsRef.current.add(inningMarker.id);
+          setEvents((prevState) => [inningMarker, ...prevState].slice(0, 50));
+        }
       })
       .on(
         "postgres_changes",
@@ -415,8 +444,9 @@ export function LiveEventsProvider({
       entryScore,
       gameState,
       cardCareerFp,
+      playerMeta: playerLookup,
     };
-  }, [events, status, slotFp, entryScore, gameState, cardCareerFp]);
+  }, [events, status, slotFp, entryScore, gameState, cardCareerFp, playerLookup]);
 
   return <LiveEventsContext.Provider value={value}>{children}</LiveEventsContext.Provider>;
 }
@@ -503,6 +533,19 @@ export function useLiveGameState(gameId: string | null | undefined): LiveGameSta
 export function useLiveConnectionStatus(): ConnectionStatus {
   const ctx = useContext(LiveEventsContext);
   return ctx?.status ?? "connecting";
+}
+
+/**
+ * Polish spec §226 (Phase 58). Per-player metadata lookup for the
+ * EventFeed Tier-1 card renderer (photo URL, team abbreviation,
+ * tier). Returns null when the player isn't in the user's lineup
+ * (e.g. an opposing player whose event somehow surfaces) or
+ * outside the provider.
+ */
+export function usePlayerMeta(playerId: string | null | undefined): FeedPlayer | null {
+  const ctx = useContext(LiveEventsContext);
+  if (!ctx || !playerId) return null;
+  return ctx.playerMeta.get(playerId) ?? null;
 }
 
 /**
@@ -604,6 +647,7 @@ function projectRow(
   const role: FpDeltaRole = batter ? "batter" : "pitcher";
   return {
     id: row.id,
+    kind: "player",
     playerId: matched.playerId,
     player: matched.displayName,
     action: eventActionLabel(row.event_type, row.play_type),
@@ -657,8 +701,9 @@ function projectGameTransition(
   if (prevStatus === "scheduled" && nextStatus === "live") {
     return {
       id: `game-start-${id}`,
+      kind: "game-marker",
       playerId: id, // not a player — using game id so dedup works per game.
-      player: "⚾ Game",
+      player: "Game",
       action: "First pitch",
       delta: 0,
       timeLabel,
@@ -674,8 +719,9 @@ function projectGameTransition(
         : "";
     return {
       id: `game-end-${id}`,
+      kind: "game-marker",
       playerId: id,
-      player: "⚾ Game",
+      player: "Game",
       action: `Final${score}`,
       delta: 0,
       timeLabel,
@@ -685,6 +731,64 @@ function projectGameTransition(
     };
   }
   return null;
+}
+
+/**
+ * §226 (Phase 58). Inning-end markers — Tier 2 dividers in the feed.
+ * Triggers on `current_inning_half` flip:
+ *   - top → bottom of inning N      → "End of T{N}"
+ *   - bottom of N → top of N+1      → "End of B{N}"
+ *
+ * Stable id `inning-end-${gameId}-${endedInning}-${endedHalf}` ensures
+ * duplicate UPDATEs don't double-add. Generic content per the spec —
+ * no per-player breakdown; this is a chapter divider, not an event.
+ */
+function projectInningMarker(
+  prev: Partial<
+    RawGameRow & { current_inning?: number | null; current_inning_half?: string | null }
+  >,
+  next: Partial<
+    RawGameRow & { current_inning?: number | null; current_inning_half?: string | null }
+  >,
+  gameMatchupById: Record<string, string>,
+): FeedEvent | null {
+  const id = next.id;
+  if (typeof id !== "string") return null;
+  const prevHalf = normalizeHalf(prev.current_inning_half ?? null);
+  const nextHalf = normalizeHalf(next.current_inning_half ?? null);
+  const prevInning = typeof prev.current_inning === "number" ? prev.current_inning : null;
+  const nextInning = typeof next.current_inning === "number" ? next.current_inning : null;
+  // No transition or missing data → bail.
+  if (prevHalf === nextHalf && prevInning === nextInning) return null;
+  if (prevInning === null || prevHalf === null) return null;
+  // Only emit when the half-inning that JUST ended is well-defined.
+  // Detect actual transitions:
+  //   top N → bottom N        (end of T{N})
+  //   bottom N → top N+1      (end of B{N})
+  const isTopEnd = prevHalf === "top" && nextHalf === "bottom" && prevInning === nextInning;
+  const isBottomEnd =
+    prevHalf === "bottom" && nextHalf === "top" && (nextInning ?? -1) > prevInning;
+  if (!isTopEnd && !isBottomEnd) return null;
+
+  const half = prevHalf === "top" ? "T" : "B";
+  const score =
+    typeof next.home_runs === "number" && typeof next.away_runs === "number"
+      ? `${next.home_runs}-${next.away_runs}`
+      : null;
+  const action = score ? `End of ${half}${prevInning} · ${score}` : `End of ${half}${prevInning}`;
+  const now = new Date();
+  return {
+    id: `inning-end-${id}-${prevInning}-${prevHalf}`,
+    kind: "game-marker",
+    playerId: id,
+    player: "Inning",
+    action,
+    delta: 0,
+    timeLabel: now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+    inning: prevInning,
+    inningHalf: prevHalf,
+    gameMatchup: gameMatchupById[id] ?? null,
+  };
 }
 
 function projectTokenTrigger(
@@ -703,8 +807,9 @@ function projectTokenTrigger(
   const action = next.triggered ? `Token hit · +${bonus.toFixed(1)} FP` : "Token missed";
   return {
     id: `token-app-${id}`,
+    kind: "token",
     playerId: id,
-    player: "🪙 Token",
+    player: "Token",
     action,
     delta: next.triggered ? bonus : 0,
     timeLabel,

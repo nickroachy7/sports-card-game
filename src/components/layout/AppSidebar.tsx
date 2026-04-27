@@ -1,6 +1,7 @@
 "use client";
 
 import { Pin, PinOff } from "lucide-react";
+import { useState } from "react";
 
 import type { OpenPacksBatchResult } from "@/app/actions/packs";
 import { EventFeed } from "@/components/lineup/EventFeed";
@@ -15,7 +16,7 @@ import { PacksTab } from "@/components/pack/PacksTab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { CardTier, PackType } from "@/lib/contracts/cards";
-import type { AutoSubMode, LineupPosition } from "@/lib/contracts/lineup";
+import type { LineupPosition } from "@/lib/contracts/lineup";
 import { LINEUP_POSITIONS } from "@/lib/contracts/lineup";
 import { liveLabel } from "@/lib/lineup/status-chip-label";
 import type { LineupCardVM, SlotGameInfo } from "@/lib/lineup/types";
@@ -43,28 +44,32 @@ type SlotFill = {
 };
 
 /**
- * Polish spec §122 (Phase 39) → §140–§143 (Phase 42) — unified lineup
- * sidebar.
+ * Polish spec §226 (Phase 58) — three-tab sidebar with persistent
+ * headline + warnings.
  *
  * Structure (top → bottom):
- *   SlateLine         — date + games-today count (§140)
- *   RosterSection     — 10 rows with tightened padding (§142)
- *   SidebarHeadline   — compact two-line Drafting/Live/Final (§141)
- *   <Tabs>
- *     Lineup Actions  — auto-sub mode + readiness warnings
- *     Live Events     — existing EventFeed
- *     Packs           — inline buy UI (§143, replaces FAB + modal)
+ *   SlateLine          — date + games-today count (§140)
+ *   SidebarHeadline    — Drafting/Live/Final + score (§141), persistent
+ *   HeadlineWarnings   — readiness chips (§226), persistent, only when present
+ *   <Tabs default="lineup">
+ *     Lineup tab       — RosterSection (10 rows)              (no scroll)
+ *     Events tab       — hierarchical EventFeed (scrollable)
+ *     Packs tab        — inline buy UI (§143)                 (no scroll)
  *
- * Roster-above-score order: the roster is the primary object on
- * the page (it IS the lineup); the score is a status indicator for
- * it. Placing the score below reads as a summary line under the
- * thing it summarizes, matches the sports-app box-score convention
- * (totals under the roster, not over it).
+ * Why this shape: the headline + warnings are the high-frequency
+ * "did anything change" surfaces; they belong above the tab fold so
+ * you see them no matter what tab you're on. The roster moves into
+ * a tab so the unused vertical real estate (when you're on Events
+ * or Packs) goes back to the active tab body.
  *
- * Prior phases: §100 (Phase 34) cut team-summary + introduced the
- * post-submit three-block layout; §103 (Phase 35) gave building-
- * state structural parity; §122 merged both into one; §140–§143
- * compressed the top zone + promoted Packs to a tab.
+ * Removed in §226:
+ *   Auto-sub mode UI — sticky pin/unpin (§175) is the canonical
+ *     carry-over mechanism. The setAutoSubMode server action stays
+ *     on disk for one cleanup phase, but no UI invokes it anymore.
+ *
+ * Prior phases: §122 (Phase 39) merged building/post-submit into
+ * one shape; §140–§143 (Phase 42) compressed the top zone + promoted
+ * Packs from FAB → tab.
  */
 type Props = {
   /** Pre-formatted slate date like "Fri, Apr 24". Server formats
@@ -75,10 +80,8 @@ type Props = {
   finalScore: number;
   contestGameIds: string[];
   slotFills: Record<LineupPosition, SlotFill>;
-  autoSubMode: AutoSubMode;
-  onAutoSubModeChange: (mode: AutoSubMode) => void;
-  /** Polish spec §175 (Phase 46) — per-slot sticky toggle moved to
-   *  the sidebar's roster rows. Fires `toggleSlotSticky` action. */
+  /** Polish spec §175 (Phase 46) — per-slot sticky toggle on each
+   *  roster row. Fires `toggleSlotSticky` action. */
   onToggleSticky: (position: LineupPosition, next: boolean) => void;
   // Packs tab inputs (§143). Moved up from the deleted FAB + modal.
   coinBalance: number;
@@ -92,8 +95,8 @@ export function AppSidebar(props: Props) {
   const gamesInSlate = props.contestGameIds.length;
   return (
     <div className="flex h-full flex-col gap-3">
+      {/* §226 (Phase 58) — persistent header zone above the tabs. */}
       <SlateLine slateDate={props.slateDate} gamesInSlate={gamesInSlate} />
-      <RosterSection slotFills={props.slotFills} onToggleSticky={props.onToggleSticky} />
       <SidebarHeadline
         slotFills={props.slotFills}
         entryStatus={props.entryStatus}
@@ -101,11 +104,10 @@ export function AppSidebar(props: Props) {
         finalScore={props.finalScore}
         contestGameIds={props.contestGameIds}
       />
+      <HeadlineWarnings slotFills={props.slotFills} />
       <SidebarTabs
         slotFills={props.slotFills}
-        autoSubMode={props.autoSubMode}
-        onAutoSubModeChange={props.onAutoSubModeChange}
-        allSlotsLocked={LINEUP_POSITIONS.every((pos) => props.slotFills[pos].locked)}
+        onToggleSticky={props.onToggleSticky}
         coinBalance={props.coinBalance}
         dailyPackReady={props.dailyPackReady}
         dailyPackSecondsUntilReady={props.dailyPackSecondsUntilReady}
@@ -536,19 +538,24 @@ function pickFpCell(fill: SlotFill): { text: string; tone: "muted" | "emerald" |
   return { text: "—", tone: "muted" };
 }
 
-// ── Tabs — Actions / Events / Packs (§143) ──────────────────────────
+// ── Tabs — Lineup / Events / Packs (§226 Phase 58) ──────────────────
 
 /**
- * Polish spec §143 (Phase 42). Third tab joins the sidebar: Packs,
- * with an inline buy UI that retired the FAB + modal combo. The
- * tab trigger gets a small gold pulse in the top-right corner when
- * the daily pack is claimable; dismisses once claimed.
+ * Polish spec §226 (Phase 58). Three tabs:
+ *   - Lineup: roster (10 rows) — moved up from above-the-tabs.
+ *   - Events: hierarchical event feed (scrolls).
+ *   - Packs:  inline pack buy UI (§143, unchanged).
+ *
+ * Default tab is Lineup. Pack tab gets a gold pulse when the daily
+ * pack is claimable.
+ *
+ * Pre-§226 fourth piece (Actions tab with auto-sub mode + warnings)
+ * is gone: warnings migrate above the tabs in <HeadlineWarnings>;
+ * auto-sub mode is fully removed (§175 sticky pin replaces it).
  */
 function SidebarTabs({
   slotFills,
-  autoSubMode,
-  onAutoSubModeChange,
-  allSlotsLocked,
+  onToggleSticky,
   coinBalance,
   dailyPackReady,
   dailyPackSecondsUntilReady,
@@ -556,9 +563,7 @@ function SidebarTabs({
   onPacksOpened,
 }: {
   slotFills: Record<LineupPosition, SlotFill>;
-  autoSubMode: AutoSubMode;
-  onAutoSubModeChange: (mode: AutoSubMode) => void;
-  allSlotsLocked: boolean;
+  onToggleSticky: (position: LineupPosition, next: boolean) => void;
   coinBalance: number;
   dailyPackReady: boolean;
   dailyPackSecondsUntilReady: number;
@@ -566,10 +571,10 @@ function SidebarTabs({
   onPacksOpened: (result: OpenPacksBatchResult, packType: PackType) => void;
 }) {
   return (
-    <Tabs defaultValue="actions" className="mt-auto flex min-h-0 flex-1 flex-col gap-3">
+    <Tabs defaultValue="lineup" className="mt-auto flex min-h-0 flex-1 flex-col gap-3">
       <TabsList className="w-full">
-        <TabsTrigger value="actions" className="flex-1 text-xs">
-          Actions
+        <TabsTrigger value="lineup" className="flex-1 text-xs">
+          Lineup
         </TabsTrigger>
         <TabsTrigger value="events" className="flex-1 text-xs">
           Events
@@ -584,13 +589,10 @@ function SidebarTabs({
           )}
         </TabsTrigger>
       </TabsList>
-      <TabsContent value="actions" className="flex flex-col gap-3">
-        <LineupActions
-          slotFills={slotFills}
-          autoSubMode={autoSubMode}
-          onAutoSubModeChange={onAutoSubModeChange}
-          allSlotsLocked={allSlotsLocked}
-        />
+      {/* Lineup tab — roster rows. No scroll: 10 compact rows fit
+          comfortably in the tab body. */}
+      <TabsContent value="lineup" className="flex min-h-0 flex-1 flex-col">
+        <RosterSection slotFills={slotFills} onToggleSticky={onToggleSticky} />
       </TabsContent>
       <TabsContent value="events" className="min-h-0 flex-1">
         <EventFeed />
@@ -608,17 +610,23 @@ function SidebarTabs({
   );
 }
 
-function LineupActions({
-  slotFills,
-  autoSubMode,
-  onAutoSubModeChange,
-  allSlotsLocked,
-}: {
-  slotFills: Record<LineupPosition, SlotFill>;
-  autoSubMode: AutoSubMode;
-  onAutoSubModeChange: (mode: AutoSubMode) => void;
-  allSlotsLocked: boolean;
-}) {
+// ── Headline warnings (§226 Phase 58) ────────────────────────────────
+
+/**
+ * Polish spec §226 (Phase 58). Persistent warnings strip below the
+ * headline, above the tabs. Renders only when at least one warning
+ * exists. Collapses to "+N more" past 3 entries to keep the header
+ * zone bounded — the no-scroll constraint on Lineup + Packs tabs
+ * depends on this.
+ *
+ * Warning types come from `cardWarning(card)`:
+ *   - "expired"        — card's contract is exhausted
+ *   - "IL"             — player on IL
+ *   - "FA/DFA"         — player no longer rostered by an MLB team
+ *   - "1 play" / "2 plays" — about-to-expire contract
+ */
+function HeadlineWarnings({ slotFills }: { slotFills: Record<LineupPosition, SlotFill> }) {
+  const [expanded, setExpanded] = useState(false);
   const warnings = LINEUP_POSITIONS.flatMap((pos) => {
     const card = slotFills[pos].card;
     if (!card) return [];
@@ -627,53 +635,50 @@ function LineupActions({
     return [{ position: pos, playerName: shortName(card.playerName), reason }];
   });
 
+  if (warnings.length === 0) return null;
+
+  const COLLAPSE_THRESHOLD = 3;
+  const visible = expanded ? warnings : warnings.slice(0, COLLAPSE_THRESHOLD);
+  const overflow = warnings.length - visible.length;
+
   return (
-    <>
-      <fieldset
-        disabled={allSlotsLocked}
-        className="flex flex-col gap-1 disabled:opacity-60"
-        aria-label="Auto-sub mode"
-      >
-        <legend className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-          Auto-sub
-        </legend>
-        <ModeRadio
-          label="Smart Auto"
-          value="smart_auto"
-          current={autoSubMode}
-          onChange={onAutoSubModeChange}
-        />
-        <ModeRadio
-          label="Manual Priority"
-          value="manual_priority"
-          current={autoSubMode}
-          onChange={onAutoSubModeChange}
-        />
-      </fieldset>
-      <section className="flex flex-col gap-1">
-        <h3 className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-3)]">
-          Warnings
-        </h3>
-        {warnings.length === 0 ? (
-          <p className="text-[11px] text-[var(--text-3)]">No warnings.</p>
-        ) : (
-          <ul className="flex flex-col gap-0.5">
-            {warnings.map((w) => (
-              <li
-                key={`${w.position}-${w.reason}`}
-                className="grid grid-cols-[2rem_1fr_auto] items-baseline gap-1 text-[11px]"
-              >
-                <span className="font-mono text-[var(--text-3)]">{w.position}</span>
-                <span className="truncate text-[var(--text-2)]">{w.playerName}</span>
-                <span className="font-mono text-[9px] uppercase tracking-wider text-[#D4A647]">
-                  {w.reason}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </>
+    <section
+      className="flex flex-col gap-0.5 rounded-md border border-[#D4A647]/30 bg-[#D4A647]/5 px-2 py-1.5"
+      aria-label="Lineup warnings"
+    >
+      <ul className="flex flex-col gap-0.5">
+        {visible.map((w) => (
+          <li
+            key={`${w.position}-${w.reason}`}
+            className="grid grid-cols-[2rem_1fr_auto] items-baseline gap-1 text-[11px]"
+          >
+            <span className="font-mono text-[var(--text-3)]">{w.position}</span>
+            <span className="truncate text-[var(--text-2)]">{w.playerName}</span>
+            <span className="font-mono text-[9px] uppercase tracking-wider text-[#D4A647]">
+              {w.reason}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {overflow > 0 && !expanded && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="self-start font-mono text-[9px] uppercase tracking-wider text-[#D4A647] hover:text-[#D4A647]/80"
+        >
+          +{overflow} more
+        </button>
+      )}
+      {expanded && warnings.length > COLLAPSE_THRESHOLD && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="self-start font-mono text-[9px] uppercase tracking-wider text-[var(--text-3)] hover:text-[var(--text-2)]"
+        >
+          Collapse
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -691,38 +696,6 @@ function slotSum(slotFills: Record<LineupPosition, SlotFill>, key: "liveFp" | "f
   let total = 0;
   for (const pos of LINEUP_POSITIONS) total += slotFills[pos][key];
   return total;
-}
-
-function ModeRadio({
-  label,
-  value,
-  current,
-  onChange,
-}: {
-  label: string;
-  value: AutoSubMode;
-  current: AutoSubMode;
-  onChange: (v: AutoSubMode) => void;
-}) {
-  const active = value === current;
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-center gap-2 text-sm text-[var(--text-2)] transition-colors",
-        active && "text-[var(--text)]",
-      )}
-    >
-      <input
-        type="radio"
-        name="auto-sub-mode"
-        value={value}
-        checked={active}
-        onChange={() => onChange(value)}
-        className="accent-[var(--text)]"
-      />
-      <span>{label}</span>
-    </label>
-  );
 }
 
 function formatPosition(pos: LineupPosition): string {
