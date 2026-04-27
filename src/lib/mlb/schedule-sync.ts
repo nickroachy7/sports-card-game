@@ -159,17 +159,16 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
               (summary.untrustworthy_finals_overridden ?? 0) + 1;
           }
         }
-        // Polish spec §218 (Phase 54). BDL's `g.date` field is the
-        // game's start time as a UTC ISO timestamp. We use it as the
-        // authoritative `scheduled_start` directly, and convert to
-        // an ET-pivoted slate date for `game.date` so it matches the
-        // 4 AM ET pivot semantics in `current_slate_date()`. Pre-P54
-        // we stored the raw UTC date slice for `game.date` and let
-        // MLB Stats populate `scheduled_start` in a second pass —
-        // that combination introduced an off-by-1-day bug for
-        // evening-ET games (whose UTC timestamp crosses midnight),
-        // because MLB Stats organizes by ET date and we were querying
-        // by UTC date.
+        // Polish spec §218 (Phase 54) + §221 (Phase 55). BDL g.date
+        // is the seed value for scheduled_start and (ET-pivoted) date
+        // on the first INSERT — best-effort, used before MLB Stats has
+        // a chance to refine. After that, the ON CONFLICT clause
+        // preserves whatever is already stored (COALESCE), and the
+        // MLB Stats second pass below is the canonical authority for
+        // both columns. We learned in §221 that BDL g.date is sometimes
+        // 24h late for late-evening ET games (e.g. NYY@TEX 4/27 8:05
+        // PM ET reported as 4/29 00:05 UTC instead of 4/28 00:05 UTC),
+        // so we do not trust it long-term.
         const startTsIso = g.date ?? null;
         await db.execute(sql`
           INSERT INTO public.game (
@@ -203,10 +202,16 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
             ${g.attendance ?? null}
           )
           ON CONFLICT (bdl_game_id) DO UPDATE SET
-            -- §218: trust BDL's date as canonical for date + start.
-            -- Schedule changes (rain delays, postponements) propagate.
-            date = EXCLUDED.date,
-            scheduled_start = EXCLUDED.scheduled_start,
+            -- §221 (Phase 55). BDL g.date is unreliable for late-
+            -- evening ET games (sometimes 24h-late vs MLB Stats canon).
+            -- Once a game has been first-seeded, defer to the MLB Stats
+            -- second-pass (below) for date + scheduled_start. Only set
+            -- here on first conflict if the row's existing values are
+            -- NULL. Schedule changes (rain delays, postponements) come
+            -- in via MLB Stats, which the second pass picks up every
+            -- cron tick.
+            date = COALESCE(public.game.date, EXCLUDED.date),
+            scheduled_start = COALESCE(public.game.scheduled_start, EXCLUDED.scheduled_start),
             status = CASE
               WHEN public.game.status IN ('live', 'final')
                 THEN public.game.status
@@ -234,21 +239,24 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
       }
     }
 
-    // Polish spec §218 (Phase 54). Second pass scope narrowed: only
-    // populates `game_number` for DH disambiguation. `scheduled_start`
-    // is now set authoritatively from BDL's `g.date` field in the
-    // first pass — see §218 header on the INSERT block. Leaving the
-    // MLB Stats matching here in case it's the wrong game (because
-    // we now use ET-pivoted `date` to match), it'd at worst no-op
-    // since the only column we can update is game_number.
+    // Polish spec §221 (Phase 55). MLB Stats second pass is the
+    // canonical source for `scheduled_start` + `date` + `game_number`.
+    // BDL's `g.date` field is sometimes 24h late for late-evening ET
+    // games (e.g. NYY@TEX 8:05 PM ET on 4/27 reported by BDL as
+    // 4/29 00:05 UTC instead of the correct 4/28 00:05 UTC), which
+    // ET-pivoted to the wrong slate date pre-§221. MLB Stats'
+    // `gameDate` field is a UTC ISO timestamp that we trust.
     //
-    // Matching strategy for DH days: MLB Stats may return 2 entries
-    // for a matchup (gameNumber 1 + 2). For each entry, UPDATE the
-    // FIRST unclaimed row that belongs to this matchup. ORDER BY
-    // `IS TRUE DESC` coerces NULL `(game_number = N)` results into
-    // `false`, so claimed rows win the sort and the outer IS-DISTINCT-
-    // FROM gate turns the update into a no-op. Unclaimed NULL rows
-    // only get picked when no claimed row exists.
+    // The match WHERE allows BDL's stored `date` to be off by ±1 day
+    // from MLB Stats' canonical date — covers BDL's late-night bug
+    // without false-matching unrelated games (a same-matchup row at
+    // ±2 days would be a different series).
+    //
+    // DH matching: MLB Stats may return 2 entries for a matchup
+    // (gameNumber 1 + 2). For each entry, UPDATE the FIRST row that
+    // matches the matchup window and is either unclaimed or already
+    // owns this gameNumber. ORDER BY coerces NULL `(game_number = N)`
+    // into false so claimed siblings win the sort.
     try {
       const schedule = await fetchMlbStatsSchedule(iso);
       const sorted = [...schedule].sort((a, b) => a.gameNumber - b.gameNumber);
@@ -256,22 +264,38 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
         const homeAbbr = teamAbbrByMlbStatsId.get(entry.homeMlbStatsTeamId);
         const awayAbbr = teamAbbrByMlbStatsId.get(entry.awayMlbStatsTeamId);
         if (!homeAbbr || !awayAbbr) continue;
+        const startIso = entry.scheduledStartIso;
         const res = await db.execute(sql`
           UPDATE public.game AS g
-          SET game_number = ${entry.gameNumber}::smallint,
+          SET scheduled_start = ${startIso}::timestamptz,
+              date = (${startIso}::timestamptz
+                        AT TIME ZONE 'America/New_York'
+                        - INTERVAL '4 hours')::date,
+              game_number = ${entry.gameNumber}::smallint,
               updated_at = now()
           WHERE g.id = (
             SELECT id FROM public.game
-            WHERE date = ${iso}::date
-              AND home_team_id = (SELECT id FROM public.team WHERE abbreviation = ${homeAbbr})
+            WHERE home_team_id = (SELECT id FROM public.team WHERE abbreviation = ${homeAbbr})
               AND away_team_id = (SELECT id FROM public.team WHERE abbreviation = ${awayAbbr})
+              -- §221 widened window: BDL date can be off by ±1 day.
+              AND date BETWEEN (${iso}::date - INTERVAL '1 day')::date
+                           AND (${iso}::date + INTERVAL '1 day')::date
               AND (game_number IS NULL OR game_number = ${entry.gameNumber}::smallint)
             ORDER BY
               (game_number = ${entry.gameNumber}::smallint) IS TRUE DESC,
+              -- Prefer the row whose stored date is closest to MLB
+              -- Stats' canonical date.
+              ABS(EXTRACT(EPOCH FROM (date - ${iso}::date)))::int ASC,
               created_at ASC
             LIMIT 1
           )
-          AND game_number IS DISTINCT FROM ${entry.gameNumber}::smallint
+          AND (
+            g.scheduled_start IS DISTINCT FROM ${startIso}::timestamptz
+            OR g.date IS DISTINCT FROM (${startIso}::timestamptz
+                                          AT TIME ZONE 'America/New_York'
+                                          - INTERVAL '4 hours')::date
+            OR g.game_number IS DISTINCT FROM ${entry.gameNumber}::smallint
+          )
         `);
         summary.scheduled_starts_updated += res.rowCount ?? 0;
       }

@@ -9749,3 +9749,150 @@ existed at the correct date). After the migration:
 `event_minus_start_minutes = 5.0` for all corrected rows, which is
 the expected post-correction baseline.
 
+---
+
+## 221. MLB Stats canonical for date + scheduled_start (Phase 55)
+
+### Problem
+
+§218 made BDL's `g.date` field the authoritative source for
+`scheduled_start` (and `date`, via ET-pivot). Investigation on the
+April 27 (Monday) slate revealed a second BDL data quality issue:
+`g.date` is sometimes **24 hours late** for late-evening ET games.
+
+Concrete example — NYY @ TEX, April 27, 2026, 8:05 PM ET:
+
+| Source           | start time              | local date |
+|------------------|-------------------------|------------|
+| MLB Stats API    | 2026-04-28T00:05:00Z    | 4/27 ET ✓  |
+| BDL `g.date`     | 2026-04-29T00:05:00Z    | 4/28 ET ✗  |
+
+ET-pivot is innocent (it correctly translates whatever timestamp
+it gets); BDL's payload itself is wrong. Same bug for CHC@SD
+(2026-04-29T01:40Z claimed; truth 2026-04-28T01:40Z) and MIA@LAD
+(claimed 2026-04-29T02:10Z; truth 2026-04-28T02:10Z).
+
+The downstream effect: late-evening games get filed under the
+*next* slate's `date`, the lineup view filters them out of the
+"today's slate" set, and players whose teams ARE playing show as
+OFF in the slot footer.
+
+### Decision
+
+Switch to **MLB Stats canonical** for `date` and `scheduled_start`.
+
+**First-pass INSERT** (`schedule-sync.ts`):
+
+- Continue using BDL's `g.date` as the seed value when a row is
+  brand-new. It's the only source available before MLB Stats has
+  been queried.
+
+**ON CONFLICT**:
+
+- Use `COALESCE(public.game.date, EXCLUDED.date)` and
+  `COALESCE(public.game.scheduled_start, EXCLUDED.scheduled_start)`.
+  Once a row's columns are populated (whether from a prior BDL
+  seed or from a prior MLB Stats correction), BDL never overwrites.
+
+**Second-pass MLB Stats UPDATE** (extended from §218):
+
+```sql
+UPDATE public.game AS g
+SET scheduled_start = ${startIso}::timestamptz,
+    date            = (${startIso}::timestamptz
+                         AT TIME ZONE 'America/New_York'
+                         - INTERVAL '4 hours')::date,
+    game_number     = ${gameNumber}::smallint,
+    updated_at      = now()
+WHERE g.id = (
+  SELECT id FROM public.game
+  WHERE home_team_id = …
+    AND away_team_id = …
+    AND date BETWEEN (${iso}::date - INTERVAL '1 day')::date
+                 AND (${iso}::date + INTERVAL '1 day')::date
+  ORDER BY
+    (game_number = ${gameNumber}::smallint) IS TRUE DESC,
+    ABS(EXTRACT(EPOCH FROM (date - ${iso}::date)))::int ASC,
+    created_at ASC
+  LIMIT 1
+)
+AND ( … IS DISTINCT FROM … )
+```
+
+The match window is widened from `date = ${iso}` (P54) to
+`date BETWEEN ${iso} - 1 day AND ${iso} + 1 day` to catch BDL's
+24h-late case. The ABS-distance ordering picks the row whose
+stored date is closest to MLB Stats' canonical date, so we don't
+accidentally cross-match a different game in the same series.
+
+The IS-DISTINCT-FROM clause keeps the UPDATE idempotent — when
+MLB Stats and our row already agree, no write fires.
+
+### Why this is the right shape
+
+- Schedule changes (rain delays, suspended → resumed, postponements
+  → reschedules) propagate naturally because the second pass fires
+  every cron tick (every 2h) against fresh MLB Stats data.
+- BDL's `g.date` becomes "best-effort initial seed" — the sync still
+  works on day-zero before MLB Stats can be queried, but BDL's
+  inconsistency stops poisoning long-term state.
+- The status no-regress rule (§14) still holds; we only let MLB
+  Stats touch `date`, `scheduled_start`, and `game_number`.
+
+---
+
+## 222. Hotfix: April 27 misdated games (Phase 55)
+
+Three rows on the April 27 prod slate were affected by §221's BDL
+bug:
+
+| bdl_game_id | matchup    | wrong start (UTC)        | corrected start (UTC)    |
+|-------------|------------|--------------------------|--------------------------|
+| 5058197     | NYY @ TEX  | 2026-04-29 00:05:00      | 2026-04-28 00:05:00      |
+| 5058198     | CHC @ SD   | 2026-04-29 01:40:00      | 2026-04-28 01:40:00      |
+| 5058199     | MIA @ LAD  | 2026-04-29 02:10:00      | 2026-04-28 02:10:00      |
+
+Direct prod UPDATE landed before §223's checked-in migration. After
+the fix:
+
+- `public.contest.included_game_ids` for the active 4/27 slate grew
+  from 5 → 8 entries (via `create_daily_contest()` re-run, which
+  picks up the new `date='2026-04-27'` set).
+- The user's lineup slots for NYY (Aaron Judge) and SD (Yuki Matsui)
+  flipped from OFF to PRE on next render. Slots whose teams (e.g.
+  SF — Jung Hoo Lee) genuinely don't play 4/27 stay OFF (correct;
+  Mondays in MLB have ~half the league on travel days).
+
+---
+
+## 223. Backfill migration for §221 (Phase 55)
+
+`0072_backfill_bdl_date_24h_late.sql` (numbered 0074 in prod after
+the §220 backfill landed as 0073).
+
+**Detection heuristic:** if a `game_event` fires more than 18 hours
+before the row's `scheduled_start`, `scheduled_start` is 24h-late.
+The 18-hour threshold is generous enough to catch the 24h offset
+without false-firing on intra-game timing wobble.
+
+**Correction:** same approach as §220 —
+`new_scheduled_start = MIN(game_event.created_at) - INTERVAL '5 minutes'`,
+ET-pivot for `date`. Collision skip via the
+`safe_corrections` CTE.
+
+**Re-finalize sweep:** entries that became eligible only after the
+date shift are flipped via `_check_and_finalize_entry`.
+
+This migration is idempotent and runs alongside §220's heuristic
+(which uses a 6-hour threshold). The 18-hour threshold here only
+fires on rows §220 didn't catch — a strictly broader recovery net
+for cases where BDL has the date wrong AND events somehow happened
+under that wrong scheduled_start (rare; mostly applicable to games
+already played whose scheduled_start was retroactively corrected
+during a sync).
+
+The April 27 hotfix in §222 already corrected the 3 in-flight rows
+via direct SQL; this migration is a no-op against those (all
+within 5min of MIN(event)) but ensures any future occurrence is
+healed automatically.
+
