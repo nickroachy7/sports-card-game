@@ -776,12 +776,20 @@ export function TierChip({ tier }: { tier: CardTier }) {
   );
 }
 
-const TIER_BASELINE_FP: Record<"bronze" | "silver" | "gold" | "diamond", number> = {
+/**
+ * Polish spec §225 (Phase 57). Tier-baseline FP table — kept here as
+ * dead code while `computeSingleProjected` returns 0. Will be the
+ * fallback for cards with no `game_event` history once the Vegas-
+ * aware projection model lands. Numbers represent "expected FP per
+ * play" for an average card of that tier.
+ */
+const _TIER_BASELINE_FP: Record<"bronze" | "silver" | "gold" | "diamond", number> = {
   bronze: 3,
   silver: 6,
   gold: 10,
   diamond: 15,
 };
+void _TIER_BASELINE_FP;
 
 function computeProjectedFp(slotFills: Record<LineupPosition, SlotFill>): number {
   let total = 0;
@@ -791,9 +799,24 @@ function computeProjectedFp(slotFills: Record<LineupPosition, SlotFill>): number
   return total;
 }
 
-function computeSingleProjected(fill: SlotFill): number {
-  if (!fill.card) return 0;
-  const playsUsed = Math.max(0, fill.card.contractMax - fill.card.contractPlays);
-  const perCard = playsUsed > 0 ? fill.card.careerFp / playsUsed : TIER_BASELINE_FP[fill.card.tier];
-  return perCard + (fill.appliedToken?.bonusFp ?? 0);
+function computeSingleProjected(_fill: SlotFill): number {
+  // Polish spec §225 (Phase 57). Projection methodology was a
+  // simple career-mean-with-tier-baseline, plus the applied token's
+  // bonus. The user-facing contract "Projected" implies a real
+  // forecast; a per-game arithmetic mean is the absolute floor and
+  // gets misleading fast (small samples for new cards, no matchup
+  // adjustment, no park factor, no Vegas signal). Token-bonus
+  // baked-in also misleads: it implies certainty that the token
+  // will trigger.
+  //
+  // Until we have a real Vegas-aware projection stack (recent-form
+  // weighted mean × matchup K-rate × park × lineup-spot × Vegas
+  // implied team total), `Projected` numbers are pinned to 0.0.
+  // Per-slot PRE cells render "0.0" (muted), headline secondary
+  // "Projected" stat renders "0.0" — both honest.
+  //
+  // The plumbing here stays intact so the Vegas-aware model only
+  // needs to swap this function's body when it lands; callers and
+  // the helper-types don't change.
+  return 0;
 }

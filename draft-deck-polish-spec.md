@@ -10036,3 +10036,119 @@ reconcile-time delta: `career_fp_total += (final_fp - live_fp)`,
 gated behind `is_trustworthy_final` so sandbox/zero-fp reconciles
 don't zero out real contributions. Out of scope for §224.
 
+---
+
+## 225. Projected FP — pinned to 0 until Vegas-aware stack lands (Phase 57)
+
+### Problem
+
+The right sidebar's PRE-state per-slot FP cell, the Drafting headline
+"Projected" stat, and the Live headline secondary "Projected" stat
+all read from a single helper, `computeSingleProjected(fill)`:
+
+```ts
+function computeSingleProjected(fill) {
+  if (!fill.card) return 0;
+  const playsUsed = fill.card.contractMax - fill.card.contractPlays;
+  const perCard   = playsUsed > 0
+    ? fill.card.careerFp / playsUsed
+    : TIER_BASELINE_FP[fill.card.tier];
+  return perCard + (fill.appliedToken?.bonusFp ?? 0);
+}
+```
+
+That's a per-game arithmetic mean (with a tier baseline fallback for
+brand-new cards), plus the applied token's bonus baked in. It's the
+absolute floor of projection methodologies — and it's labeled
+"Projected" in the UI, which sets a higher expectation than the math
+delivers.
+
+Two specific issues called out by the user (April 2026):
+
+1. **Token bonus baked in** — implies certainty the token will
+   trigger. A user looking at "Aaron Judge — Projected 31.0" has no
+   way to tell whether that includes the +5 from a Multi-Hit Bonus
+   token or not.
+2. **No matchup, no recent form, no park, no Vegas signal** — a
+   straight career-mean gets stale fast. A rookie's mean is
+   misleading until ~50 games. Ace-vs-scrub matchups score the
+   same. Coors Field vs Petco score the same.
+
+### Decision
+
+Until a real Vegas-aware projection stack ships, all "Projected"
+numbers in the sidebar are pinned to **0.0** (per-slot cells
+included). The label still reads "Projected" but the number is
+0.0 across the board — honest, even if not yet useful.
+
+`computeSingleProjected` returns `0` unconditionally. The plumbing
+(call sites in `Headline`, `pickFpCell`, etc.) and types stay
+intact so the Vegas-aware model only needs to swap this function's
+body when it lands. The `TIER_BASELINE_FP` table is kept as dead
+code (`_TIER_BASELINE_FP`) — it's the fallback for cards with no
+`game_event` history once the real model lands.
+
+### What "Vegas-aware" means
+
+Industry-standard DFS projection systems (DraftKings, FanDuel,
+RotoGrinders, Awesemo, Stokastic) blend roughly seven layers, in
+order of impact:
+
+| Layer | What | Data source for Draft Deck |
+|-------|------|----------------------------|
+| 1 | **Recent-form weighted mean** — 70% last 7d + 25% last 30d + 5% season | `public.game_event` history, already in DB |
+| 2 | **Matchup adjustment** — opposing pitcher's K-rate, BB-rate, lefty/righty splits | BDL `getStats` season-aggregated player stats |
+| 3 | **Park factor** — Coors +12% offense, Petco -8%, etc. | Static lookup table (public data, hand-coded) |
+| 4 | **Lineup-spot** — leadoff (~5 PA) vs 9-hole (~3 PA) | BDL confirmed lineups (when available) |
+| 5 | **Vegas implied team total** — over/under × moneyline → team runs | New data vendor (BDL doesn't have moneylines) |
+| 6 | **Confirmed-active gate** — out of lineup → projection 0 | BDL scratches |
+| 7 | **ML / Bayesian blend** of all the above | Historical training corpus, model serving infra |
+
+Layers 1-4 can be built today on data we already have or can
+obtain cheaply. Layer 5 is the highest-impact single signal (the
+implied team total is the most predictive feature in most public
+DFS-projection model writeups) but requires a new vendor
+relationship — odds providers like The Odds API, OddsJam,
+SportsData.io. Layer 6 is operationally important — projecting a
+benched player's normal output is the worst kind of wrong. Layer
+7 is a research project.
+
+### Phasing for the future build-out
+
+1. **Phase 57.1 (when prioritized)** — Layers 1 + 3 + 6. Recent-form
+   weighted mean + park factor + confirmed-active gate. Uses only
+   data we already have (BDL injuries / scratches confirms active
+   status, `game_event` history feeds recent-form). Single-week
+   build. Replaces `computeSingleProjected`'s body without changing
+   any call sites.
+
+2. **Phase 57.2** — Add Layer 2 matchup adjustment. Pulls opposing
+   pitcher stats per game from BDL's season-stats endpoint. ~3-5
+   days.
+
+3. **Phase 57.3** — Add Layer 4 lineup-spot when BDL exposes
+   confirmed lineups. ~2 days.
+
+4. **Phase 57.4** — Add Layer 5 Vegas implied team total. Requires:
+   - Vendor selection + contract (typical: $200-500/mo for a free-
+     to-play tier).
+   - New cron to pull odds at slate-create time + re-poll near
+     lock.
+   - New table: `public.daily_team_implied_total` keyed on
+     `(date, team_id)`.
+   - `computeSingleProjected` reads from the new table.
+
+5. **Phase 57.5** — Layer 7 ML blend. Train on the prior season's
+   `game_event` + box score history. Out of scope for v1; a "nice
+   to have" for v2 once we have multi-season data.
+
+Until those phases ship, "Projected" stays at 0.0 — a placeholder
+the user understands as "we're not making a dishonest forecast yet."
+
+### Files touched in §225
+
+- `src/components/layout/AppSidebar.tsx`:
+  - `computeSingleProjected` body → `return 0;`
+  - `TIER_BASELINE_FP` renamed `_TIER_BASELINE_FP` (dead-code marker).
+- Polish spec §225.
+
