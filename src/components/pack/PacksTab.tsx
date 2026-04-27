@@ -196,17 +196,14 @@ function PackBuyButton({
       onClick={onBuy}
       disabled={!canAfford || disabled}
       className={cn(
-        "flex h-8 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium transition-colors",
+        "flex h-8 w-full items-center justify-between gap-3 rounded-md px-3 text-left text-sm font-medium transition-colors",
         "bg-[var(--text)] text-[var(--bg)] hover:bg-[var(--text-2)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-2)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]",
         "disabled:pointer-events-none disabled:opacity-50",
       )}
       aria-label={`Buy ${qty} pack${qty === 1 ? "" : "s"} for ${totalCost} coins`}
     >
-      <span className="flex w-8 shrink-0 items-baseline justify-center font-bold font-sans text-base">
-        ×{qty}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-xs">
+      <span className="min-w-0 truncate text-xs">
         {isPending ? "Opening…" : `Buy ${qty} pack${qty === 1 ? "" : "s"}`}
       </span>
       <span className="font-bold font-mono text-xs tabular-nums">
