@@ -10412,6 +10412,39 @@ intentionally omitted — they live in `economy_config.pack_value_weights`
 which adjusts season-to-season; pinning specific numbers in the
 UI sets the wrong expectation.
 
+**§228 v2 — tooltip removed.** First-look user review caught that
+the tier-rarity tooltip was *factually wrong*: packs only contain
+Bronze cards. Higher tiers (Silver / Gold / Diamond) come from
+career-FP progression on cards earned over time. The tooltip
+implied users could pull Diamond cards from packs, which they
+can't. Removed entirely; replaced with a single quiet footer line
+under the buy buttons:
+
+> "All packs contain Bronze cards. Higher tiers are earned
+> through play."
+
+Also dropped in §228 v2:
+- Bordered `<section>` boxes around Daily pack and Packs
+  sections — the tab body is already the container, the inner
+  borders just added visual nesting that didn't carry meaning.
+- Redundant "250c each" subtitle on the Packs section header
+  (the per-button totals make it obvious).
+- The "Pack odds in economy config" footer link.
+
+Net structure §228 v2:
+
+```
+DAILY PACK                       FREE
+[ Claim daily pack ]
+
+BUY PACKS
+×1   Buy 1 pack             250c
+×5   Buy 5 packs          1,250c
+×10  Buy 10 packs         2,500c
+
+All packs contain Bronze cards. Higher tiers are earned through play.
+```
+
 ### Events tab — better empty state
 
 Replaced the bare "Waiting for first pitch…" copy with an
