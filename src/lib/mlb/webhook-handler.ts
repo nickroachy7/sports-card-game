@@ -149,12 +149,17 @@ async function handleGameEnded(
     };
   }
   const db = getDb();
-  // Polish spec §192 (Phase 48). Use the unified time-only trust
-  // gate `public.final_passes_time_check()`. Score-sanity portion
-  // of the full predicate isn't applicable here — at the moment of
-  // the status flip, scores haven't been reconciled yet (reconcile
-  // runs after on success). The display CTE (§190) catches any
-  // post-flip score corruption with the full predicate.
+  // Polish spec §219 (Phase 54). The P48 `final_passes_time_check`
+  // gate (scheduled_start <= now() - 2h) was rejecting legitimate
+  // `mlb.game.ended` deliveries when our `scheduled_start` was wrong
+  // due to the §218 timezone bug — games stayed stuck on 'scheduled'
+  // forever. With §218 storing scheduled_start correctly from BDL's
+  // canonical date field, the gate is no longer needed: we trust BDL
+  // when it says a game ended. The display-side §190 trust predicate
+  // (`is_trustworthy_final`) still demotes bogus 0-0 finals at render
+  // time, and `_check_and_finalize_entry` in §215 also keys off the
+  // trust predicate before flipping contest entries, so bogus finals
+  // are caught downstream without blocking the status flip itself.
   const res = await db.execute<{ id: string }>(sql`
     UPDATE public.game
     SET status = 'final'::game_status,
@@ -166,47 +171,17 @@ async function handleGameEnded(
         current_outs = NULL,
         updated_at = now()
     WHERE bdl_game_id = ${bdlGameId}
-      AND public.final_passes_time_check(scheduled_start)
     RETURNING id
   `);
   if (res.rows.length === 0) {
-    // §193 — surface the violation reason via
-    // `public.final_trust_violation_reason()` so the rejection note
-    // grep-matches the same machine codes used in display + backfill.
-    // The note lands in webhook_failed (we return unhandled=false so
-    // the processor parks it for audit + retry).
-    const exists = await db.execute<{
-      id: string;
-      reason: string | null;
-    }>(sql`
-      SELECT
-        id,
-        public.final_trust_violation_reason(
-          'final'::game_status,
-          scheduled_start,
-          home_runs,
-          away_runs
-        ) AS reason
-      FROM public.game WHERE bdl_game_id = ${bdlGameId}
-    `);
-    if (exists.rows.length === 0) {
-      // Game not in our DB — BDL fires events for every MLB game,
-      // we only model games in active contests. No retry helps.
-      return {
-        dispatched: false,
-        unhandled: true,
-        eventType: "mlb.game.ended",
-        providerEventId: null,
-        note: `game ${bdlGameId} not in our db`,
-      };
-    }
-    const reason = exists.rows[0]?.reason ?? "unknown_violation";
+    // Game not in our DB — BDL fires events for every MLB game, we
+    // only model games in active contests. No retry helps.
     return {
       dispatched: false,
-      unhandled: false,
+      unhandled: true,
       eventType: "mlb.game.ended",
       providerEventId: null,
-      note: `final_trust_violation:${reason} (game ${bdlGameId})`,
+      note: `game ${bdlGameId} not in our db`,
     };
   }
   // Pull authoritative box score and overwrite final_fp on every

@@ -9564,3 +9564,188 @@ final_fps are reconciled. The fn is idempotent (only flips entries
 that aren't already final + meet the predicate) so duplicate webhook
 deliveries don't double-finalize.
 
+---
+
+## 218. Schedule sync timezone fix (Phase 54)
+
+### Problem
+
+Phase 51 / §215 / §217 chased "live FP not updating" through several
+realtime-pipeline rewrites before the real bug surfaced: `scheduled_start`
+in `public.game` was wrong by up to a day for evening ET games, and
+`date` was wrong by a day for any game whose UTC start crossed
+midnight ET → next-day UTC.
+
+Symptom in prod data (April 24/25):
+
+| matchup       | bdl_id   | actual ET start | stored `date` | stored `scheduled_start` |
+|---------------|----------|-----------------|---------------|--------------------------|
+| NYY @ HOU     | 5058158  | Apr 24 7:10 PM  | 2026-04-25    | 2026-04-25 23:10 UTC     |
+| CHC @ LAD     | 5058160  | Apr 24 9:10 PM  | 2026-04-25    | 2026-04-25 23:15 UTC     |
+| MIA @ SF      | 5058161  | Apr 24 9:45 PM  | 2026-04-25    | 2026-04-25 20:05 UTC     |
+
+Events fired correctly (BDL emits in real time), but our trust
+predicate / time-gates / display logic all keyed off the wrong
+`scheduled_start`, so:
+
+- §190 `is_trustworthy_final` rejected legit finals as "0-0 before
+  scheduled_start," demoting them to LIVE.
+- §215 `_check_and_finalize_entry` saw `scheduled_start > now()` for
+  yesterday's games and stayed in 'building'.
+- The lineup score sidebar showed yesterday's date next to today's
+  rostered players because we displayed `g.date` directly.
+
+Cause: `schedule-sync.ts` was deriving `scheduled_start` from the
+MLB Stats API (UTC), and `date` from `now()::date` rather than from
+the BDL game's ET-pivoted slate date. BDL's `Game.date` field is
+the canonical UTC start timestamp, but we weren't using it.
+
+### Decision
+
+Three changes to `schedule-sync.ts`:
+
+1. **Use BDL's `date` field as `scheduled_start` in the first-pass
+   INSERT.** It's a `timestamptz` ISO string (e.g.
+   `"2026-04-25T00:10:00.000Z"` for Apr 24 8:10 PM ET).
+
+2. **Convert that UTC timestamp to ET-pivoted slate date when
+   storing `game.date`.** Same arithmetic as
+   `current_slate_date()`: `(scheduled_start AT TIME ZONE
+   'America/New_York' - INTERVAL '4 hours')::date`. The `- 4
+   hours` shifts pre-4-AM ET into the prior slate, matching the
+   user-facing slate cutover.
+
+3. **Make `ON CONFLICT` overwrite both columns from `EXCLUDED`.**
+   Pre-§218, the schedule sync wouldn't fix already-stored rows.
+   Now subsequent syncs heal stale data even without a backfill.
+
+The MLB Stats API second pass is **narrowed to game_number only**
+(doubleheader disambiguation). It no longer touches
+`scheduled_start`, since BDL is now authoritative.
+
+### Why this matters
+
+`scheduled_start` is the spine of every time-based gate in the
+system. Trust predicate, finalize check, time-gate-style guards in
+`_apply_game_event_to_lineups` (already removed in §214 but still
+referenced elsewhere), event feed sequencing, "live ticker" footer
+copy. One wrong column poisoned all of them at once.
+
+---
+
+## 219. Drop time-gate from handleGameEnded (Phase 54)
+
+### Problem
+
+§190's `final_passes_time_check(scheduled_start)` predicate
+(`scheduled_start <= now() - 2h`) was layered into
+`handleGameEnded`'s UPDATE WHERE clause:
+
+```ts
+WHERE bdl_game_id = ${bdlGameId}
+  AND public.final_passes_time_check(scheduled_start)
+```
+
+Combined with the §218 timezone bug, this rejected legitimate
+`mlb.game.ended` deliveries for every Group B game — `scheduled_start`
+was a day in the future, so `now() - 2h` was always before it. The
+status flip never happened, so games stayed stuck on `'scheduled'`
+forever, which cascaded into entries never finalizing (the predicate
+in §215 keys off `status='final'`).
+
+### Decision
+
+Drop the gate. Trust BDL when it says a game ended.
+
+```ts
+// Before
+WHERE bdl_game_id = ${bdlGameId}
+  AND public.final_passes_time_check(scheduled_start)
+
+// After
+WHERE bdl_game_id = ${bdlGameId}
+```
+
+Defense-in-depth still works:
+
+- Display-side `is_trustworthy_final` (§190) still demotes bogus
+  0-0 finals to LIVE at render time (lineup-view + game-trust.ts
+  both apply this).
+- `_check_and_finalize_entry` (§215) keys off `is_trustworthy_final`
+  before flipping entries — so even a status='final' from BDL with
+  bogus scores won't propagate into the user's contest entry.
+- The 24h fallback (§215) ensures entries always finalize after a
+  day even if BDL never sends `game.ended`.
+
+Net: the only thing the dropped gate was preventing — a status
+flip from `'scheduled'` to `'final'` — is recoverable downstream
+when the data is bogus, and required when the data is fine. Keeping
+it broke the common case.
+
+### Failure-path simplification
+
+With the gate gone, `handleGameEnded`'s "no rows updated" branch
+now has only one cause: BDL fired the event for a game we don't
+have in our DB. The `note` is now just `game ${id} not in our db`
+(no more `final_passes_time_check rejected`).
+
+---
+
+## 220. Backfill stuck game schedule (Phase 54)
+
+### Problem
+
+The fixes in §218 + §219 prevent the bug going forward, but games
+already in the DB with wrong `scheduled_start` stayed wrong: §218's
+new `ON CONFLICT … = EXCLUDED.scheduled_start` only triggers when
+the BDL schedule sync happens to re-pull them, which doesn't
+guarantee a near-term fix for in-flight slates.
+
+### Decision
+
+Migration `0073_backfill_stuck_game_schedule.sql` (file
+`0071_backfill_stuck_game_schedule.sql` on disk; numbered 0073 in
+prod after the §215 hotfixes 0071/0072) heuristically identifies
+and corrects mis-scheduled rows.
+
+**Detection:** if the earliest `game_event` for a game is more
+than 6 hours before the row's `scheduled_start`, `scheduled_start`
+is wrong. Real MLB games can't fire events before they start.
+
+**Correction:**
+
+```sql
+new_scheduled_start = MIN(game_event.created_at) - INTERVAL '5 minutes'
+new_date            = (new_scheduled_start
+                        AT TIME ZONE 'America/New_York'
+                        - INTERVAL '4 hours')::date
+```
+
+Five-minute pad because BDL events typically fire a few minutes
+after first pitch (we don't have a cleaner "game start" event for
+games we missed `mlb.game.started` on). Date arithmetic matches
+`current_slate_date()` so backfilled rows sort into the right slate.
+
+**Collision handling:** the unique index
+`game_matchup_number_uidx (date, home_team_id, away_team_id,
+game_number)` blocks shifts where the corrected date already has
+a different game row for the same matchup (e.g. our DB has both a
+"wrong-day" row and a "real-day" row for the same series). The
+`safe_corrections` CTE skips those — they're rare and the regular
+schedule sync (§218) will fold them in over time. Skipping is safe
+because the duplicate won't cause user-visible issues; the real-day
+row already has correct status/scoring.
+
+**Re-finalize sweep:** after the UPDATE, a `DO` block iterates
+every non-final entry and re-runs `_check_and_finalize_entry`,
+catching entries that became eligible only after the date fix.
+
+### Prod impact (April 25)
+
+10 rows matched the heuristic. 6 corrected (all 5 stuck Group B
+games for today's slate + 1 historical LAD@SF). 4 collisions
+skipped (older 4/22-4/23 games where a duplicate row already
+existed at the correct date). After the migration:
+`event_minus_start_minutes = 5.0` for all corrected rows, which is
+the expected post-correction baseline.
+

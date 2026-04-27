@@ -159,10 +159,22 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
               (summary.untrustworthy_finals_overridden ?? 0) + 1;
           }
         }
+        // Polish spec §218 (Phase 54). BDL's `g.date` field is the
+        // game's start time as a UTC ISO timestamp. We use it as the
+        // authoritative `scheduled_start` directly, and convert to
+        // an ET-pivoted slate date for `game.date` so it matches the
+        // 4 AM ET pivot semantics in `current_slate_date()`. Pre-P54
+        // we stored the raw UTC date slice for `game.date` and let
+        // MLB Stats populate `scheduled_start` in a second pass —
+        // that combination introduced an off-by-1-day bug for
+        // evening-ET games (whose UTC timestamp crosses midnight),
+        // because MLB Stats organizes by ET date and we were querying
+        // by UTC date.
+        const startTsIso = g.date ?? null;
         await db.execute(sql`
           INSERT INTO public.game (
             bdl_game_id, season_id, home_team_id, away_team_id,
-            date, status, is_postseason, venue,
+            date, scheduled_start, status, is_postseason, venue,
             home_runs, away_runs, home_hits, away_hits,
             home_errors, away_errors,
             home_inning_scores, away_inning_scores, attendance
@@ -171,7 +183,12 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
             (SELECT id FROM public.season WHERE year = ${g.season}),
             (SELECT id FROM public.team WHERE bdl_team_id = ${g.home_team.id}),
             (SELECT id FROM public.team WHERE bdl_team_id = ${g.away_team.id}),
-            ${g.date ? g.date.slice(0, 10) : null},
+            ${
+              startTsIso
+                ? sql`((${startTsIso}::timestamptz AT TIME ZONE 'America/New_York' - INTERVAL '4 hours')::date)`
+                : sql`NULL`
+            },
+            ${startTsIso ? sql`${startTsIso}::timestamptz` : sql`NULL`},
             ${status}::game_status,
             ${g.postseason ?? false},
             ${g.venue ?? null},
@@ -186,6 +203,10 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
             ${g.attendance ?? null}
           )
           ON CONFLICT (bdl_game_id) DO UPDATE SET
+            -- §218: trust BDL's date as canonical for date + start.
+            -- Schedule changes (rain delays, postponements) propagate.
+            date = EXCLUDED.date,
+            scheduled_start = EXCLUDED.scheduled_start,
             status = CASE
               WHEN public.game.status IN ('live', 'final')
                 THEN public.game.status
@@ -213,44 +234,31 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
       }
     }
 
-    // Polish spec §52 (Phase 19) + §65 (Phase 22) — second pass:
-    // populate `scheduled_start` + `game_number` from MLB Stats API.
-    // BDL doesn't expose start times or DH numbering.
+    // Polish spec §218 (Phase 54). Second pass scope narrowed: only
+    // populates `game_number` for DH disambiguation. `scheduled_start`
+    // is now set authoritatively from BDL's `g.date` field in the
+    // first pass — see §218 header on the INSERT block. Leaving the
+    // MLB Stats matching here in case it's the wrong game (because
+    // we now use ET-pivoted `date` to match), it'd at worst no-op
+    // since the only column we can update is game_number.
     //
     // Matching strategy for DH days: MLB Stats may return 2 entries
     // for a matchup (gameNumber 1 + 2). For each entry, UPDATE the
-    // FIRST unclaimed row that belongs to this matchup (claimed =
-    // game_number already set). For non-DH days (single entry) this
-    // matches the one row with a single UPDATE.
+    // FIRST unclaimed row that belongs to this matchup. ORDER BY
+    // `IS TRUE DESC` coerces NULL `(game_number = N)` results into
+    // `false`, so claimed rows win the sort and the outer IS-DISTINCT-
+    // FROM gate turns the update into a no-op. Unclaimed NULL rows
+    // only get picked when no claimed row exists.
     try {
       const schedule = await fetchMlbStatsSchedule(iso);
-      // Process entries in gameNumber order so 1 lands before 2 and
-      // we don't race for the same NULL row.
       const sorted = [...schedule].sort((a, b) => a.gameNumber - b.gameNumber);
       for (const entry of sorted) {
         const homeAbbr = teamAbbrByMlbStatsId.get(entry.homeMlbStatsTeamId);
         const awayAbbr = teamAbbrByMlbStatsId.get(entry.awayMlbStatsTeamId);
         if (!homeAbbr || !awayAbbr) continue;
-        // Target the row that either has no game_number yet (fresh
-        // BDL insert) OR already has this game_number (re-run). If a
-        // different game_number is already set for this matchup we
-        // leave it alone — prevents clobbering DH1's data when
-        // processing a DH2 entry for the same matchup.
-        // ORDER BY note: `(game_number = N)` returns NULL for rows with
-        // game_number IS NULL, and `NULL DESC` lands BEFORE `true` in
-        // Postgres (NULLS FIRST is the default for DESC). That would
-        // pick an unclaimed NULL row even when a row already has the
-        // matching game_number — and trying to UPDATE the NULL row to
-        // N would then violate `game_matchup_number_uidx` because the
-        // claimed row already owns N for this matchup. Using
-        // `IS TRUE DESC` coerces NULL into `false`, so the claimed row
-        // wins the sort and the outer IS-DISTINCT-FROM gate turns the
-        // update into a no-op. Unclaimed NULL rows only get picked
-        // when no claimed row exists.
         const res = await db.execute(sql`
           UPDATE public.game AS g
-          SET scheduled_start = ${entry.scheduledStartIso}::timestamptz,
-              game_number = ${entry.gameNumber}::smallint,
+          SET game_number = ${entry.gameNumber}::smallint,
               updated_at = now()
           WHERE g.id = (
             SELECT id FROM public.game
@@ -263,8 +271,7 @@ export async function syncScheduleHorizon(daysAhead = 2): Promise<SyncSummary> {
               created_at ASC
             LIMIT 1
           )
-          AND (scheduled_start IS DISTINCT FROM ${entry.scheduledStartIso}::timestamptz
-               OR game_number IS DISTINCT FROM ${entry.gameNumber}::smallint)
+          AND game_number IS DISTINCT FROM ${entry.gameNumber}::smallint
         `);
         summary.scheduled_starts_updated += res.rowCount ?? 0;
       }
