@@ -222,6 +222,14 @@ async function handleGameEnded(
       (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
     )
   `);
+  // §215 (Phase 53). Auto-finalize any entries whose contest's
+  // games are now all done. Stops the "ghost FP" bug where stale
+  // building entries kept catching events from later slates.
+  await db.execute(sql`
+    SELECT public._finalize_entries_for_game(
+      (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
+    )
+  `);
   return { dispatched: true, eventType: "mlb.game.ended", providerEventId: null };
 }
 

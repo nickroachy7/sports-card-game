@@ -28,6 +28,7 @@ import { CardDragLayer } from "@/components/card/CardDragLayer";
 import { AppSidebar, shortName } from "@/components/layout/AppSidebar";
 import { CardContractEventsProvider } from "@/components/lineup/CardContractEventsProvider";
 import { CardsPanel } from "@/components/lineup/CardsPanel";
+import { ContestResultsSummary } from "@/components/lineup/ContestResultsSummary";
 import { DRAG_TYPES } from "@/components/lineup/drag-types";
 import { LineupGrid } from "@/components/lineup/LineupGrid";
 import { LineupShell } from "@/components/lineup/LineupShell";
@@ -1025,18 +1026,32 @@ export function LineupView(props: LineupViewProps) {
     </div>
   ) : null;
 
+  // §216 (Phase 53). When the entry is final (slate's games all
+  // ended via auto-finalize), swap the lineup grid for the results
+  // summary. Sidebar continues to render its existing 'Final'
+  // headline; cards section stays usable.
+  const isEntryFinal = props.entryStatus === "final";
+
   const shell = (
     <LineupShell
       mainOverride={mainOverride}
       grid={
-        <LineupGrid
-          slotFills={slotFills}
-          onCardDropped={handleCardDropped}
-          onTokenDropped={handleTokenDropped}
-          onRemoveToken={handleRemoveToken}
-          onOpenDetail={handleOpenDetail}
-          onRemoveStarter={(position) => handleCardDropped(position, null, null)}
-        />
+        isEntryFinal ? (
+          <ContestResultsSummary
+            finalScore={props.finalScore}
+            slateDate={props.slateDate}
+            slotFills={slotFills}
+          />
+        ) : (
+          <LineupGrid
+            slotFills={slotFills}
+            onCardDropped={handleCardDropped}
+            onTokenDropped={handleTokenDropped}
+            onRemoveToken={handleRemoveToken}
+            onOpenDetail={handleOpenDetail}
+            onRemoveStarter={(position) => handleCardDropped(position, null, null)}
+          />
+        )
       }
       sidebar={
         // Polish spec §104 (Phase 35). Sidebar swap priority:

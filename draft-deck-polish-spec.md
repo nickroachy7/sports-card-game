@@ -9470,3 +9470,97 @@ FROM latest_scores ls WHERE g.id = ls.game_id;
 Score pills should now read e.g. "FINAL W 5-3" (TOR @ CLE) and
 "LIVE 4-12" (HOU @ NYY) instead of bogus 0-0.
 
+
+---
+
+## 215. Auto-finalize entries (Phase 53A)
+
+### Problem
+
+Per-user contest entries never auto-finalized when their slate's
+games ended. The score reducer (`_apply_game_event_to_lineups`)
+credits FP to every entry where `ce.status <> 'final'`, so events
+from later days landed on prior "still-open" entries — observable
+as the user's April 25 entry sitting at 106 FP from accumulated
+April 26/27 events.
+
+### Decision
+
+Auto-finalize an entry when all its contest's games are "done":
+
+```sql
+A game is "done for finalize" iff:
+  scheduled_start IS NULL                    -- never properly happened
+  OR (status='final' AND is_trustworthy_final(...))
+  OR scheduled_start < now() - INTERVAL '24 hours'  -- BDL missed game.ended
+```
+
+Migration 0070:
+- `_check_and_finalize_entry(entry_id)` — runs the predicate, flips
+  status='final' + writes `final_score = sum(slot.live_fp)` if all
+  games are done.
+- `_finalize_entries_for_game(game_id)` — webhook helper. Called
+  from `mlb.game.ended` after the game flips to final; iterates
+  every non-final entry whose contest includes the game and runs
+  the check.
+- One-shot backfill at migration time for stale entries.
+
+`final_score` uses `sum(live_fp)` not `sum(final_fp)` so
+sandbox runs (where `reconcileGame` returns bogus 0-0 box scores)
+still surface the trigger-summed FP. live_fp is the running total
+from the score reducer; final_fp is reconcile's writeback. They
+should match in normal ops; when they diverge (sandbox), live_fp
+is what the user "earned."
+
+### 24h fallback rationale
+
+Real MLB games take 3-4 hours even with delays. After 24h, the
+game is definitely done; BDL just didn't tell us. Without this
+fallback, sandbox entries get permanently stuck in 'building'
+because BDL doesn't reliably emit `mlb.game.ended` for every game.
+
+---
+
+## 216. Results summary screen
+
+### Decision
+
+When `entry.status='final'`, the lineup grid swaps to a
+`ContestResultsSummary` component that shows:
+
+- "FINAL" header with a Trophy icon and the final FP total
+- "Top performer" callout (highest-scoring slot)
+- Per-position breakdown table with player + FP + token-fired flag
+- Empty-state copy when finalScore=0 (rare — only if no rostered
+  players had qualifying events)
+- Info footer: "Tomorrow's slate auto-creates at 4 AM ET. Your
+  sticky slots will carry over."
+
+Sidebar continues to render its existing 'Final' headline state +
+the per-position roster (each row's FP via `useLiveSlotFp`). Cards
+section stays usable. Only the LineupGrid area swaps.
+
+The summary persists from finalize-time until the next 4 AM ET
+slate pivot (when `current_slate_date()` rolls and a fresh entry
+is created).
+
+---
+
+## 217. Webhook handler hooks finalize check
+
+`handleGameEnded` in `webhook-handler.ts` now ends with:
+
+```ts
+await db.execute(sql`
+  SELECT public._finalize_entries_for_game(
+    (SELECT id FROM public.game WHERE bdl_game_id = ${bdlGameId})
+  )
+`);
+```
+
+Runs after `reconcileGame` and `mark_contest_entries_on_game_end`,
+so by the time finalize-check runs, the game is final + slot
+final_fps are reconciled. The fn is idempotent (only flips entries
+that aren't already final + meet the predicate) so duplicate webhook
+deliveries don't double-finalize.
+
