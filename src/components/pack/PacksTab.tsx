@@ -183,35 +183,33 @@ function PackBuyButton({
 }) {
   const totalCost = qty * standardCost;
   const canAfford = coinBalance >= totalCost;
-  const shortBy = canAfford ? 0 : totalCost - coinBalance;
 
+  // §228 v3 (Phase 58). Match the cream-on-dark visual of the
+  // shadcn <Button variant="default"> used by the Claim daily
+  // pack button — `bg-[var(--text)] text-[var(--bg)]` with a
+  // `hover:bg-[var(--text-2)]` rollover. Disabled state inherits
+  // the standard `disabled:opacity-50` from the same affordance.
+  // Layout (×N · action · total) is preserved.
   return (
     <button
       type="button"
       onClick={onBuy}
       disabled={!canAfford || disabled}
       className={cn(
-        "group flex w-full items-center gap-3 rounded-md border bg-[var(--surface)] px-3 py-2 text-left transition-colors",
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--text-2)]",
-        canAfford && !disabled && "border-[var(--border)] hover:border-[var(--tier-gold)]",
-        (!canAfford || disabled) && "border-[var(--border)] opacity-60",
+        "flex h-8 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium transition-colors",
+        "bg-[var(--text)] text-[var(--bg)] hover:bg-[var(--text-2)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-2)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]",
+        "disabled:pointer-events-none disabled:opacity-50",
       )}
       aria-label={`Buy ${qty} pack${qty === 1 ? "" : "s"} for ${totalCost} coins`}
     >
-      <span className="flex w-9 shrink-0 items-baseline justify-center font-bold font-sans text-base text-[var(--text)]">
+      <span className="flex w-8 shrink-0 items-baseline justify-center font-bold font-sans text-base">
         ×{qty}
       </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="font-medium text-[12px] text-[var(--text)]">
-          {isPending ? "Opening…" : `Buy ${qty} pack${qty === 1 ? "" : "s"}`}
-        </span>
-        {!canAfford && (
-          <span className="font-mono text-[9px] text-[#C47262] uppercase tracking-wider">
-            need {shortBy.toLocaleString()}c
-          </span>
-        )}
+      <span className="min-w-0 flex-1 truncate text-xs">
+        {isPending ? "Opening…" : `Buy ${qty} pack${qty === 1 ? "" : "s"}`}
       </span>
-      <span className="font-bold font-mono text-[12px] text-[var(--text)] tabular-nums">
+      <span className="font-bold font-mono text-xs tabular-nums">
         {totalCost.toLocaleString()}c
       </span>
     </button>
