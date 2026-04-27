@@ -9896,3 +9896,143 @@ via direct SQL; this migration is a no-op against those (all
 within 5min of MIN(event)) but ensures any future occurrence is
 healed automatically.
 
+---
+
+## 224. Live mirror of career_fp_total (Phase 56)
+
+### Problem
+
+Two FP numbers belong to different audiences but they were entangled
+in the UI:
+
+- **Lifetime FP** — the cumulative FP a card has scored across every
+  contest it's ever played in. Drives Bronze → Silver → Gold → Diamond
+  tier progression. Lives on `card.career_fp_total`.
+- **Today's FP** — the per-slot contribution for the current contest.
+  Lives on `contest_lineup_slot.live_fp` (running) and
+  `final_fp` (post-reconcile).
+
+Pre-§224 wiring:
+
+- The lineup-grid card front used `LineupCardVM.contestFp`, which
+  `lineup-view.tsx` set to `liveFp + finalFp` post-submit. So the
+  card front showed *today's* FP after the contest started — and the
+  user couldn't see their lifetime number tick up while a game was
+  live.
+- `card.career_fp_total` only updated at entry-finalize time
+  (`_finalize_contest_entry`'s `+= live_fp` step), so it was
+  effectively frozen during gameplay.
+- The right sidebar (`AppSidebar`) already correctly showed today's
+  slot FP via `useLiveSlotFp` — same number duplicated on both
+  surfaces, no separation.
+
+### Decision
+
+Clean separation:
+
+- **Card front** (lineup grid + bench / Cards panel) always renders
+  `card.career_fp_total`. During a live game, that number ticks up
+  in real time as today's events score.
+- **Right sidebar** continues to render today's `live_fp + final_fp`
+  via `useLiveSlotFp` — unchanged.
+- Token bonus FP mirrors to both: `live_fp` (sidebar) and
+  `career_fp_total` (card lifetime) increment together.
+
+The two numbers are now visibly different: at the start of tonight's
+game the card might show "47.3 FP" (lifetime) and the sidebar shows
+"0.0 FP" (today). After a HR + RBI, card shows "55.3 FP" and sidebar
+shows "8.0 FP".
+
+### SQL changes (`0073_live_career_fp_mirror.sql`, applied to prod
+as 0075)
+
+`_apply_game_event_to_lineups` (originally 0012) gains a card-update
+inside both batter and pitcher loops:
+
+```sql
+UPDATE public.card
+SET career_fp_total = career_fp_total + v_fp_delta,
+    updated_at = now()
+WHERE id = r.starter_card_id;
+```
+
+…plus an identical update inside the token-fires branch for bonus FP.
+
+`_finalize_contest_entry` (originally 0013) **drops** its
+`UPDATE public.card SET career_fp_total = career_fp_total +
+v_slot.live_fp` step. The live trigger has already done that
+incrementally. Finalize now only handles `final_fp` copying,
+contract-play decrement, milestone counters, manager XP, and
+`manager_account.lifetime_fp` — none of which touch
+`career_fp_total`.
+
+The `card_tier_on_fp_change` trigger (which fires Bronze → Silver
+→ Gold → Diamond promotions on `career_fp_total` increases) now
+fires *during* the game instead of at finalize time. That's the
+right shape: tier promotions are user-visible "moments" and they
+should land at the FP that triggered them, not be batched at
+finalize.
+
+### One-shot backfill
+
+For every non-final entry with `live_fp > 0`, add the slot's
+`live_fp` to the rostered card's `career_fp_total`. Without this,
+the next live event would compound on a stale base
+(`career_fp_total` reflected only the pre-§224 finalize-time math,
+so any live_fp accumulated mid-game on building entries was
+"stuck" not yet credited).
+
+### TypeScript changes
+
+`LiveEventsProvider`:
+- Add `cardCareerFp: Map<string, number>` to context state.
+- Subscribe to `public.card` UPDATE (already in
+  `supabase_realtime` per migration 0028 with `REPLICA IDENTITY
+  FULL`).
+- Expose `useLiveCardFp(cardId): number | null` — returns the
+  realtime-mirrored lifetime FP, or null when no realtime update
+  has arrived (caller falls back to the server-rendered prop).
+
+`LineupSlot.tsx`:
+- Drop the `useLiveSlotFp` override that set `card.contestFp`.
+- Add `useLiveCardFp(card.id)` override on `card.careerFp`.
+
+`BenchCard.tsx`:
+- Add `useLiveCardFp(card.id)` override on `card.careerFp` (so
+  rostered cards also tick up live; unrostered cards just keep
+  the static prop because no realtime update fires for them).
+
+`lineup-view.tsx`:
+- Drop the `enhancedCard` block that set `contestFp +
+  contestFpLabel` post-submit. Card prop passed to children is
+  now the raw `LineupCardVM` with `careerFp` only.
+
+`AppSidebar.tsx`:
+- Unchanged. It already used `useLiveSlotFp` for the per-slot FP
+  cell and `useLiveEntryScore` for the team headline. Those keep
+  showing today's contribution, distinct from the card-front
+  lifetime number.
+
+### What lands at the 4 AM ET slate flip
+
+No special handling needed. At 4 AM ET:
+- The previous contest's entries are in `final` status (per §215
+  auto-finalize).
+- A new contest is created with its own slot rows, all with
+  `live_fp = 0`. Sidebar resets to zero on those new slots.
+- `card.career_fp_total` already reflects the lifetime including
+  yesterday's contribution (added incrementally during yesterday's
+  games, via the live trigger). Nothing to migrate.
+
+### What lands when reconcile diverges from live_fp
+
+If the reconcile box-score correction makes `final_fp ≠ live_fp`
+(e.g., BDL events double-fired and the trigger over-counted by
+0.6 FP), `career_fp_total` is now slightly off because it absorbed
+the live trigger's reading. We accept this — the divergence in
+practice is sub-FP and the simpler "live trigger is authoritative"
+contract is worth the small drift. A future phase could add a
+reconcile-time delta: `career_fp_total += (final_fp - live_fp)`,
+gated behind `is_trustworthy_final` so sandbox/zero-fp reconciles
+don't zero out real contributions. Out of scope for §224.
+

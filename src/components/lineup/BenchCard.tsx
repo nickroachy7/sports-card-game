@@ -8,6 +8,7 @@ import { getEmptyImage } from "react-dnd-html5-backend";
 import type { AppliedTokenInfo } from "@/app/(app)/lineup/lineup-view";
 import { Card } from "@/components/card/Card";
 import { dragResult } from "@/components/card/drag-layer-state";
+import { useLiveCardFp } from "@/components/lineup/LiveEventsProvider";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
 import { AppliedTokenBadge } from "@/components/token/AppliedTokenBadge";
 import type { LineupPosition } from "@/lib/contracts/lineup";
@@ -44,7 +45,7 @@ type Props = {
 };
 
 export function BenchCard({
-  card,
+  card: cardProp,
   assigned,
   fromPosition = null,
   appliedToken,
@@ -57,6 +58,14 @@ export function BenchCard({
   disabled,
   locked,
 }: Props) {
+  // §224 (Phase 56). Live override on lifetime FP. The trigger
+  // mirrors event FP onto `card.career_fp_total` for any rostered
+  // card; bench (unrostered) cards stay at their server-rendered
+  // value since no live update fires for them. Outside the provider
+  // (collection / shop pages) the hook returns null and we fall
+  // through to the static prop.
+  const liveCareerFp = useLiveCardFp(cardProp.id);
+  const card = liveCareerFp !== null ? { ...cardProp, careerFp: liveCareerFp } : cardProp;
   // Phase 35: drag is disabled in select mode so clicks route to
   // toggle-selection instead of starting a drag.
   const dragCanDrag = !disabled && !selectMode;

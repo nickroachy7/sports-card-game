@@ -9,7 +9,7 @@ import { getEmptyImage } from "react-dnd-html5-backend";
 import { Card } from "@/components/card/Card";
 import { dragResult } from "@/components/card/drag-layer-state";
 import { useCardDepleteEvent } from "@/components/lineup/CardContractEventsProvider";
-import { useLiveSlotFp } from "@/components/lineup/LiveEventsProvider";
+import { useLiveCardFp } from "@/components/lineup/LiveEventsProvider";
 import { SlotContractGlow } from "@/components/lineup/SlotContractGlow";
 import { SlotFpGlow } from "@/components/lineup/SlotFpGlow";
 import { SlotGameState } from "@/components/lineup/SlotGameState";
@@ -78,7 +78,11 @@ export function LineupSlot(props: Props) {
 
 function LineupSlotInner({
   position,
-  slotId,
+  // §224 (Phase 56) — slotId formerly drove `useLiveSlotFp` here for
+  // the contestFp override; that override is gone now (sidebar owns
+  // today's per-slot FP). Prop kept on the interface for callers that
+  // still pass it through.
+  slotId: _slotId,
   card: cardProp,
   appliedToken,
   locked,
@@ -90,16 +94,21 @@ function LineupSlotInner({
   onRemoveStarter,
   depleteEvent,
 }: Props & { depleteEvent: ReturnType<typeof useCardDepleteEvent> }) {
-  // §207 (Phase 51). Override card.contestFp with live data when
-  // available. Static prop is the fallback (server-rendered initial
-  // value); the hook returns null pre-submit / outside provider.
-  const liveFp = useLiveSlotFp(slotId);
+  // §224 (Phase 56). Live override on the card's lifetime FP.
+  // The trigger mirrors event FP onto `card.career_fp_total` in
+  // real time; this hook subscribes to those `card` UPDATEs.
+  // Static prop is the fallback (server-rendered initial value);
+  // the hook returns null pre-update / outside provider.
+  //
+  // Per-slot live FP (today's contribution) is consumed in the
+  // right sidebar via `useLiveSlotFp` — the lineup-grid card front
+  // no longer overrides via `contestFp` since the user-facing
+  // contract is now lifetime-vs-today separation: card front =
+  // lifetime, sidebar = today.
+  const liveCareerFp = useLiveCardFp(cardProp?.id ?? null);
   const card = cardProp
-    ? liveFp
-      ? {
-          ...cardProp,
-          contestFp: liveFp.liveFp + liveFp.finalFp,
-        }
+    ? liveCareerFp !== null
+      ? { ...cardProp, careerFp: liveCareerFp }
       : cardProp
     : null;
   const isPitcher = isPitcherSlot(position);

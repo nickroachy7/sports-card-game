@@ -274,7 +274,6 @@ export function LineupView(props: LineupViewProps) {
   // Polish spec §44 — per-slot lock derived from game info. Pre-submit
   // (building) state: all slots unlocked (user is drafting). Post-submit:
   // slot is locked when the starter's game has started.
-  const isBuilding = props.entryStatus === "building";
   const slotFills = useMemo(() => {
     const fills = {} as Record<LineupPosition, SlotFill>;
     const byPos = new Map<LineupPosition, string | null>();
@@ -314,19 +313,20 @@ export function LineupView(props: LineupViewProps) {
           (gameInfo.scheduledStart !== null &&
             new Date(gameInfo.scheduledStart).getTime() <= Date.now()));
 
-      // Polish spec §46 — post-submit, the card footer shows contest FP
-      // instead of career FP. Compute here so the Card component stays
-      // oblivious to lineup concerns.
+      // Polish spec §224 (Phase 56). Card front always renders the
+      // card's lifetime `careerFp` — separation: lifetime on the
+      // card, today's contribution in the right sidebar. The pre-§224
+      // `contestFp` override that swapped the card-front number for
+      // `liveFp + finalFp` is gone. The lifetime number ticks up live
+      // because the SQL trigger now mirrors event FP onto
+      // `card.career_fp_total`, and `<LineupSlot>` + `<BenchCard>`
+      // subscribe via `useLiveCardFp` to re-render the new value.
       const liveFp = fp?.liveFp ?? 0;
       const finalFp = fp?.finalFp ?? 0;
-      const contestFp = liveFp + finalFp;
-      const contestFpLabel: "LIVE" | "FINAL" = gameInfo?.status === "final" ? "FINAL" : "LIVE";
-      const enhancedCard: LineupCardVM | null =
-        card && !isBuilding ? { ...card, contestFp, contestFpLabel } : card;
 
       fills[pos] = {
         slotId: fp?.slotId ?? "",
-        card: enhancedCard,
+        card,
         appliedToken,
         liveFp,
         finalFp,
@@ -336,15 +336,7 @@ export function LineupView(props: LineupViewProps) {
       };
     }
     return fills;
-  }, [
-    optimisticSlots,
-    cardsById,
-    tokensById,
-    tokenApps,
-    slotFpByPosition,
-    props.slotGameByCardId,
-    isBuilding,
-  ]);
+  }, [optimisticSlots, cardsById, tokensById, tokenApps, slotFpByPosition, props.slotGameByCardId]);
 
   const assignedCardIds = useMemo(() => {
     const set = new Set<string>();

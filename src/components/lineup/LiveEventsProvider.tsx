@@ -128,6 +128,11 @@ type LiveEventsContextValue = {
   slotFp: Map<string, LiveSlotFpData>;
   entryScore: LiveEntryScore;
   gameState: Map<string, LiveGameState>;
+  // §224 (Phase 56). Per-card career_fp_total override map. Updated
+  // from `card` UPDATE realtime broadcasts as the live trigger
+  // mirrors event FP onto `card.career_fp_total`. Components consume
+  // via `useLiveCardFp(cardId)`.
+  cardCareerFp: Map<string, number>;
 };
 
 const LiveEventsContext = createContext<LiveEventsContextValue | null>(null);
@@ -203,6 +208,11 @@ export function LiveEventsProvider({
     for (const [id, gs] of Object.entries(gameStateInitial)) m.set(id, gs);
     return m;
   });
+  // §224 (Phase 56). Card UPDATE override map. Initial seed is empty —
+  // the server-rendered `card.careerFp` prop is the fallback; this
+  // map only carries values once a realtime UPDATE arrives. The merge
+  // happens at the consumer hook (`useLiveCardFp`).
+  const [cardCareerFp, setCardCareerFp] = useState<Map<string, number>>(() => new Map());
 
   // Re-seed when server-rendered props change (e.g. router.refresh()
   // after a mutation). Realtime UPDATEs after re-seed continue to
@@ -353,6 +363,23 @@ export function LiveEventsProvider({
           setEvents((prevState) => [fe, ...prevState].slice(0, 50));
         },
       )
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "card" }, (payload) => {
+        // §224 (Phase 56). RLS scopes broadcasts to the user's own
+        // cards. Mirror career_fp_total into the override map so
+        // the lineup grid + bench cards live-update the lifetime
+        // number while a game is in progress.
+        const next = payload.new as Partial<RawCardRow>;
+        const cardId = next.id;
+        if (typeof cardId !== "string") return;
+        if (next.career_fp_total == null) return;
+        const fp = Number(next.career_fp_total);
+        if (!Number.isFinite(fp)) return;
+        setCardCareerFp((prev) => {
+          const m = new Map(prev);
+          m.set(cardId, fp);
+          return m;
+        });
+      })
       .subscribe((subStatus) => {
         if (cancelled) return;
         if (subStatus === "SUBSCRIBED") setStatus("live");
@@ -379,8 +406,17 @@ export function LiveEventsProvider({
         latestInning = { inning: e.inning, half: e.inningHalf };
       }
     }
-    return { events, status, latestByPlayerId, latestInning, slotFp, entryScore, gameState };
-  }, [events, status, slotFp, entryScore, gameState]);
+    return {
+      events,
+      status,
+      latestByPlayerId,
+      latestInning,
+      slotFp,
+      entryScore,
+      gameState,
+      cardCareerFp,
+    };
+  }, [events, status, slotFp, entryScore, gameState, cardCareerFp]);
 
   return <LiveEventsContext.Provider value={value}>{children}</LiveEventsContext.Provider>;
 }
@@ -469,6 +505,20 @@ export function useLiveConnectionStatus(): ConnectionStatus {
   return ctx?.status ?? "connecting";
 }
 
+/**
+ * Polish spec §224 (Phase 56). Live override on `card.career_fp_total`.
+ * Returns the realtime-mirrored lifetime FP for a card, or null when
+ * no realtime update has arrived yet (caller falls back to the
+ * server-rendered prop). Safe outside the provider — bench cards on
+ * pages without `<LiveEventsProvider>` simply get null and render
+ * the static value.
+ */
+export function useLiveCardFp(cardId: string | null | undefined): number | null {
+  const ctx = useContext(LiveEventsContext);
+  if (!ctx || !cardId) return null;
+  return ctx.cardCareerFp.get(cardId) ?? null;
+}
+
 // ── helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -519,6 +569,16 @@ type RawSlotRow = {
   contest_entry_id: string | null;
   live_fp: number | string | null;
   final_fp: number | string | null;
+};
+
+/**
+ * §224 (Phase 56). Card UPDATE realtime payload shape — REPLICA
+ * IDENTITY FULL on public.card (migration 0028) means we get every
+ * column on every UPDATE; we only care about id + career_fp_total.
+ */
+type RawCardRow = {
+  id: string;
+  career_fp_total: number | string | null;
 };
 
 type RawEntryRow = {
