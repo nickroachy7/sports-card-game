@@ -10571,3 +10571,99 @@ would have re-filled the OF1 slot from yesterday's sticky pick.
 - `supabase/migrations/0074_create_entry_no_resticky.sql` (applied
   to prod as `0076`).
 
+---
+
+## 230. Building entries credit live FP (Phase 58)
+
+### Problem
+
+User report: "It says my players are scoring but their points are
+not populating on the right side bar."
+
+The Events feed showed multiple credit-worthy plays (Judge HR +12,
+Sanchez double +5, Vilade single +3, Judge HBP +2, etc.). The
+sidebar's per-slot FP cells showed `0.0` everywhere, except a stale
+`3.0` on one slot. The headline showed `3.0 LIVE` but Judge alone
+should have been worth ~26 FP visible in the feed.
+
+Root cause: the live-scoring trigger
+`_apply_game_event_to_lineups` filtered to
+`ce.status IN ('submitted', 'live')`. The user's entry was
+`'building'` — they never explicitly submitted because the explicit
+Submit button was retired in §141 (Phase 42). Since then, building
+entries have been a dead-end: events for their players fire, the
+trigger looks for matching slots, the WHERE clause excludes them,
+no FP gets credited.
+
+The Events feed projection in `LiveEventsProvider` doesn't share
+this filter — it matches purely on `playerId` — so the feed kept
+showing what *would* have credited, mirroring back the user's
+expectation of "I'm scoring." Hence the gap between feed and
+sidebar.
+
+### Decision
+
+Include `'building'` in the trigger's eligibility filter so live
+events credit immediately:
+
+```sql
+WHERE c.player_id = p_event.batter_player_id
+  AND ce.status IN ('building', 'submitted', 'live')
+```
+
+(Same change in the pitcher loop.)
+
+### Why this is safe
+
+The "advance-knowledge" abuse path in DFS lineup-locking is:
+*user adds a player AFTER seeing how that player did*. The
+trigger is purely incremental — it credits per event, in order.
+Adding a player mid-game wires up FUTURE events for that slot;
+PAST events are not retroactively summed. So a user adding
+Judge after his HR doesn't get +14 — they get whatever Judge
+does next.
+
+The per-slot lock for building entries (server-side) does still
+allow editing any slot, including ones whose games started.
+Combined with no-retroactive-credit, this is fine: editing a
+locked-game slot mid-game neither helps nor hurts.
+
+A future phase could auto-flip building → live at first pitch
+to mirror the §44 per-slot lock semantic for committed entries.
+For now, the simpler fix is the trigger filter expansion.
+
+### One-shot backfill
+
+For every currently-building entry whose contest has any started
+game, recompute `slot.live_fp` from `game_event` history. If the
+recompute is higher than the stored value (i.e. events were
+missed), apply the delta to:
+
+- `slot.live_fp` (set to recomputed)
+- `card.career_fp_total += delta` (mirrors §224)
+- Recompute `entry.live_score` from sum of slots after.
+
+Token bonus FP that should have triggered on missed events isn't
+backfilled here — that requires re-evaluating each pending token
+against history per-event-type. Out of scope for §230. Future
+events will trigger pending tokens normally (the trigger evaluates
+each token against the full game_event history at fire time).
+
+### Prod backfill result (April 27)
+
+User's entry at backfill time:
+
+| slot | player | pre | post |
+|------|--------|-----|------|
+| SS   | Judge  | 0   | 19   |
+| C    | Sanchez | 0  | 5    |
+| OF2  | Vilade | 3   | 9    |
+
+Entry live_score: 3.0 → 33.0. Sidebar now shows the missed FP
+on next refresh.
+
+### Files
+
+- `supabase/migrations/0075_credit_building_entries.sql` (applied
+  to prod as `0077`).
+
