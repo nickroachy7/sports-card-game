@@ -10490,3 +10490,84 @@ today's games start.").
   `gameMatchupById` exposed on context, `useUpcomingGames` hook
   added.
 
+---
+
+## 229. Sticky carry-over no longer re-fires on idempotent create_contest_entry (Phase 58)
+
+### Problem
+
+User report: "I'm trying to remove a player from my lineup but it
+keeps subbing them back in. I thought we made locking segmented
+to per player."
+
+Investigation of the user's prod state:
+- Entry status: `building` (not yet submitted).
+- Slot lock predicate `is_slot_locked()` returning `true` on 8 of
+  10 slots — games have started.
+- Server-side `update_lineup_slot` correctly skips the per-slot
+  lock check in building state, so removals SHOULD succeed.
+
+The remove WAS succeeding server-side. The bug was downstream:
+
+1. User clicks ×/Remove → `applyOptimisticPatch` clears slot in UI.
+2. `updateLineupSlot()` succeeds → slot's `starter_card_id` is null.
+3. `router.refresh()` → page server-component re-runs.
+4. `lineup/page.tsx:44` calls `create_contest_entry(user, contest)`.
+5. Function finds the entry exists; per pre-§229 code, it still
+   ran `_carry_over_sticky_slots()` on this idempotent path.
+6. Carry-over walked yesterday's sticky slots, found the same
+   player the user just removed, saw today's slot was now empty
+   AND the player's team has a game today, and **re-filled the
+   slot**.
+7. Props re-arrived with the player back. Optimistic state
+   rebased on new `props.slots` → UI flipped player back in.
+
+The carry-over re-call on existing entries was added in §173
+(Phase 46 / migration 0058) as a "migration day backfill" so
+legacy entries created before sticky existed got their first
+carry-over. That backfill ran weeks ago. The persistent re-call
+since then was dead weight that produced this bug.
+
+### Decision
+
+Drop `PERFORM public._carry_over_sticky_slots(...)` from the
+existing-entry idempotent path of `create_contest_entry`. Keep
+it on the new-entry creation path (which fires once at the
+4 AM ET slate flip when the user first visits /lineup for the
+new day).
+
+```sql
+-- Pre-§229
+IF v_entry_id IS NOT NULL THEN
+  PERFORM public._carry_over_sticky_slots(...);   -- ← removed
+  RETURN v_entry_id;
+END IF;
+
+-- Post-§229
+IF v_entry_id IS NOT NULL THEN
+  RETURN v_entry_id;                              -- clean idempotent
+END IF;
+```
+
+### Sticky-pin contract unchanged
+
+- Pinned (sticky=true) → carries to TOMORROW.
+- Unpinned (sticky=false) → drops after today.
+
+§229 just enforces the within-slate invariant: today's manual
+changes (removes, swaps, replacements) win against yesterday's
+sticky pin within the same slate. Sticky carry-over is strictly
+about slate transitions, not in-day re-fills.
+
+### Smoke test
+
+A direct prod test confirmed: clear OF1 slot → call
+`create_contest_entry()` idempotently → slot stays empty (the
+test restored the original card afterward). Pre-fix this test
+would have re-filled the OF1 slot from yesterday's sticky pick.
+
+### Files
+
+- `supabase/migrations/0074_create_entry_no_resticky.sql` (applied
+  to prod as `0076`).
+
